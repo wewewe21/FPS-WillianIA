@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
 export function createGrenades(deps) {
-  const { clamp, rand, _v1, heightAt, terrainNormal, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets } = deps;
+  const { clamp, rand, _v1, heightAt, terrainNormal, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets, groundAt } = deps;
   const N = 6;
   const pool = [];
   const gMat = new THREE.MeshStandardMaterial({ color: 0x2c3328, roughness: 0.5, metalness: 0.3 });
@@ -116,10 +116,12 @@ export function createGrenades(deps) {
       n.g.position.addScaledVector(n.vel, dt);
       n.g.rotation.x += n.spin * dt;
       n.g.rotation.z += n.spin * 0.7 * dt;
-      const gy = heightAt(n.g.position.x, n.g.position.z);
+      const gTer = heightAt(n.g.position.x, n.g.position.z);
+      const gy = groundAt(n.g.position.x, n.g.position.z, n.g.position.y + 0.5); // telhado/andar também
       if (n.g.position.y < gy + 0.09) {
         n.g.position.y = gy + 0.09;
-        terrainNormal(n.g.position.x, n.g.position.z, _n);
+        if (gy > gTer + 0.5) _n.set(0, 1, 0); // plataforma: normal reta
+        else terrainNormal(n.g.position.x, n.g.position.z, _n);
         const vn = n.vel.dot(_n);
         if (vn < 0) {
           n.vel.addScaledVector(_n, -1.45 * vn); // reflete com restituição

@@ -288,6 +288,18 @@ describe('Combate', () => {
   });
 });
 
+  it('dados os dois últimos morrendo juntos, então ainda sai um vencedor coerente', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    const endP = once(a.s, 'matchEnd');
+    a.s.emit('died', { killerId: b.init.id, weapon: 'GRANADA' }); // troca mútua,
+    b.s.emit('died', { killerId: a.init.id, weapon: 'GRANADA' }); // sem await no meio
+    const end = await endP;
+    assert.ok(end.winner, 'partida terminou "sem sobreviventes" com gente no ranking');
+    const primeiro = end.ranking.find(r => r.placement === 1);
+    assert.equal(end.winner.nick, primeiro.nick, 'vencedor difere do #1 do ranking');
+  });
+
 /* =============== LOOT =============== */
 describe('Loot', () => {
   it('dado um baú, então abre uma única vez e avisa os outros', async t => {
@@ -384,6 +396,18 @@ describe('Loot', () => {
 
 /* =============== ANTI-CHEAT =============== */
 describe('Anti-cheat', () => {
+  it('dado martelar códigos de anfitrião, então o socket entra em cooldown', async t => {
+    const srv = await spawnServer({ CLAIM_COOLDOWN_MS: '900' }); t.after(() => srv.stop());
+    const { s } = await connect(srv.port); t.after(() => s.close());
+    for (let i = 0; i < 6; i++) await ack(s, 'claimHost', { code: 'CHUTE' + i });
+    const bloqueado = await ack(s, 'claimHost', { code: 'QA123' }); // certo, mas em cooldown
+    assert.equal(bloqueado.ok, false, 'força bruta passou pelo cooldown');
+    await sleep(1100);
+    const depois = await ack(s, 'claimHost', { code: 'QA123' });
+    assert.equal(depois.ok, true, 'cooldown não abriu depois da janela');
+  });
+
+
   it('dado um teleporte impossível, então o servidor descarta a posição (speedhack)', async t => {
     const { clients } = await playing(t, 2);
     const [a, b] = clients;
@@ -417,6 +441,31 @@ describe('Anti-cheat', () => {
     await sleep(400);
     const r3 = await ack(a.s, 'openChest', { key: 'r3' });
     assert.equal(r3.ok, true);
+  });
+});
+
+/* =============== POSSE DE VEÍCULO =============== */
+describe('Posse de veículo (arbitrada no servidor)', () => {
+  it('dado dois pedidos pelo mesmo carro, então só o primeiro leva — e sair devolve', async t => {
+    const { clients } = await playing(t, 3);
+    const [a, b] = clients;
+    const r1 = await ack(a.s, 'enterCar', { idx: 0 });
+    assert.equal(r1.ok, true);
+    const r2 = await ack(b.s, 'enterCar', { idx: 0 });
+    assert.equal(r2.ok, false, 'segundo motorista levou o mesmo carro');
+    a.s.emit('leaveCar', { idx: 0 });
+    await sleep(200);
+    const r3 = await ack(b.s, 'enterCar', { idx: 0 });
+    assert.equal(r3.ok, true, 'carro não foi liberado ao sair');
+  });
+
+  it('dada a morte do motorista, então o carro é liberado pros outros', async t => {
+    const { clients } = await playing(t, 3);
+    const [a, b] = clients;
+    await ack(a.s, 'enterCar', { idx: 2 });
+    await ack(a.s, 'died', {});
+    const r = await ack(b.s, 'enterCar', { idx: 2 });
+    assert.equal(r.ok, true, 'carro ficou preso com o morto');
   });
 });
 

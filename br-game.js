@@ -559,7 +559,8 @@
       const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.4, 26, 8, 1, true),
         new THREE.MeshBasicMaterial({ color: 0x5ab0ff, transparent: true, opacity: 0.35, depthWrite: false }));
       beam.position.y = 13; g.add(beam);
-      const y = MP.heightAt(pos[0], pos[2]);
+      // groundAt respeita andares/telhados — morrer no 3º andar deixa o loot LÁ
+      const y = MP.groundAt(pos[0], pos[2], (pos[1] || 0) + 1);
       g.position.set(pos[0], y, pos[2]);
       MP.scene.add(g);
       drops.set(id, { g, box });
@@ -990,6 +991,28 @@
       }
     });
 
+    /* posse de veículo arbitrada no servidor (mata a corrida do "mesmo carro") */
+    let myCarClaim = -1;
+    function claimCar(idx) {
+      myCarClaim = idx;
+      socket.timeout(2500).emit('enterCar', { idx }, (err, res) => {
+        if (err || !res || !res.ok) {
+          if (G.state.driving && myCarClaim === idx) {
+            G.tryToggleCar();
+            MP.centerMsg('Veículo ocupado!', 1500);
+          }
+          myCarClaim = -1;
+        }
+      });
+    }
+    socket.on('carTaken', d => { // outro levou o carro que estou tentando usar
+      if (d.id !== INIT.id && G.state.driving && myCarClaim === d.idx) {
+        G.tryToggleCar();
+        MP.centerMsg('Veículo ocupado!', 1500);
+        myCarClaim = -1;
+      }
+    });
+
     /* =============== envio do meu estado (10x/s) =============== */
     setInterval(() => {
       if (!window.__BR_active || !MP.state.started || MP.state.paused) return;
@@ -1007,6 +1030,11 @@
       } else {
         _eul.setFromQuaternion(MP.camera.quaternion);
         rotY = _eul.y;
+      }
+      // transições de posse (só em partida; no solo o servidor recusaria)
+      if (S.phase === 'PLAY') {
+        if (car >= 0 && myCarClaim !== car) claimCar(car);
+        else if (car < 0 && myCarClaim >= 0) { socket.emit('leaveCar', { idx: myCarClaim }); myCarClaim = -1; }
       }
       socket.volatile.emit('state', {
         pos: [p.x, p.y, p.z], rotY, car, heli,

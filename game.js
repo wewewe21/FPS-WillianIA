@@ -285,7 +285,7 @@ treeHiMesh.frustumCulled = false; // a malha cobre o mapa todo; culling por inst
 treeLoMesh.frustumCulled = false;
 scene.add(treeHiMesh, treeLoMesh);
 
-const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, world, csmMat, paintGeometry });
+const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry });
 
 /* paredes das construções também são sólidas pra física dos veículos —
    sem isso carro/caminhão atravessavam prédios, fortes e muros */
@@ -1408,7 +1408,7 @@ const extraTargets = [];
 const Bosses = [];
 const MFlags = { colosso: false, alien: false, night: false }; // marcos de missão
 
-const Grenades = createGrenades({ clamp, rand, _v1, heightAt, terrainNormal, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets });
+const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainNormal, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets });
 
 
 

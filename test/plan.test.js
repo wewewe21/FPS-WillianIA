@@ -6,7 +6,7 @@
 'use strict';
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { buildPlan, zoneAt, rollChest, mulberry32, LIM } = require('../server.js');
+const { buildPlan, zoneAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank } = require('../server.js');
 
 describe('Plano da partida (unidade)', () => {
   it('dado 300 seeds diferentes, então o plano é sempre válido e a zona nunca vaza do mapa', () => {
@@ -65,5 +65,15 @@ describe('Loot dos baús (unidade)', () => {
     }
     for (const t of ['ammo', 'weapon', 'med', 'armor']) assert.ok(types.has(t), `nunca saiu ${t}`);
     for (const r of ['incomum', 'raro', 'épico', 'lendário']) assert.ok(rarities.has(r), `nunca saiu arma ${r}`);
+  });
+});
+
+describe('Ranking global (unidade)', () => {
+  it('dado um ranking inflado por 1200 nicks, então o prune segura em 500 e preserva o topo', () => {
+    for (let i = 0; i < 1200; i++) rankEntry('Inflado' + i).points = i;
+    const restaram = pruneRank();
+    assert.equal(restaram, 500);
+    const top = topRank(3);
+    assert.equal(top[0].points, 1199, 'prune jogou fora o líder');
   });
 });

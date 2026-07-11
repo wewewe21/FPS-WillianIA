@@ -125,3 +125,26 @@ por parede, limites do mundo e empurrão entre jogadores (com bot de rede real).
 
 Nota: ninguém percebeu antes porque jogador e balas usam colisão própria em
 JS (funcionava); só a física dos veículos dependia do broadphase do CANNON.
+
+## Rodada das hipóteses (TEST-PLAN-HIPOTESES.md) — 4 bugs + 2 blindagens
+
+| # | Sev. | Bug (BDD) | Correção | Teste |
+|---|------|-----------|----------|-------|
+| 34 | 🟠 alta | Dado um telhado de prédio, quando o jogador pousava nele, então era **cuspido pra fora** (colisão AABB tratava "pés no topo" como "dentro do bloco") e o telhado nem era pisável | Telhados da cidade viram plataformas + `collide` ignora quem está pisando no topo | Colisão 12 |
+| 35 | 🟠 alta | Dada uma granada em andar/telhado, então ela **atravessava o piso** e explodia no térreo (quique usava `heightAt`) | Quique usa `groundAt` (+normal reta em plataforma) | Colisão 13 |
+| 36 | 🟠 alta | Dado o helicóptero, então ele **atravessava prédios** (só colidia com o terreno) | Push-out AABB no update do heli | Colisão 14 |
+| 37 | 🟠 alta | Dado loot dropado em cima de andar/torre, então ele caía 27m até o terreno | `spawnDrop` com `groundAt` | BR-drops |
+| 38 | 🟡 média | Dados os dois últimos morrendo juntos, então "sem sobreviventes" com alguém em #1 no ranking (tela contraditória) | Último a morrer vence (`match.lastDead`) | Servidor |
+| 39 | 🟡 média | Dado martelar códigos de anfitrião, então dava pra força-bruta sem limite | Cooldown: 5 tentativas por janela | Anti-cheat |
+
+**Hipótese descartada com teste**: spawns de carro seguem saudáveis com a
+colisão real ligada (3 seeds — teste fica de regressão).
+
+**Performance (na mesma rodada)**: `sbox`/`cityBox` criavam corpos CANNON
+**duplicados e quebrados** (mesmo bug de AABB do #33) — removidos ~400 corpos
+mortos do mundo físico; a fonte única é o loop do game.js com `updateAABB()`.
+
+**Novos sistemas de teste**: partida BR real no harness (`startBRMatch`),
+proxy TCP de latência (+120ms/sentido) com 3 sentinelas de crash sob lag,
+posse de veículo arbitrada no servidor (mata a corrida do "mesmo carro")
+com 2 cenários, prune do ranking global (teto de 500) com teste de unidade.

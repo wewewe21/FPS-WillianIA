@@ -85,6 +85,7 @@ export function createHeli(deps) {
       group.position.y = Math.min(group.position.y, 130);
       const minY = groundAt(group.position.x, group.position.z, group.position.y) + 0.55;
       if (group.position.y < minY) { group.position.y = minY; vel.y = Math.max(0, vel.y); }
+      Structures.collide(group.position, 2.3, 2.2); // prédios/muros barram o heli
       group.rotation.set(rollK, yaw, -pitchK); // banca na curva, inclina o nariz ao acelerar
       // player acompanha (recentra grama/chunks)
       player.pos.set(group.position.x, groundAt(group.position.x, group.position.z, group.position.y), group.position.z);

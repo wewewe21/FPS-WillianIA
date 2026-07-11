@@ -9,10 +9,11 @@ const path = require('node:path');
 const CHROME = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']
   .find(p => fs.existsSync(p));
 
-async function bootGame({ port, worldSeed = '424242' }) {
+async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} }) {
   const puppeteer = require('puppeteer-core');
   const srv = spawn(process.execPath, [path.join(__dirname, '..', '..', 'server.js')], {
-    env: { ...process.env, PORT: String(port), WORLD_SEED: worldSeed }, stdio: 'ignore',
+    env: { ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed, ...extraEnv },
+    stdio: 'ignore',
   });
   await new Promise(r => setTimeout(r, 800));
   const browser = await puppeteer.launch({
@@ -22,7 +23,8 @@ async function bootGame({ port, worldSeed = '424242' }) {
       '--use-gl=angle', '--use-angle=swiftshader', '--mute-audio', '--window-size=800,600'],
   });
   const page = await browser.newPage();
-  page.on('pageerror', e => console.error('  [pageerror]', e.message));
+  const pageErrors = [];
+  page.on('pageerror', e => { pageErrors.push(e.message); console.error('  [pageerror]', e.message); });
   await page.goto(`http://localhost:${port}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction('!!window.__game && !!window.__MP', { timeout: 60000 });
   await page.evaluate(() => {
@@ -74,7 +76,7 @@ async function bootGame({ port, worldSeed = '424242' }) {
   });
 
   return {
-    browser, page, srv, port,
+    browser, page, srv, port, pageErrors,
     play: (fn, ...args) => page.evaluate(fn, ...args),
     async close() {
       if (browser) await browser.close();
@@ -83,4 +85,24 @@ async function bootGame({ port, worldSeed = '424242' }) {
   };
 }
 
-module.exports = { CHROME, bootGame };
+/* inicia uma partida BR de verdade: bot-host conecta, dá o código e inicia;
+   a página entra na partida e é jogada direto pro chão em fase PLAY */
+async function startBRMatch(h, { hostCode = 'WILLIAN77', serverPort } = {}) {
+  const { io } = require('socket.io-client');
+  const bot = io(`http://localhost:${serverPort || h.port}`, { transports: ['websocket'] });
+  await new Promise(r => bot.once('init', r));
+  bot.emit('hello', { nick: 'BotHost' });
+  await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: hostCode },
+    (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
+  bot.emit('requestStart');
+  await h.page.waitForFunction('window.__BR_debug && !!window.__BR_debug.S.plan', { timeout: 30000 });
+  await h.play(() => {
+    const S = window.__BR_debug.S;
+    S.phase = 'PLAY';           // pula nave/queda: direto pro chão
+    window.__BR_freeze = false;
+    window.QA.reset(30, 30);
+  });
+  return bot; // fica vivo na partida — quem chamou fecha com bot.close()
+}
+
+module.exports = { CHROME, bootGame, startBRMatch };

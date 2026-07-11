@@ -20,16 +20,20 @@ describe('Colisões', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   after(async () => { if (h) await h.close(); });
   const play = (fn, ...args) => h.play(fn, ...args);
 
-  /* acha uma parede "testável": grande, com chão plano dos dois lados */
+  /* acha um PRÉDIO "testável": footprint grande, alto, com chão de TERRENO
+     plano e livre (sem plataforma/telhado vizinho) nos dois lados de x */
   const findWall = `(function () {
     const QA = window.QA, S = QA.G.Structures, MP = QA.MP;
     return S.walls.find(w => {
       if (w.noCollide) return false;
-      if ((w.x1 - w.x0) < 3 || (w.z1 - w.z0) < 0.3 || (w.y1 - w.y0) < 2.2) return false;
+      if ((w.x1 - w.x0) < 8 || (w.z1 - w.z0) < 8 || (w.y1 - w.y0) < 8) return false;
       const cz = (w.z0 + w.z1) / 2;
-      for (const dx of [-3, 3]) {
-        const g = MP.groundAt(w.x0 + dx, cz, 999);
-        if (Math.abs(g - w.y0) > 0.8 || w.y1 < g + 2) return false;
+      for (const x of [w.x0 - 3, w.x1 + 3]) {
+        const ter = MP.heightAt(x, cz);
+        const g = MP.groundAt(x, cz, 999);
+        if (Math.abs(g - ter) > 0.5) return false;        // aproximação em cima de telhado vizinho
+        if (Math.abs(ter - w.y0) > 0.8) return false;     // base do prédio no chão
+        if (w.y1 < ter + 6) return false;                 // alto o bastante
       }
       return true;
     });
@@ -300,6 +304,125 @@ describe('Colisões', { skip: !CHROME && 'Chrome não encontrado' }, () => {
     if (!r) return;
     assert.ok(r.aberto < 100, 'controle falhou: explosão em campo aberto não feriu');
     assert.equal(r.atras, 100, `splash vazou pela parede (hp ficou ${r.atras})`);
+  });
+
+  it('dado um telhado de prédio da cidade, então dá pra POUSAR nele (pisável)', async () => {
+    const r = await play((fw) => {
+      const QA = window.QA, P = QA.MP.player;
+      const b = eval(fw);
+      if (!b) return null;
+      const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+      QA.reset(b.x0 - 3, cz);
+      P.pos.set(cx, b.y1 + 5, cz); // 5m acima do telhado
+      P.onGround = false; P.vel.set(0, 0, 0);
+      QA.tick(240);
+      return { y: +P.pos.y.toFixed(2), telhado: +b.y1.toFixed(2) };
+    }, findWall);
+    if (!r) return;
+    assert.ok(Math.abs(r.y - r.telhado) < 0.8,
+      `não pousou no telhado: y=${r.y} telhado=${r.telhado} (caiu/foi cuspido)`);
+  });
+
+  it('dada uma granada jogada em cima do prédio, então ela quica e explode LÁ EM CIMA', async () => {
+    const r = await play((fw) => {
+      const QA = window.QA, G = QA.G, P = QA.MP.player;
+      const b = eval(fw);
+      if (!b) return null;
+      const cx = (b.x0 + b.x1) / 2, cz = (b.z0 + b.z1) / 2;
+      QA.reset(b.x0 - 3, cz);
+      P.pos.set(cx, b.y1, cz);
+      P.onGround = true; P.vel.set(0, 0, 0);
+      QA.tick(3);
+      if (Math.abs(P.pos.y - b.y1) > 1.5) return { skip: 'telhado não pisável ainda' };
+      P.health = 100; P.armor = 0; P.invulnUntil = 0;
+      G.inventory.nades = 1;
+      QA.aimAt(P.pos.x + 0.5, P.pos.y + 0.1, P.pos.z); // pra baixo: quica no lugar e explode do lado
+      QA.MP.justPressed.add('KeyG');
+      QA.tick(1);
+      QA.tick(280); // voo + fuse
+      return { dano: +(100 - P.health).toFixed(1) };
+    }, findWall);
+    if (!r) return;
+    assert.ok(!r.skip, r.skip);
+    assert.ok(r.dano > 4,
+      `granada atravessou o telhado (explodiu 22m abaixo, dano=${r.dano})`);
+  });
+
+  it('dado o heli voando contra um prédio, então ele NÃO atravessa', async () => {
+    const r = await play((fw) => {
+      const QA = window.QA, G = QA.G;
+      const b = eval(fw);
+      if (!b) return null;
+      const cz = (b.z0 + b.z1) / 2;
+      const midY = Math.min(b.y0 + 6, b.y1 - 2);
+      const P = QA.MP.player;
+      QA.reset();
+      const hp = G.Heli.group.position;
+      P.pos.set(hp.x + 2, hp.y, hp.z);
+      QA.tick(1);
+      G.tryToggleCar(); // entra
+      if (!G.state.flying) return null;
+      G.Heli.group.position.set(b.x0 - 14, midY, cz); // reposiciona já voando
+      // heli anda na direção do yaw interno (começa +x — de frente pro prédio)
+      G.keys.KeyW = true;
+      let penetrou = false;
+      for (let i = 0; i < 300; i++) {
+        QA.tick(1);
+        const c = G.Heli.group.position;
+        if (c.x > b.x0 + 1.2 && c.x < b.x1 - 1.2 &&
+            c.z > b.z0 + 1.2 && c.z < b.z1 - 1.2 &&
+            c.y > b.y0 && c.y < b.y1) { penetrou = true; break; }
+      }
+      G.keys.KeyW = false;
+      G.tryToggleCar(); // sai
+      return { penetrou };
+    }, findWall);
+    if (!r) return;
+    assert.ok(!r.penetrou, 'helicóptero atravessou o prédio');
+  });
+
+  it('dado o mundo com colisão de verdade, então nenhum carro nasce preso ou é ejetado (3 seeds)', async () => {
+    // seed do harness atual
+    const local = await play(() => {
+      const QA = window.QA, G = QA.G;
+      const antes = G.Car.vehicles.map(v => v.chassisBody.position.clone());
+      QA.tick(300); // 5s de física assentando
+      return G.Car.vehicles.map((v, i) => {
+        const q = v.group.quaternion;
+        const upv = new QA.MP.THREE.Vector3(0, 1, 0).applyQuaternion(q);
+        return {
+          i, desloc: +v.chassisBody.position.distanceTo(antes[i]).toFixed(2),
+          upY: +upv.y.toFixed(2),
+          vel: +v.chassisBody.velocity.length().toFixed(2),
+        };
+      });
+    });
+    for (const c of local) {
+      assert.ok(c.desloc < 3, `seed 424242: carro ${c.i} ejetado ${c.desloc}m do spawn`);
+      assert.ok(c.upY > 0.7, `seed 424242: carro ${c.i} capotou no spawn (upY=${c.upY})`);
+      assert.ok(c.vel < 2, `seed 424242: carro ${c.i} ainda voando (v=${c.vel})`);
+    }
+    // duas seeds extras (boots próprios)
+    for (const [porta, seed] of [[3192, '99'], [3191, '7']]) {
+      const h2 = await bootGame({ port: porta, worldSeed: seed });
+      try {
+        const r = await h2.play(() => {
+          const QA = window.QA, G = QA.G;
+          const antes = G.Car.vehicles.map(v => v.chassisBody.position.clone());
+          QA.tick(300);
+          return G.Car.vehicles.map((v, i) => ({
+            i, desloc: +v.chassisBody.position.distanceTo(antes[i]).toFixed(2),
+            upY: +new QA.MP.THREE.Vector3(0, 1, 0).applyQuaternion(v.group.quaternion).y.toFixed(2),
+            vel: +v.chassisBody.velocity.length().toFixed(2),
+          }));
+        });
+        for (const c of r) {
+          assert.ok(c.desloc < 3, `seed ${seed}: carro ${c.i} ejetado ${c.desloc}m`);
+          assert.ok(c.upY > 0.7, `seed ${seed}: carro ${c.i} capotou (upY=${c.upY})`);
+          assert.ok(c.vel < 2, `seed ${seed}: carro ${c.i} voando (v=${c.vel})`);
+        }
+      } finally { await h2.close(); }
+    }
   });
 
   it('dada a borda do mundo, então o jogador é contido nos limites', async () => {

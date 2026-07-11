@@ -1,5 +1,10 @@
 # Plano de testes — hipóteses de bugs remanescentes
 
+> **STATUS: EXECUTADO.** Resultado: H1A/H1B/H3/H4 = bugs reais corrigidos;
+> H7/H8 corrigidos; H2 descartada com teste (vira regressão); H6 = 3 sentinelas
+> de latência passando; H5 implementado (posse no servidor); H9 prune ok.
+> Detalhes no QA-REPORT.md (bugs #34-39).
+
 Método das rodadas anteriores: **teste vermelho primeiro** (prova que o bug
 existe), correção depois, teste vira regressão permanente. Harness existente:
 `test/helpers/harness.js` (Chrome headless + tick manual + seed fixa).

@@ -45,9 +45,17 @@ const RANK_FILE = path.join(__dirname, 'br-rank.json');
 let globalRank = {};
 try { globalRank = JSON.parse(fs.readFileSync(RANK_FILE, 'utf8')); } catch (e) { globalRank = {}; }
 let rankDirty = false;
+function pruneRank(max = 500) { // sem teto, nicks aleatórios inflariam memória/disco pra sempre
+  const keys = Object.keys(globalRank);
+  if (keys.length <= max) return keys.length;
+  keys.sort((a, b) => globalRank[b].points - globalRank[a].points);
+  for (const k of keys.slice(max)) delete globalRank[k];
+  return max;
+}
 setInterval(() => {
   if (!rankDirty) return;
   rankDirty = false;
+  pruneRank();
   fs.writeFile(RANK_FILE, JSON.stringify(globalRank), () => {});
 }, 5000).unref(); // unref: testes que dão require() conseguem encerrar
 function rankEntry(nick) {
@@ -82,6 +90,7 @@ const ZONE_GRACE_S = BR_FAST ? 2 : 25;   // pós-voo: janela de queda sem puniç
 const FLOAT_AFTER_S = BR_FAST ? 3 : 60;  // "nunca pousou" vale a partir daqui
 const AFK_MS = BR_FAST ? 4000 : 45000;
 const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
+const CLAIM_COOLDOWN_MS = Math.max(500, +process.env.CLAIM_COOLDOWN_MS || 30000);
 
 const match = {
   phase: 'LOBBY',            // LOBBY | COUNTDOWN | PLAYING | ENDED
@@ -95,8 +104,18 @@ const match = {
   drops: new Map(),          // dropId -> { pos, items, taken }
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
+  carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
   countdownTimer: null, endTimer: null,
 };
+
+function freeCarsOf(id) {
+  for (const k of Object.keys(match.carOwners)) {
+    if (match.carOwners[k] === id) {
+      delete match.carOwners[k];
+      io.emit('carFree', { idx: +k });
+    }
+  }
+}
 
 function buildPlan(seed) {
   const rng = mulberry32(seed ^ 0x9E3779B9);
@@ -197,6 +216,7 @@ function startMatch() {
     p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true;
     match.aliveCount++;
   }
+  match.carOwners = {};
   io.emit('matchStart', { t0: match.t0, serverNow: Date.now(), plan: match.plan, num: match.num });
   broadcastRoster();
   sysChat(`Partida #${match.num} começou — ${match.aliveCount} na nave. Boa sorte!`);
@@ -243,7 +263,7 @@ function checkVictory() {
   const alive = [...players.entries()].filter(([, p]) => !p.spectator && p.alive);
   match.aliveCount = alive.length;
   if (alive.length === 1) endMatch(alive[0][0]);
-  else if (alive.length === 0) endMatch(null);
+  else if (alive.length === 0) endMatch(match.lastDead || null); // morte mútua: último a cair vence
 }
 
 /* ---------------- zona autoritativa (backstop do servidor) ----------------
@@ -293,6 +313,7 @@ setInterval(() => {
     if (p.zoneHp <= 0) {
       p.alive = false;
       p.placement = match.aliveCount;
+      match.lastDead = id;
       io.emit('playerKilled', {
         victimId: id, victimNick: p.nick,
         killerId: null, killerNick: null, killerKills: 0,
@@ -352,7 +373,13 @@ io.on('connection', socket => {
   /* vira anfitrião apresentando o código (impresso no console do servidor) */
   socket.on('claimHost', (d, cb) => {
     const p = players.get(socket.id);
-    const ok = !!p && clean(d && d.code).toUpperCase() === HOST_CODE;
+    if (!p) { if (typeof cb === 'function') cb({ ok: false }); return; }
+    // anti força-bruta: 5 tentativas erradas por janela e o socket esfria
+    const nowH = Date.now();
+    p.claimT = (p.claimT || []).filter(t => nowH - t < CLAIM_COOLDOWN_MS);
+    if (p.claimT.length >= 5) { if (typeof cb === 'function') cb({ ok: false }); return; }
+    const ok = clean(d && d.code).toUpperCase() === HOST_CODE;
+    if (!ok) p.claimT.push(nowH);
     if (ok && hostId !== socket.id) {
       hostId = socket.id;
       sysChat(`👑 ${p.nick} agora é o anfitrião`);
@@ -363,6 +390,27 @@ io.on('connection', socket => {
 
   /* latência: o cliente mede o RTT deste ack */
   socket.on('pingx', cb => { if (typeof cb === 'function') cb(); });
+
+  /* posse de veículo: o PRIMEIRO pedido leva (arbitragem do servidor mata a
+     corrida de dois jogadores entrando no mesmo carro na mesma janela) */
+  socket.on('enterCar', (d, cb) => {
+    if (typeof cb !== 'function') return;
+    const p = players.get(socket.id);
+    const idx = d && Number.isInteger(d.idx) ? d.idx : -1;
+    if (!p || !p.alive || match.phase !== 'PLAYING' || idx < 0 || idx > 31) return cb({ ok: false });
+    const owner = match.carOwners[idx];
+    if (owner && owner !== socket.id && players.has(owner)) return cb({ ok: false });
+    match.carOwners[idx] = socket.id;
+    socket.broadcast.emit('carTaken', { idx, id: socket.id });
+    cb({ ok: true });
+  });
+  socket.on('leaveCar', d => {
+    const idx = d && Number.isInteger(d.idx) ? d.idx : -1;
+    if (match.carOwners[idx] === socket.id) {
+      delete match.carOwners[idx];
+      io.emit('carFree', { idx });
+    }
+  });
 
   socket.on('state', d => {
     const p = players.get(socket.id);
@@ -457,6 +505,7 @@ io.on('connection', socket => {
     if (!victim || !victim.alive) { if (typeof cb === 'function') cb({}); return; }
     victim.alive = false;
     victim.placement = match.aliveCount; // morreu agora = posição atual
+    match.lastDead = socket.id; // se todos caírem juntos, o último a morrer vence
     let killer = d && d.killerId ? players.get(d.killerId) : null;
     if (killer && killer.spectator) killer = null; // espectador não mata ninguém
     if (killer && d.killerId !== socket.id) killer.kills++;
@@ -468,6 +517,7 @@ io.on('connection', socket => {
       byZone: !!(d && d.byZone),
       placement: victim.placement,
     });
+    freeCarsOf(socket.id); // motorista morto libera o carro
     broadcastRoster();
     checkVictory();
     if (typeof cb === 'function') cb({ placement: victim.placement });
@@ -573,6 +623,7 @@ io.on('connection', socket => {
     players.delete(socket.id);
     // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
     if (hostId === socket.id) hostId = null;
+    freeCarsOf(socket.id);
     io.emit('playerLeft', { id: socket.id });
     if (p) sysChat(`${p.nick} saiu`);
     if (p && p.alive) { p.alive = false; checkVictory(); }
@@ -583,7 +634,7 @@ io.on('connection', socket => {
 
 /* internos expostos pra suite de QA; o listen só roda quando executado
    direto (node server.js) — require() nos testes não abre porta */
-module.exports = { buildPlan, zoneAt, rollChest, mulberry32, LIM };
+module.exports = { buildPlan, zoneAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank };
 
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;

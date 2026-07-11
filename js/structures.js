@@ -4,11 +4,10 @@
    AABBs para bala/visão/colisão e corpos estáticos no cannon.
    ================================================================ */
 import * as THREE from 'three';
-import * as CANNON from 'cannon-es';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
 export function createStructures(deps) {
-  const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, world, csmMat, paintGeometry } = deps;
+  const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
   const sites = [];      // {x, z, r, type}
   const walls = [];      // AABBs sólidas {x0,x1,y0,y1,z0,z1}
   const geos = [];
@@ -25,10 +24,9 @@ export function createStructures(deps) {
     paintGeometry(g, _sc.setHex(color));
     geos.push(g);
     if (solid) {
+      // corpo físico NÃO é criado aqui: o game.js cria um por parede a partir
+      // de walls[] (com updateAABB) — criar aqui duplicava ~400 corpos mortos
       walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2 });
-      const b = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(w / 2, h / 2, d / 2)) });
-      b.position.set(x, y, z);
-      world.addBody(b);
     }
   }
   function scone(r, h, x, y, z, color) {
@@ -213,9 +211,8 @@ export function createStructures(deps) {
     cityGeos.push(g);
     if (solid) {
       walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2 });
-      const b = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(w / 2, h / 2, d / 2)) });
-      b.position.set(x, y, z);
-      world.addBody(b);
+      // telhado pisável: pousar de paraquedas/pular em prédio da cidade funciona
+      platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2 });
     }
   }
   function floorSlab(w, d, x, y, z) { // andar: pisável + bloqueia bala, sem empurrar player
@@ -359,7 +356,8 @@ export function createStructures(deps) {
   function collide(pos, radius, height) {
     for (const b of walls) {
       if (b.noCollide) continue; // lajes: pisáveis, não empurram
-      if (pos.y + height < b.y0 || pos.y > b.y1) continue;
+      // pés no nível do topo = está PISANDO no bloco (telhado) — não expulsa
+      if (pos.y + height < b.y0 || pos.y >= b.y1 - 0.12) continue;
       const nx = clamp(pos.x, b.x0, b.x1), nz = clamp(pos.z, b.z0, b.z1);
       const dx = pos.x - nx, dz = pos.z - nz;
       const d2 = dx * dx + dz * dz;
