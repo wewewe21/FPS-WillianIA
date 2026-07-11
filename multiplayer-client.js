@@ -52,6 +52,7 @@
       plan: INIT.plan || null,
       matchNum: INIT.matchNum || 0,
       hostId: INIT.hostId,
+      flags: INIT.flags || { golem: true, animais: true, ciclo: 'auto' },
       myKills: 0, aliveCount: 0, myPlacement: 0,
       lastHit: null,            // { shooterId, shooterNick, weapon, t }
       chuteOpen: false, jumped: false,
@@ -235,6 +236,29 @@
               abra <b>baús</b> pra achar armas (comum → lendária), derrote o <b>GOLEM</b>
               pro loot lendário, fuja do <b>gás</b> e seja o último vivo. 🏆
             </div>
+            <div class="brH">CONTROLES</div>
+            <div style="font-size:11.5px;opacity:.85;line-height:1.75;columns:2;column-gap:14px">
+              <b>WASD</b> mover · <b>SHIFT</b> correr<br>
+              <b>ESPAÇO</b> pular / paraquedas<br>
+              <b>CTRL</b> agachar / deslizar<br>
+              <b>🖱 esq/dir</b> atirar / mirar<br>
+              <b>R</b> recarregar · <b>1-6</b> armas<br>
+              <b>G</b> granada · <b>Q</b> kit médico<br>
+              <b>F</b> comer carne · <b>T</b> mira<br>
+              <b>E</b> veículo / baú · <b>TAB</b> inventário<br>
+              <b>ENTER</b> chat da sala
+            </div>
+            <div class="brH">REGRAS DA SALA <span style="opacity:.5">(só o anfitrião altera)</span></div>
+            <div id="brFlags" style="font-size:12.5px;line-height:2">
+              <label style="display:block"><input type="checkbox" id="fgGolem"> GOLEM da fortaleza</label>
+              <label style="display:block"><input type="checkbox" id="fgAnimais"> Animais no mapa</label>
+              <label style="display:block">Ciclo:
+                <select id="fgCiclo" class="brInput" style="width:auto;padding:3px 6px">
+                  <option value="auto">dia e noite</option>
+                  <option value="dia">sempre dia</option>
+                  <option value="noite">sempre noite</option>
+                </select></label>
+            </div>
           </div>
         </div>
       </div>`;
@@ -263,6 +287,8 @@
       }
       const hm = document.getElementById('brHostMsg');
       if (hm && isHost) hm.textContent = '👑 você é o anfitrião — só você inicia a partida';
+      // virar host depois do render precisa reabilitar as regras da sala
+      if (window.__BR_syncFlagsUI) window.__BR_syncFlagsUI();
     }
     /* vira anfitrião com o código impresso no console do servidor;
        fica salvo no navegador e é re-enviado a cada reload (nextMatch recarrega a página) */
@@ -296,6 +322,21 @@
       }
       const btn = document.getElementById('brStartBtn');
       if (btn) btn.addEventListener('click', () => socket.emit('requestStart'));
+      const fg = { golem: document.getElementById('fgGolem'),
+        animais: document.getElementById('fgAnimais'), ciclo: document.getElementById('fgCiclo') };
+      const syncFlagsUI = () => {
+        const isHost = INIT.id === S.hostId;
+        if (fg.golem) { fg.golem.checked = S.flags.golem; fg.golem.disabled = !isHost; }
+        if (fg.animais) { fg.animais.checked = S.flags.animais; fg.animais.disabled = !isHost; }
+        if (fg.ciclo) { fg.ciclo.value = S.flags.ciclo; fg.ciclo.disabled = !isHost; }
+      };
+      window.__BR_syncFlagsUI = syncFlagsUI;
+      syncFlagsUI();
+      const sendFlags = () => socket.emit('setFlags',
+        { golem: fg.golem.checked, animais: fg.animais.checked, ciclo: fg.ciclo.value });
+      if (fg.golem) fg.golem.addEventListener('change', sendFlags);
+      if (fg.animais) fg.animais.addEventListener('change', sendFlags);
+      if (fg.ciclo) fg.ciclo.addEventListener('change', sendFlags);
       const hIn = document.getElementById('brHostCode'), hBtn = document.getElementById('brHostBtn');
       if (hBtn) hBtn.addEventListener('click', () => claimHost(hIn.value));
       if (hIn) hIn.addEventListener('keydown', e => { if (e.key === 'Enter') claimHost(hIn.value); });
@@ -349,6 +390,10 @@
       },
     };
 
+    socket.on('flags', f => {
+      S.flags = f;
+      if (window.__BR_syncFlagsUI) window.__BR_syncFlagsUI();
+    });
     socket.emit('hello', { nick: S.nick, colors: S.myColors });
 
     /* reconexão do socket.io ganharia um id novo no servidor (avatar duplicado,

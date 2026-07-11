@@ -77,7 +77,7 @@ const players = new Map(); // id -> { nick, colors, kills, alive, spectator, pla
 
 /* anfitrião: SÓ quem digitar o código vira host (nada de host aleatório).
    Código fixo abaixo; a variável de ambiente HOST_CODE sobrescreve se quiser trocar. */
-const HOST_CODE = String(process.env.HOST_CODE || 'WILLIAN77').toUpperCase();
+const HOST_CODE = String(process.env.HOST_CODE || 'QUEDALIVRE').toUpperCase();
 let hostId = null;
 
 /* knobs de teste (QA) — em produção ficam nos padrões */
@@ -105,6 +105,7 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
+  flags: { golem: true, animais: true, ciclo: 'auto' }, // regras da sala (só o host altera)
   countdownTimer: null, endTimer: null,
 };
 
@@ -206,9 +207,10 @@ function startMatch() {
   match.openedChests.clear();
   match.drops.clear();
   match.dropSeq = 0;
+  match.plan.flags = { ...match.flags }; // congela as regras da partida
   match.bossMaxHp = match.plan.boss.hp;
   match.bossHp = match.bossMaxHp;
-  match.bossDead = false;
+  match.bossDead = !match.flags.golem; // GOLEM desligado = já "morto" pro servidor
   match.aliveCount = 0;
   for (const p of players.values()) {
     if (p.spectator) continue; // quem entrou tarde continua espectador
@@ -348,6 +350,7 @@ io.on('connection', socket => {
     openedChests: [...match.openedChests],
     drops: [...match.drops.entries()].filter(([, d]) => !d.taken).map(([id, d]) => ({ id, pos: d.pos, items: d.items.length })),
     hostId,
+    flags: match.flags,
     players: roster(true).filter(p => p.id !== socket.id),
     globalTop: topRank(),
   });
@@ -390,6 +393,15 @@ io.on('connection', socket => {
 
   /* latência: o cliente mede o RTT deste ack */
   socket.on('pingx', cb => { if (typeof cb === 'function') cb(); });
+
+  /* regras da sala: só o anfitrião altera (GOLEM, animais, ciclo dia/noite) */
+  socket.on('setFlags', d => {
+    if (socket.id !== hostId || !d) return;
+    if (typeof d.golem === 'boolean') match.flags.golem = d.golem;
+    if (typeof d.animais === 'boolean') match.flags.animais = d.animais;
+    if (['auto', 'dia', 'noite'].includes(d.ciclo)) match.flags.ciclo = d.ciclo;
+    io.emit('flags', match.flags);
+  });
 
   /* posse de veículo: o PRIMEIRO pedido leva (arbitragem do servidor mata a
      corrida de dois jogadores entrando no mesmo carro na mesma janela) */
@@ -537,8 +549,8 @@ io.on('connection', socket => {
     const key = String(d.key).slice(0, 32);
     if (match.openedChests.has(key)) return cb({ ok: false, opened: true });
     match.openedChests.add(key);
-    // baú lendário só existe depois do GOLEM cair — bloqueia claim antecipado
-    if (key === 'boss' && !match.bossDead) { match.openedChests.delete(key); return cb({ ok: false }); }
+    // baú lendário só existe depois do GOLEM cair — e só se o GOLEM existe na sala
+    if (key === 'boss' && (!match.bossDead || !match.flags.golem)) { match.openedChests.delete(key); return cb({ ok: false }); }
     const rng = mulberry32((match.seed ^ [...key].reduce((a, c) => a * 31 + c.charCodeAt(0) | 0, 7)) >>> 0);
     const items = key === 'boss'
       ? [{ type: 'weapon', rarity: 'lendário', weapon: 4, ammo: 160 }, { type: 'armor', amount: 100 }, { type: 'med' }, { type: 'med' }]

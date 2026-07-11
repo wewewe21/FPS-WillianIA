@@ -87,7 +87,7 @@ async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} 
 
 /* inicia uma partida BR de verdade: bot-host conecta, dá o código e inicia;
    a página entra na partida e é jogada direto pro chão em fase PLAY */
-async function startBRMatch(h, { hostCode = 'WILLIAN77', serverPort } = {}) {
+async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort } = {}) {
   const { io } = require('socket.io-client');
   const bot = io(`http://localhost:${serverPort || h.port}`, { transports: ['websocket'] });
   await new Promise(r => bot.once('init', r));

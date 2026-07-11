@@ -336,6 +336,102 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
     assert.ok(r.hp1 < r.hp0, `boss não levou dano (${r.hp0} -> ${r.hp1})`);
   });
 
+  it('dadas as teclas 1-6 e o scroll, então as armas trocam', async t => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, MP = QA.MP;
+      QA.reset();
+      for (const w of G.arsenal) w.locked = false; // QA: arsenal liberado
+      const nomes = [];
+      // 1-3: atalhos do núcleo (justPressed)
+      for (const [key, idx] of [['Digit1', 0], ['Digit2', 1], ['Digit3', 2]]) {
+        MP.justPressed.add(key); QA.tick(1);
+        nomes.push([G.gun.name, G.arsenal[idx].name]);
+      }
+      // 4-6: atalhos do BR (listener de keydown real, só em fase PLAY)
+      const faseAntes = window.__BR_debug.S.phase;
+      window.__BR_debug.S.phase = 'PLAY';
+      for (const [key, idx] of [['Digit4', 3], ['Digit5', 4], ['Digit6', 5]]) {
+        window.dispatchEvent(new KeyboardEvent('keydown', { code: key, bubbles: true }));
+        window.dispatchEvent(new KeyboardEvent('keyup', { code: key, bubbles: true }));
+        QA.tick(1);
+        nomes.push([G.gun.name, G.arsenal[idx].name]);
+      }
+      window.__BR_debug.S.phase = faseAntes;
+      // scroll: roda pra próxima arma destravada
+      const antes = G.gun.name;
+      window.dispatchEvent(new WheelEvent('wheel', { deltaY: 120 }));
+      QA.tick(1);
+      const depoisScroll = G.gun.name !== antes;
+      return { nomes, depoisScroll };
+    });
+    for (const [got, want] of r.nomes) assert.equal(got, want, `atalho trocou pra ${got}, esperado ${want}`);
+    assert.ok(r.depoisScroll, 'scroll do mouse não trocou de arma');
+  });
+
+  it('dado F com carne no inventário, então come e recupera vida', async t => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, P = QA.MP.player;
+      QA.reset();
+      P.health = 40;
+      G.inventory.meat = 1;
+      QA.MP.justPressed.add('KeyF');
+      QA.tick(1);
+      const carne = G.inventory.meat;
+      QA.tick(90);
+      return { carne, health: P.health };
+    });
+    assert.equal(r.carne, 0, 'carne não foi consumida');
+    assert.ok(r.health > 45, `não curou comendo: ${r.health}`);
+  });
+
+  it('dado T, então o acessório da mira troca (aviso na tela)', async t => {
+    const r = await play(() => {
+      const QA = window.QA;
+      QA.reset();
+      QA.G.switchWeapon(0);
+      QA.MP.justPressed.add('KeyT');
+      QA.tick(1);
+      return { msg: document.getElementById('centerMsg').textContent };
+    });
+    assert.ok(/mira/i.test(r.msg), `sem aviso de troca de mira: "${r.msg}"`);
+  });
+
+  it('dado TAB, então o painel de inventário abre — e fecha no segundo toque', async t => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G;
+      QA.reset();
+      QA.MP.justPressed.add('Tab'); QA.tick(1); // TAB é toggle por pressão
+      const aberto = document.getElementById('invPanel').classList.contains('open');
+      QA.MP.justPressed.add('Tab'); QA.tick(1);
+      const fechado = !document.getElementById('invPanel').classList.contains('open');
+      return { aberto, fechado };
+    });
+    assert.ok(r.aberto, 'TAB não abriu o inventário');
+    assert.ok(r.fechado, 'inventário não fechou ao soltar TAB');
+  });
+
+  it('dado ENTER, então o chat da sala abre — e ESC fecha sem vazar teclas pro jogo', async t => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G;
+      QA.reset();
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter', bubbles: true }));
+      const input = document.getElementById('brChatInput');
+      const abriu = input && input.style.display === 'block';
+      // digita W com o chat aberto: o jogo NÃO pode andar
+      input.focus();
+      const p0 = QA.pos();
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW', bubbles: true }));
+      QA.tick(30);
+      const andou = QA.fwdDelta(p0);
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape', bubbles: true }));
+      const fechou = input.style.display === 'none';
+      return { abriu, andou, fechou };
+    });
+    assert.ok(r.abriu, 'ENTER não abriu o chat');
+    assert.ok(r.andou < 0.3, `teclas vazaram pro jogo com o chat aberto (andou ${r.andou.toFixed(2)}m)`);
+    assert.ok(r.fechou, 'ESC não fechou o chat');
+  });
+
   it('dado o tempo passando, então o dia avança (Env.tod)', async t => {
     const r = await play(() => {
       const QA = window.QA;

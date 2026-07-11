@@ -360,7 +360,8 @@
     let skyAcc = 9; // força a 1ª sincronização de clima logo de cara
     function skySync(dt) {
       if (!S.plan || !MP.state.started) return;
-      G.Env.tod = todAt(S.matchT());
+      const ciclo = S.flags && S.flags.ciclo;
+      G.Env.tod = ciclo === 'dia' ? 0.45 : ciclo === 'noite' ? 0.95 : todAt(S.matchT());
       skyAcc += dt;
       if (skyAcc > 1) {
         skyAcc = 0;
@@ -788,6 +789,10 @@
       LOBBY.hide();
       if (!MP.state.started) G.forceStart();
       disableSoloAI();
+      if (S.flags && !S.flags.animais) { // regra da sala: sem bichos
+        try { for (const a of G.Animals.list) { a.alive = false; if (a.group) a.group.visible = false; } }
+        catch (e) { /* módulo ausente: segue */ }
+      }
       buildZoneWall();
       buildCrates();
       buildBoss();
@@ -825,11 +830,12 @@
     });
     socket.on('matchStart', d => {
       S.plan = d.plan;
+      S.flags = d.plan.flags || { golem: true, animais: true, ciclo: 'auto' };
       S.t0 = d.t0;
       S.clockOffset = d.serverNow - Date.now();
       S.matchNum = d.num;
       S.myKills = 0; S.myPlacement = 0; recapShown = false; myDeathInfo = null;
-      bossDeadFlag = false;
+      bossDeadFlag = !S.flags.golem; // GOLEM desligado pela regra da sala: nem constrói
       bossHp = bossMaxHp = d.plan.boss.hp;
       beginMatch(false);
     });

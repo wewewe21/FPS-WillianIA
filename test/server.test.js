@@ -444,6 +444,51 @@ describe('Anti-cheat', () => {
   });
 });
 
+/* =============== REGRAS DA SALA (FLAGS) =============== */
+describe('Regras da sala (flags do anfitrião)', () => {
+  it('dado um não-host mexendo nas flags, então nada muda; host muda e todos recebem', async t => {
+    const srv = await spawnServer(); t.after(() => srv.stop());
+    const a = await connect(srv.port); t.after(() => a.s.close());
+    const b = await connect(srv.port); t.after(() => b.s.close());
+    assert.equal(a.init.flags.golem, true, 'init sem flags');
+    const recebidas = collect(a.s, 'flags');
+    b.s.emit('setFlags', { golem: false, ciclo: 'noite' }); // B não é host
+    await sleep(300);
+    assert.equal(recebidas.length, 0, 'não-host alterou as regras!');
+    await ack(a.s, 'claimHost', { code: 'QA123' });
+    a.s.emit('setFlags', { golem: false, animais: false, ciclo: 'noite' });
+    await sleep(300);
+    const f = recebidas[recebidas.length - 1];
+    assert.ok(f && f.golem === false && f.animais === false && f.ciclo === 'noite');
+  });
+
+  it('dado GOLEM desligado, então a partida nasce com boss morto e o baú lendário não abre', async t => {
+    const srv = await spawnServer(); t.after(() => srv.stop());
+    const a = await connect(srv.port); t.after(() => a.s.close());
+    a.s.emit('hello', { nick: 'HostQA' });
+    await ack(a.s, 'claimHost', { code: 'QA123' });
+    a.s.emit('setFlags', { golem: false });
+    const started = once(a.s, 'matchStart');
+    a.s.emit('requestStart');
+    const ms = await started;
+    assert.equal(ms.plan.flags.golem, false, 'flags não congelaram no plano');
+    const r = await ack(a.s, 'openChest', { key: 'boss' });
+    assert.equal(r.ok, false, 'baú lendário abriu sem GOLEM na sala');
+  });
+
+  it('dado ciclo inválido no setFlags, então é ignorado (sanitização)', async t => {
+    const srv = await spawnServer(); t.after(() => srv.stop());
+    const a = await connect(srv.port); t.after(() => a.s.close());
+    await ack(a.s, 'claimHost', { code: 'QA123' });
+    const recebidas = collect(a.s, 'flags');
+    a.s.emit('setFlags', { ciclo: 'meianoite<script>', golem: 'sim' });
+    await sleep(300);
+    const f = recebidas[recebidas.length - 1];
+    assert.equal(f.ciclo, 'auto', 'ciclo inválido passou');
+    assert.equal(f.golem, true, 'golem não-booleano passou');
+  });
+});
+
 /* =============== POSSE DE VEÍCULO =============== */
 describe('Posse de veículo (arbitrada no servidor)', () => {
   it('dado dois pedidos pelo mesmo carro, então só o primeiro leva — e sair devolve', async t => {
