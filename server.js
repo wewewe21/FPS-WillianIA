@@ -12,10 +12,12 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
+const CityProto = require('./city-destruction-protocol.js');
 
 const app = express();
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
-const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js'];
+const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
+  'city-destruction-client.js', 'city-destruction-protocol.js'];
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
 app.use('/js', express.static(path.join(__dirname, 'js'))); // módulos ES do jogo
@@ -91,6 +93,8 @@ const FLOAT_AFTER_S = BR_FAST ? 3 : 60;  // "nunca pousou" vale a partir daqui
 const AFK_MS = BR_FAST ? 4000 : 45000;
 const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
 const CLAIM_COOLDOWN_MS = Math.max(500, +process.env.CLAIM_COOLDOWN_MS || 30000);
+const CITY_DELAY_MS = Math.max(500, +process.env.CITY_DESTRUCTION_DELAY_MS || CityProto.DELAY_DEFAULT);
+const CITY_IMPACT_MS = Math.max(300, +process.env.CITY_DESTRUCTION_IMPACT_DELAY_MS || CityProto.IMPACT_DELAY_DEFAULT);
 
 const match = {
   phase: 'LOBBY',            // LOBBY | COUNTDOWN | PLAYING | ENDED
@@ -105,7 +109,8 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
-  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto' }, // regras da sala (só o host altera)
+  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true }, // regras da sala (só o host altera)
+  cityDestruction: { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null },
   countdownTimer: null, endTimer: null,
 };
 
@@ -208,6 +213,20 @@ function startMatch() {
   match.drops.clear();
   match.dropSeq = 0;
   match.plan.flags = { ...match.flags }; // congela as regras da partida
+  // destruição da cidade: timestamps ABSOLUTOS do servidor (fonte de verdade)
+  if (match.flags.cidade) {
+    const seed = (match.seed ^ 0xC17DE57) >>> 0;
+    match.cityDestruction = {
+      eventId: 'city-' + (match.num) + '-' + seed,
+      seed,
+      state: 'intact',
+      cinematicStartedAt: match.t0 + CITY_DELAY_MS,
+      impactAt: match.t0 + CITY_DELAY_MS + CITY_IMPACT_MS,
+    };
+  } else {
+    match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
+  }
+  match.plan.city = match.flags.cidade ? { ...match.cityDestruction } : null;
   match.bossMaxHp = match.plan.boss.hp;
   match.bossHp = match.bossMaxHp;
   match.bossDead = !match.flags.golem; // GOLEM desligado = já "morto" pro servidor
@@ -267,6 +286,47 @@ function checkVictory() {
   if (alive.length === 1) endMatch(alive[0][0]);
   else if (alive.length === 0) endMatch(match.lastDead || null); // morte mútua: último a cair vence
 }
+
+/* ---------------- destruição da cidade (relógio do servidor) ----------------
+   ticker curto em vez de setTimeout único: sobrevive a ajustes de relógio e
+   garante transições exatamente-uma-vez por eventId. */
+let cityFired = { cinematic: null, impact: null }; // eventIds já disparados
+function cityBroadcast() { io.emit('cityDestruction', { ...match.cityDestruction }); }
+setInterval(() => {
+  const cd = match.cityDestruction;
+  if (match.phase !== 'PLAYING' || !cd || !cd.eventId) return;
+  const now = Date.now();
+  if (cd.state === 'intact' && now >= cd.cinematicStartedAt && cityFired.cinematic !== cd.eventId) {
+    cityFired.cinematic = cd.eventId;
+    cd.state = 'cinematic';
+    cityBroadcast();
+    sysChat('⚠ ALERTA: mísseis se aproximando da cidade!');
+  }
+  if (cd.state === 'cinematic' && now >= cd.impactAt && cityFired.impact !== cd.eventId) {
+    cityFired.impact = cd.eventId;
+    cd.state = 'destroyed';
+    // mortes autoritativas: última posição válida vs raio letal do centro da cidade
+    const C = CityProto.CITY_CENTER, R = CityProto.CITY_KILL_RADIUS;
+    for (const [id, p] of players) {
+      if (p.spectator || !p.alive) continue;
+      if (Math.hypot(p.pos[0] - C.x, p.pos[2] - C.z) > R) continue;
+      p.alive = false;
+      p.placement = match.aliveCount;
+      match.lastDead = id;
+      freeCarsOf(id);
+      io.emit('playerKilled', {
+        victimId: id, victimNick: p.nick,
+        killerId: null, killerNick: null, killerKills: 0,
+        weapon: 'MÍSSEIS', byZone: false, byCity: true,
+        placement: p.placement,
+      });
+      console.log(`[CIDADE] ${p.nick} morreu no ataque de mísseis`);
+    }
+    cityBroadcast();
+    broadcastRoster();
+    checkVictory();
+  }
+}, 250).unref();
 
 /* ---------------- zona autoritativa (backstop do servidor) ----------------
    O dano de gás normal é aplicado pelo cliente, mas cliente com aba oculta
@@ -351,6 +411,7 @@ io.on('connection', socket => {
     drops: [...match.drops.entries()].filter(([, d]) => !d.taken).map(([id, d]) => ({ id, pos: d.pos, items: d.items.length })),
     hostId,
     flags: match.flags,
+    cityDestruction: match.cityDestruction,
     players: roster(true).filter(p => p.id !== socket.id),
     globalTop: topRank(),
   });
@@ -400,6 +461,7 @@ io.on('connection', socket => {
     if (typeof d.golem === 'boolean') match.flags.golem = d.golem;
     if (typeof d.animais === 'boolean') match.flags.animais = d.animais;
     if (typeof d.zumbis === 'boolean') match.flags.zumbis = d.zumbis;
+    if (typeof d.cidade === 'boolean') match.flags.cidade = d.cidade;
     if (['auto', 'dia', 'noite'].includes(d.ciclo)) match.flags.ciclo = d.ciclo;
     if (Number.isInteger(d.bots)) {
       const n = Math.max(0, Math.min(8, d.bots));
@@ -641,6 +703,13 @@ io.on('connection', socket => {
     // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
     if (hostId === socket.id) hostId = null;
     freeCarsOf(socket.id);
+    if (players.size === 0) { // sala vazia: sessão volta ao estado de fábrica
+      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true };
+      match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
+      if (match.phase === 'COUNTDOWN' && match.countdownTimer) clearInterval(match.countdownTimer);
+      if (match.phase !== 'PLAYING' && match.phase !== 'ENDED') match.phase = 'LOBBY';
+      syncBots(); // flags.bots voltou a 0
+    }
     io.emit('playerLeft', { id: socket.id });
     if (p) sysChat(`${p.nick} saiu`);
     if (p && p.alive) { p.alive = false; checkVictory(); }
