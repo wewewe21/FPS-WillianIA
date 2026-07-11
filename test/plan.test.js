@@ -69,6 +69,21 @@ describe('Loot dos baús (unidade)', () => {
 });
 
 describe('Ranking global (unidade)', () => {
+  it('dado RANK_FILE no ambiente, então o servidor persiste o ranking nesse caminho (volume do deploy)', () => {
+    const os = require('node:os');
+    const path = require('node:path');
+    const fs = require('node:fs');
+    const alvo = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rank-')), 'rank.json');
+    const { execSync } = require('node:child_process');
+    // processo limpo: RANK_FILE é lido no carregamento do módulo
+    const out = execSync(process.execPath +
+      ' -e "const s=require(\'./server.js\'); s.rankEntry(\'Env\').points=7; s.saveRankNow(); console.log(\'ok\')"',
+      { cwd: path.join(__dirname, '..'), env: { ...process.env, RANK_FILE: alvo }, encoding: 'utf8' });
+    assert.match(out, /ok/);
+    const salvo = JSON.parse(fs.readFileSync(alvo, 'utf8'));
+    assert.equal(salvo['env'] ? salvo['env'].points : salvo['Env'].points, 7);
+  });
+
   it('dado um ranking inflado por 1200 nicks, então o prune segura em 500 e preserva o topo', () => {
     // pontos MUITO acima de qualquer jogador real: o br-rank.json do disco é
     // carregado junto e não pode disputar o topo com os nicks do teste

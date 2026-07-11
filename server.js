@@ -43,7 +43,8 @@ function mulberry32(seed) {
    AVISO: no free tier do Render o disco é efêmero — o arquivo zera quando
    o serviço dorme/redeploya. Cada navegador também guarda as próprias
    estatísticas em localStorage como espelho. */
-const RANK_FILE = path.join(__dirname, 'br-rank.json');
+// RANK_FILE por env: no deploy Docker o ranking vive num volume (/data)
+const RANK_FILE = process.env.RANK_FILE || path.join(__dirname, 'br-rank.json');
 let globalRank = {};
 try { globalRank = JSON.parse(fs.readFileSync(RANK_FILE, 'utf8')); } catch (e) { globalRank = {}; }
 let rankDirty = false;
@@ -60,6 +61,10 @@ setInterval(() => {
   pruneRank();
   fs.writeFile(RANK_FILE, JSON.stringify(globalRank), () => {});
 }, 5000).unref(); // unref: testes que dão require() conseguem encerrar
+function saveRankNow() { // usado por testes/desligamento: grava sem esperar o intervalo
+  pruneRank();
+  fs.writeFileSync(RANK_FILE, JSON.stringify(globalRank));
+}
 function rankEntry(nick) {
   const key = nick.toLowerCase();
   if (!globalRank[key]) globalRank[key] = { nick, points: 0, wins: 0, kills: 0, matches: 0, sumPlace: 0 };
@@ -740,7 +745,7 @@ process.on('exit', () => { if (botsProc) try { botsProc.kill(); } catch (e) { /*
 
 /* internos expostos pra suite de QA; o listen só roda quando executado
    direto (node server.js) — require() nos testes não abre porta */
-module.exports = { buildPlan, zoneAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank };
+module.exports = { saveRankNow, buildPlan, zoneAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank };
 
 if (require.main === module) {
   server.listen(PORT, () => {

@@ -3,3 +3,6 @@ node_modules/
 .claude/
 skills-lock.json
 .venv/
+docker-compose.prod.yml
+docker-compose.override*.yml
+.env

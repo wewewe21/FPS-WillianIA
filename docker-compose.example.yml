@@ -1,0 +1,27 @@
+# Exemplo de deploy com Docker Compose atrás de um reverse proxy.
+# Copie para docker-compose.prod.yml (fora do Git) e ajuste a rede/nomes
+# do SEU ambiente. Não exponha porta pública se houver proxy na frente.
+services:
+  game:
+    build: .
+    image: game-fps:latest
+    container_name: game-fps
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      RANK_FILE: /data/br-rank.json
+      # HOST_CODE: "TROQUE-AQUI"   # código do anfitrião (padrão: QUEDALIVRE)
+    volumes:
+      - game_rank:/data
+    # sem proxy? exponha a porta diretamente:
+    # ports:
+    #   - "3000:3000"
+    networks:
+      - web
+
+volumes:
+  game_rank:
+
+networks:
+  web:
+    external: true   # rede compartilhada com o reverse proxy do seu ambiente
