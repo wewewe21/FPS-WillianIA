@@ -1,0 +1,16 @@
+node_modules
+.venv
+.git
+.github
+.claude
+.gitignore
+docs
+test
+tests
+scripts
+*.md
+br-rank.json
+Dockerfile
+docker-compose*.yml
+.dockerignore
+skills-lock.json

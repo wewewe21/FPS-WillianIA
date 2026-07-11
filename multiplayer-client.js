@@ -52,6 +52,7 @@
       plan: INIT.plan || null,
       matchNum: INIT.matchNum || 0,
       hostId: INIT.hostId,
+      flags: INIT.flags || { golem: true, animais: true, ciclo: 'auto' },
       myKills: 0, aliveCount: 0, myPlacement: 0,
       lastHit: null,            // { shooterId, shooterNick, weapon, t }
       chuteOpen: false, jumped: false,
@@ -61,7 +62,7 @@
       nick, myColors,
       chatOpen: false,
     };
-    S.now = () => Date.now() + S.clockOffset;
+    S.now = () => Date.now() + S.clockOffset + (S.halfRtt || 0); // offset + compensação de latência
     S.matchT = () => (S.now() - S.t0) / 1000;
 
     /* ---------- CSS ---------- */
@@ -70,7 +71,7 @@
       .brPanel { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center;
         background: rgba(5,9,14,.88); backdrop-filter: blur(6px); color: #e8f1f8; font-family: system-ui, sans-serif; }
       .brCard { background: rgba(14,20,28,.95); border: 1px solid rgba(255,255,255,.14); border-radius: 14px;
-        padding: 26px 32px; min-width: 560px; max-width: 800px; max-height: 88vh; overflow: auto; }
+        padding: 26px 32px; min-width: 560px; max-width: 880px; max-height: 92vh; overflow: auto; }
       .brTitle { font-size: 26px; font-weight: 800; letter-spacing: 6px; color: #ffd76a; text-align: center; }
       .brSub { text-align: center; opacity: .7; font-size: 12px; letter-spacing: 3px; margin: 4px 0 14px; }
       .brRow { display: flex; gap: 20px; align-items: flex-start; }
@@ -81,6 +82,18 @@
       .brBtn:disabled { background: #3a4250; color: #8a94a3; cursor: default; }
       .brInput { width: 100%; padding: 8px 10px; background: rgba(255,255,255,.08); color: #fff;
         border: 1px solid rgba(255,255,255,.18); border-radius: 6px; font-size: 14px; box-sizing: border-box; }
+      select.brInput { background: #131a24; }
+      .brInput option { background: #131a24; color: #e8f1f8; }
+      #brFlags label { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+      #brFlags input[type=checkbox] { accent-color: #ffd76a; width: 15px; height: 15px; }
+      #brFlags select { width: auto; padding: 4px 8px; }
+      .brKeys { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 16px;
+        font-size: 11.5px; opacity: .9; line-height: 1.7; }
+      .brKeys b { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16);
+        border-radius: 4px; padding: 0 6px; font-weight: 700; }
+      #gasTint { position: fixed; inset: 0; pointer-events: none; z-index: 35; opacity: 0;
+        transition: opacity .6s; background: radial-gradient(ellipse at center,
+        rgba(255,40,20,0) 42%, rgba(220,30,10,.38) 100%); }
       .brPlayers div { padding: 3px 0; font-size: 13px; display: flex; align-items: center; gap: 8px; }
       .brDot { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
       .brCount { font-size: 62px; font-weight: 800; color: #ffd76a; text-align: center; margin: 4px 0; }
@@ -136,8 +149,9 @@
     const div = (id, parent) => { const d = document.createElement('div'); if (id) d.id = id; (parent || document.body).appendChild(d); return d; };
     const topBar = div('brTop');
     topBar.innerHTML = `<div class="pill" id="brAlive">—</div><div class="pill" id="brZonePill">—</div>`;
+    const gasTint = div('gasTint');
     const zoneMapC = document.createElement('canvas');
-    zoneMapC.id = 'brZoneMap'; zoneMapC.width = 160; zoneMapC.height = 160;
+    zoneMapC.id = 'brZoneMap'; zoneMapC.width = 190; zoneMapC.height = 190;
     document.body.appendChild(zoneMapC);
     const rosterBox = div('brRoster');
     const chatBox = div('brChat');
@@ -150,7 +164,7 @@
     const toastBox = div('brToast');
 
     const UI = {
-      topBar, zoneMapC, rosterBox, bossBar, spectBar, hintBox,
+      topBar, zoneMapC, rosterBox, bossBar, spectBar, hintBox, gasTint,
       pillAlive: document.getElementById('brAlive'),
       pillZone: document.getElementById('brZonePill'),
       bossFill: document.getElementById('brBossFill'),
@@ -235,6 +249,36 @@
               abra <b>baús</b> pra achar armas (comum → lendária), derrote o <b>GOLEM</b>
               pro loot lendário, fuja do <b>gás</b> e seja o último vivo. 🏆
             </div>
+            <div class="brH">CONTROLES</div>
+            <div class="brKeys">
+              <span><b>WASD</b> mover</span><span><b>SHIFT</b> correr</span>
+              <span><b>ESPAÇO</b> pular/paraquedas</span><span><b>CTRL</b> agachar/deslizar</span>
+              <span><b>🖱</b> atirar · dir. mirar</span><span><b>R</b> recarregar</span>
+              <span><b>1-6</b> armas (ou scroll)</span><span><b>G</b> granada</span>
+              <span><b>Q</b> kit médico</span><span><b>F</b> comer carne</span>
+              <span><b>E</b> veículo / baú</span><span><b>T</b> troca de mira</span>
+              <span><b>TAB</b> inventário</span><span><b>ENTER</b> chat da sala</span>
+            </div>
+            <div class="brH">REGRAS DA SALA <span style="opacity:.5">(só o anfitrião altera)</span></div>
+            <div id="brFlags" style="font-size:12.5px;line-height:1.9">
+              <label><input type="checkbox" id="fgGolem"> GOLEM da fortaleza</label>
+              <label><input type="checkbox" id="fgAnimais"> Animais no mapa</label>
+              <label><input type="checkbox" id="fgZumbis"> Zumbis à noite ☠</label>
+              <label><input type="checkbox" id="fgCidade"> Destruição automática da cidade ☄</label>
+              <label>Bots na sala:
+                <select id="fgBots" class="brInput">
+                  <option value="0">nenhum</option>
+                  <option value="2">2</option>
+                  <option value="4">4</option>
+                  <option value="8">8</option>
+                </select></label>
+              <label>Ciclo:
+                <select id="fgCiclo" class="brInput">
+                  <option value="auto">dia e noite</option>
+                  <option value="dia">sempre dia</option>
+                  <option value="noite">sempre noite</option>
+                </select></label>
+            </div>
           </div>
         </div>
       </div>`;
@@ -263,6 +307,8 @@
       }
       const hm = document.getElementById('brHostMsg');
       if (hm && isHost) hm.textContent = '👑 você é o anfitrião — só você inicia a partida';
+      // virar host depois do render precisa reabilitar as regras da sala
+      if (window.__BR_syncFlagsUI) window.__BR_syncFlagsUI();
     }
     /* vira anfitrião com o código impresso no console do servidor;
        fica salvo no navegador e é re-enviado a cada reload (nextMatch recarrega a página) */
@@ -296,6 +342,26 @@
       }
       const btn = document.getElementById('brStartBtn');
       if (btn) btn.addEventListener('click', () => socket.emit('requestStart'));
+      const fg = { golem: document.getElementById('fgGolem'),
+        animais: document.getElementById('fgAnimais'), zumbis: document.getElementById('fgZumbis'),
+        cidade: document.getElementById('fgCidade'),
+        bots: document.getElementById('fgBots'), ciclo: document.getElementById('fgCiclo') };
+      const syncFlagsUI = () => {
+        const isHost = INIT.id === S.hostId;
+        if (fg.golem) { fg.golem.checked = S.flags.golem; fg.golem.disabled = !isHost; }
+        if (fg.animais) { fg.animais.checked = S.flags.animais; fg.animais.disabled = !isHost; }
+        if (fg.zumbis) { fg.zumbis.checked = !!S.flags.zumbis; fg.zumbis.disabled = !isHost; }
+        if (fg.cidade) { fg.cidade.checked = S.flags.cidade !== false; fg.cidade.disabled = !isHost; }
+        if (fg.bots) { fg.bots.value = String(S.flags.bots || 0); fg.bots.disabled = !isHost; }
+        if (fg.ciclo) { fg.ciclo.value = S.flags.ciclo; fg.ciclo.disabled = !isHost; }
+      };
+      window.__BR_syncFlagsUI = syncFlagsUI;
+      syncFlagsUI();
+      const sendFlags = () => socket.emit('setFlags',
+        { golem: fg.golem.checked, animais: fg.animais.checked, zumbis: fg.zumbis.checked,
+          cidade: fg.cidade.checked, bots: +fg.bots.value, ciclo: fg.ciclo.value });
+      for (const k of ['golem', 'animais', 'zumbis', 'cidade', 'bots', 'ciclo'])
+        if (fg[k]) fg[k].addEventListener('change', sendFlags);
       const hIn = document.getElementById('brHostCode'), hBtn = document.getElementById('brHostBtn');
       if (hBtn) hBtn.addEventListener('click', () => claimHost(hIn.value));
       if (hIn) hIn.addEventListener('keydown', e => { if (e.key === 'Enter') claimHost(hIn.value); });
@@ -320,9 +386,24 @@
       renderGlobal(window.__BR_lastGlobalTop || INIT.globalTop);
       refreshLobbyRoster();
     }
+    /* o painel #settings do jogo é "emprestado" pro lobby; antes de qualquer
+       innerHTML no lobby ele PRECISA voltar pro menu, senão é destruído junto */
+    function rescueSettings() {
+      const st = document.getElementById('settings');
+      if (st && st.closest('#brLobby')) {
+        st.classList.remove('open');
+        const panel = document.getElementById('panel');
+        if (panel) panel.appendChild(st);
+      }
+    }
+    const soltarMouse = () => {
+      // painel na tela exige mouse livre: sem isto, quem entrou com o jogo
+      // rodando (pointer lock) ficava preso sem conseguir clicar/editar
+      try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {}
+    };
     const LOBBY = {
-      show(extra) { lobby.innerHTML = lobbyHtml(extra); lobby.style.display = 'flex'; wireLobby(); },
-      hide() { lobby.style.display = 'none'; },
+      show(extra) { soltarMouse(); rescueSettings(); lobby.innerHTML = lobbyHtml(extra); lobby.style.display = 'flex'; wireLobby(); },
+      hide() { rescueSettings(); lobby.style.display = 'none'; },
       setRoster(list) { lastRosterList = list; refreshLobbyRoster(); },
       renderGlobal,
       countdown(n) {
@@ -333,18 +414,32 @@
         c.textContent = n > 0 ? n : 'VAI!';
       },
       overlay(html) { // telas de morte/vitória usam o mesmo painel
+        soltarMouse();
+        rescueSettings();
         lobby.innerHTML = `<div class="brCard">${html}</div>`;
         lobby.style.display = 'flex';
       },
     };
 
+    socket.on('flags', f => {
+      S.flags = f;
+      if (window.__BR_syncFlagsUI) window.__BR_syncFlagsUI();
+    });
     socket.emit('hello', { nick: S.nick, colors: S.myColors });
+
+    /* reconexão do socket.io ganharia um id novo no servidor (avatar duplicado,
+       identidade quebrada) — recarregar é o único caminho limpo */
+    socket.io.on('reconnect', () => location.reload());
 
     /* ---------- ping (mostrado ao lado do FPS quando habilitado) ---------- */
     setInterval(() => {
       const t0 = performance.now();
       socket.timeout(4000).emit('pingx', err => {
-        if (!err) window.__MP_ping = Math.round(performance.now() - t0);
+        if (!err) {
+          const rtt = performance.now() - t0;
+          window.__MP_ping = Math.round(rtt);
+          S.halfRtt = rtt / 2; // o serverNow chegou atrasado ~meia viagem
+        }
       });
     }, 2000);
 

@@ -1,1 +1,8 @@
 node_modules/
+.agents/
+.claude/
+skills-lock.json
+.venv/
+docker-compose.prod.yml
+docker-compose.override*.yml
+.env

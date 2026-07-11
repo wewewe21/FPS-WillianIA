@@ -15,6 +15,14 @@
     const A = G.arsenal;
     const KNIFE = 5; // índice da faca no arsenal
 
+    /* encaminha estado do evento da cidade (o script pode bootar depois) */
+    function sendCity(c) {
+      if (window.__CityDestruction) window.__CityDestruction.sync(c);
+      else setTimeout(() => sendCity(c), 200);
+    }
+    if (INIT.cityDestruction && INIT.cityDestruction.eventId) sendCity(INIT.cityDestruction);
+    socket.on('cityDestruction', c => sendCity(c));
+
     /* =============== avatares voxel dos outros jogadores =============== */
     const remotes = new Map();
     window.__MP_remotePlayers = []; // varrido pelo fire() do jogo (inclui o boss)
@@ -90,7 +98,7 @@
       const rp = {
         id, nick: nk || '???', alive: true, isBoss: false,
         group, body, targetPos: group.position.clone(), yaw: 0, targetYaw: 0,
-        chute: false, ship: false, car: -1, hitT: 0, deadT: 0, lastPos: group.position.clone(), speed: 0, walkPh: 0,
+        chute: false, ship: false, car: -1, heli: false, hitT: 0, deadT: 0, lastPos: group.position.clone(), speed: 0, walkPh: 0,
         sphCache: [
           { c: new THREE.Vector3(), r: 0.28, part: 'head' },
           { c: new THREE.Vector3(), r: 0.42, part: 'body' },
@@ -114,10 +122,20 @@
       window.__MP_remotePlayers.push(rp);
       return rp;
     }
+    /* GPU: geometrias/materiais/texturas são POR avatar — sem dispose, cada
+       jogador que entra e sai da sala vazava memória de vídeo pra sempre */
+    function disposeGroup(g) {
+      g.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+        for (const m of mats) { if (m.map) m.map.dispose(); m.dispose(); }
+      });
+    }
     function removeRemote(id) {
       const rp = remotes.get(id);
       if (!rp) return;
       MP.scene.remove(rp.group);
+      disposeGroup(rp.group);
       remotes.delete(id);
       const i = window.__MP_remotePlayers.indexOf(rp);
       if (i >= 0) window.__MP_remotePlayers.splice(i, 1);
@@ -146,6 +164,21 @@
     const bullets = [];
     const _bv = new THREE.Vector3(), _bp = new THREE.Vector3();
     const _yAxis = new THREE.Vector3(0, 1, 0);
+    window.__BR_takenCars = new Set();
+
+    /* dano de área (granada/bazuca) nos jogadores remotos e no boss —
+       sem isto explosivo era inútil no BR (só feria bots do modo solo) */
+    window.__BR_splash = function (p, radius, maxDmg) {
+      for (const rp of window.__MP_remotePlayers) {
+        if (!rp.alive) continue;
+        const d = rp.group.position.distanceTo(p);
+        if (d < radius) {
+          const dmg = Math.round(maxDmg * (1 - d / radius) + 20);
+          MP.DmgNums.spawn(rp.group.position, dmg, false);
+          rp.damage(dmg, rp.group.position);
+        }
+      }
+    };
     window.__BR_ballistics = function (origin, dir, gun) {
       bullets.push({
         p: origin.clone(), v: dir.clone().multiplyScalar(gun.projSpeed),
@@ -249,6 +282,30 @@
       }
       const beam = new THREE.PointLight(0x2dd6c4, 3.2, 60, 1.6);
       beam.position.y = -4; g.add(beam);
+      /* ---- CABINE INTERNA: os jogadores viajam DENTRO da nave ----
+         parede/teto escuros (BackSide: visíveis só por dentro) e um piso
+         anelar com JANELA de vidro no centro — dá pra olhar o mapa lá embaixo
+         (o casco por baixo é face frontal → invisível de dentro, sem furo real) */
+      const mWall = new THREE.MeshStandardMaterial({ color: 0x161d27, roughness: 0.85, metalness: 0.35, side: THREE.BackSide });
+      const wall = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 2.4, 24, 1, true), mWall);
+      wall.position.y = 0.2; g.add(wall);
+      const teto = new THREE.Mesh(new THREE.CircleGeometry(8, 24),
+        new THREE.MeshStandardMaterial({ color: 0x0e1a22, roughness: 0.9, side: THREE.DoubleSide }));
+      teto.rotation.x = Math.PI / 2; teto.position.y = 1.35; g.add(teto);
+      const piso = new THREE.Mesh(new THREE.RingGeometry(3.1, 8, 32),
+        new THREE.MeshStandardMaterial({ color: 0x232c38, roughness: 0.7, metalness: 0.25, side: THREE.DoubleSide }));
+      piso.rotation.x = -Math.PI / 2; piso.position.y = -0.95; g.add(piso);
+      const janela = new THREE.Mesh(new THREE.CircleGeometry(3.1, 32),
+        new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false }));
+      janela.name = 'cabineJanela';
+      janela.rotation.x = -Math.PI / 2; janela.position.y = -0.97; g.add(janela);
+      const aro = new THREE.Mesh(new THREE.TorusGeometry(3.15, 0.09, 8, 40),
+        new THREE.MeshStandardMaterial({ color: 0x0a2e28, emissive: 0x2dd6c4, emissiveIntensity: 1.8 }));
+      aro.rotation.x = Math.PI / 2; aro.position.y = -0.9; g.add(aro);
+      const luzTeto = new THREE.PointLight(0x6fe8d8, 1.7, 20, 1.4);
+      luzTeto.position.y = 1.1; g.add(luzTeto);
+      const luzJanela = new THREE.PointLight(0x9fd8ff, 0.8, 12, 1.6);
+      luzJanela.position.y = -0.5; g.add(luzJanela);
       MP.scene.add(g);
       return { g, ring };
     }
@@ -314,6 +371,39 @@
       UI.hint('🌀 caindo — [ESPAÇO] abre o paraquedas antes', 3000);
     }
 
+    /* =============== céu sincronizado: dia/noite e clima iguais pra todos ===============
+       cada cliente rodava o próprio relógio (pausa, aba oculta e slow-mo da morte
+       descolavam tudo) — aqui o horário é função pura do relógio da PARTIDA,
+       e o clima é sorteado por (seed ^ época), determinístico em todo cliente */
+    const DAY_LEN = 480, DAY_SPD = 0.62 / DAY_LEN, NIGHT_SPD = 1.9 / DAY_LEN; // espelho do Env
+    function todAt(t) {
+      let tod = 0.33, rem = Math.max(0, t);
+      for (let guard = 0; rem > 0 && guard < 96; guard++) {
+        const day = tod >= 0.25 && tod < 0.75;
+        const spd = day ? DAY_SPD : NIGHT_SPD;
+        const edge = day ? 0.75 : (tod < 0.25 ? 0.25 : 1.25);
+        const toEdge = (edge - tod) / spd;
+        if (toEdge > rem) { tod += rem * spd; break; }
+        tod = edge >= 1 ? edge - 1 : edge;
+        rem -= toEdge;
+      }
+      return tod % 1;
+    }
+    let skyAcc = 9; // força a 1ª sincronização de clima logo de cara
+    function skySync(dt) {
+      if (!S.plan || !MP.state.started) return;
+      const ciclo = S.flags && S.flags.ciclo;
+      G.Env.tod = ciclo === 'dia' ? 0.45 : ciclo === 'noite' ? 0.95 : todAt(S.matchT());
+      skyAcc += dt;
+      if (skyAcc > 1) {
+        skyAcc = 0;
+        const epoch = Math.floor(Math.max(0, S.matchT()) / 75); // clima muda a cada ~75s
+        const r = seededRng((INIT.worldSeed ^ Math.imul(epoch + 1, 2654435761)) >>> 0)();
+        const w = r < 0.52 ? 'limpo' : r < 0.8 ? 'chuva' : 'neve';
+        if (G.Env.weather !== w) G.Env.weather = w;
+      }
+    }
+
     /* =============== zona de gás =============== */
     let zoneWall = null;
     const zc = { x: 0, z: 0, r: 9999, nx: 0, nz: 0, nr: 9999, dps: 0, label: '', closesIn: 0, shrinking: false, started: false };
@@ -329,7 +419,6 @@
       const t = S.matchT();
       const ph = S.plan.zone;
       const first = ph[0];
-      const preT = first.tWaitEnd - (first.tShrinkEnd - first.tWaitEnd) - t; // aproximação até o gás valer
       zc.started = t > first.tWaitEnd - 999; // sempre true depois do plano existir
       let cur = null, shrinking = false, k = 0;
       for (const p of ph) {
@@ -362,16 +451,21 @@
     }
     function drawZoneMap() {
       const c2 = UI.zoneMapC.getContext('2d');
-      const Ssz = 160;
+      const Ssz = UI.zoneMapC.width;
       const W = (v) => (v + LIM) / (2 * LIM) * Ssz;
+      const P = MP.player.pos;
+      const fora = S.plan && Math.hypot(P.x - zc.x, P.z - zc.z) > zc.r;
       c2.clearRect(0, 0, Ssz, Ssz);
-      c2.fillStyle = 'rgba(20,30,26,.85)';
+      // fundo: avermelha quando VOCÊ está fora da safe
+      c2.fillStyle = fora && S.phase === 'PLAY' ? 'rgba(70,18,14,.9)' : 'rgba(20,30,26,.85)';
       c2.fillRect(0, 0, Ssz, Ssz);
-      // círculo atual (branco) e próximo (verde)
       if (S.plan) {
-        c2.strokeStyle = 'rgba(255,255,255,.85)'; c2.lineWidth = 1.6;
+        // área SAFE preenchida (clara) + borda branca
+        c2.fillStyle = 'rgba(160,255,190,.14)';
+        c2.beginPath(); c2.arc(W(zc.x), W(zc.z), zc.r / (2 * LIM) * Ssz, 0, Math.PI * 2); c2.fill();
+        c2.strokeStyle = 'rgba(255,255,255,.9)'; c2.lineWidth = 1.6;
         c2.beginPath(); c2.arc(W(zc.x), W(zc.z), zc.r / (2 * LIM) * Ssz, 0, Math.PI * 2); c2.stroke();
-        c2.strokeStyle = 'rgba(126,224,129,.9)'; c2.lineWidth = 1.2;
+        c2.strokeStyle = 'rgba(126,224,129,.95)'; c2.lineWidth = 1.3;
         c2.beginPath(); c2.arc(W(zc.nx), W(zc.nz), zc.nr / (2 * LIM) * Ssz, 0, Math.PI * 2); c2.stroke();
         if (S.phase === 'SHIP' || S.phase === 'FALL') { // rota da nave
           c2.strokeStyle = 'rgba(45,214,196,.7)';
@@ -382,14 +476,31 @@
           c2.stroke();
           c2.setLineDash([]);
         }
+        if (fora) { // seta VOCÊ → safe (caminho mais curto)
+          const ang = Math.atan2(zc.z - P.z, zc.x - P.x);
+          const px = W(P.x), pz = W(P.z);
+          const bx = W(zc.x + Math.cos(ang + Math.PI) * zc.r), bz = W(zc.z + Math.sin(ang + Math.PI) * zc.r);
+          c2.strokeStyle = 'rgba(255,90,70,.95)'; c2.lineWidth = 2;
+          c2.setLineDash([4, 3]);
+          c2.beginPath(); c2.moveTo(px, pz); c2.lineTo(bx, bz); c2.stroke();
+          c2.setLineDash([]);
+        }
       }
       if (boss && boss.alive) {
         c2.fillStyle = '#ffb03c';
         c2.fillRect(W(boss.group.position.x) - 2.5, W(boss.group.position.z) - 2.5, 5, 5);
       }
-      const P = MP.player.pos;
-      c2.fillStyle = '#ff5252';
-      c2.beginPath(); c2.arc(W(P.x), W(P.z), 3, 0, Math.PI * 2); c2.fill();
+      // VOCÊ: triângulo apontando pra onde a câmera olha, com contorno
+      _eul.setFromQuaternion(MP.camera.quaternion);
+      const yaw = -_eul.y; // canvas: +z pra baixo
+      c2.save();
+      c2.translate(W(P.x), W(P.z));
+      c2.rotate(yaw);
+      c2.fillStyle = fora ? '#ff5f4a' : '#7fffb0';
+      c2.strokeStyle = 'rgba(0,0,0,.8)'; c2.lineWidth = 1.5;
+      c2.beginPath(); c2.moveTo(0, -6.5); c2.lineTo(4.5, 5); c2.lineTo(0, 2.4); c2.lineTo(-4.5, 5); c2.closePath();
+      c2.fill(); c2.stroke();
+      c2.restore();
     }
 
     /* =============== baús =============== */
@@ -503,14 +614,15 @@
       const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.4, 26, 8, 1, true),
         new THREE.MeshBasicMaterial({ color: 0x5ab0ff, transparent: true, opacity: 0.35, depthWrite: false }));
       beam.position.y = 13; g.add(beam);
-      const y = MP.heightAt(pos[0], pos[2]);
+      // groundAt respeita andares/telhados — morrer no 3º andar deixa o loot LÁ
+      const y = MP.groundAt(pos[0], pos[2], (pos[1] || 0) + 1);
       g.position.set(pos[0], y, pos[2]);
       MP.scene.add(g);
       drops.set(id, { g, box });
     }
     function removeDrop(id) {
       const d = drops.get(id);
-      if (d) { MP.scene.remove(d.g); drops.delete(id); }
+      if (d) { MP.scene.remove(d.g); disposeGroup(d.g); drops.delete(id); }
     }
     for (const d of INIT.drops || []) spawnDrop(d.id, d.pos);
 
@@ -521,7 +633,6 @@
     let bossDeadAnim = 0, lastAoE = 0;
     function buildBoss() {
       if (bossDeadFlag) return;
-      const F = G.Structures.FORT_POS;
       const mRock = new THREE.MeshStandardMaterial({ color: 0x4a4f58, roughness: 0.85 });
       const mMoss = new THREE.MeshStandardMaterial({ color: 0x3e6b34, roughness: 0.9 });
       const mCore = new THREE.MeshStandardMaterial({ color: 0x200800, emissive: 0xff7a2e, emissiveIntensity: 3 });
@@ -662,8 +773,11 @@
 
     /* =============== morte → recap → espectador =============== */
     let myDeathInfo = null; // preenchido pelo playerKilled (victim == eu)
+    let forceDeath = false; // servidor me matou (zona/AFK): aplica na primeira chance
     window.__MP_respawn = function () { // chamado pelo jogo 3.6s após a morte
       MP.setTimeScale(1);
+      // morreu dirigindo/voando: sai do veículo, senão a câmera fica presa no carro no espectador
+      try { if (G.state.driving || G.state.flying) G.tryToggleCar(); } catch (e) {}
       const killer = S.lastHit && Date.now() - S.lastHit.t < 9000 ? S.lastHit : null;
       // solta o loot no chão pros outros: armas + munição + colete + kit
       const items = [];
@@ -729,6 +843,10 @@
       LOBBY.hide();
       if (!MP.state.started) G.forceStart();
       disableSoloAI();
+      if (S.flags && !S.flags.animais) { // regra da sala: sem bichos
+        try { for (const a of G.Animals.list) { a.alive = false; if (a.group) a.group.visible = false; } }
+        catch (e) { /* módulo ausente: segue */ }
+      }
       buildZoneWall();
       buildCrates();
       buildBoss();
@@ -751,6 +869,9 @@
       if (!MP.state.pointerLocked) MP.centerMsg('clique na tela pra capturar o mouse', 2600);
     }
     document.addEventListener('click', e => {
+      // autoplay do navegador deixa o AudioContext suspenso até um gesto —
+      // sem isto a partida (iniciada via socket, sem clique) ficava MUDA
+      try { MP.SFX.init(); MP.SFX.resume(); } catch (err) {}
       if (S.chatOpen || e.target.closest('.brPanel') || e.target.closest('#brChatInput')) return;
       if (window.__BR_active && MP.state.started && !MP.state.paused && !MP.state.pointerLocked) {
         try { document.body.requestPointerLock(); } catch (err) {}
@@ -763,11 +884,14 @@
     });
     socket.on('matchStart', d => {
       S.plan = d.plan;
+      S.flags = d.plan.flags || { golem: true, animais: true, ciclo: 'auto' };
       S.t0 = d.t0;
       S.clockOffset = d.serverNow - Date.now();
       S.matchNum = d.num;
       S.myKills = 0; S.myPlacement = 0; recapShown = false; myDeathInfo = null;
-      bossDeadFlag = false;
+      bossDeadFlag = !S.flags.golem; // GOLEM desligado pela regra da sala: nem constrói
+      window.__BR_zumbis = !!S.flags.zumbis;
+      sendCity(d.plan.city ? { ...d.plan.city, state: 'intact' } : null);
       bossHp = bossMaxHp = d.plan.boss.hp;
       beginMatch(false);
     });
@@ -787,6 +911,7 @@
     });
     socket.on('playerUpdate', d => {
       if (d.id === INIT.id) return;
+      if (!Array.isArray(d.pos) || !d.pos.every(Number.isFinite)) return; // NaN quebraria o lerp pra sempre
       let rp = remotes.get(d.id);
       if (!rp) rp = makeRemote(d.id, d.nick, d.colors, d.pos);
       rp.nick = d.nick || rp.nick;
@@ -795,6 +920,7 @@
       rp.ship = !!d.ship;
       rp.chute = !!d.chute;
       rp.car = typeof d.car === 'number' ? d.car : -1;
+      rp.heli = !!d.heli;
     });
     socket.on('playerLeft', d => removeRemote(d.id));
     socket.on('youWereHit', d => {
@@ -803,11 +929,23 @@
       MP.playerDamage(d.dmg, { x: f[0], y: f[1], z: f[2] });
     });
     socket.on('playerKilled', d => {
-      const feed = d.byZone
-        ? `☣ <b>${esc(d.victimNick)}</b> morreu pro gás`
-        : `<b>${esc(d.killerNick || '???')}</b> ▸ ${esc(d.victimNick)} <i style="opacity:.6">${esc(d.weapon)}</i>`;
+      const feed = d.byCity
+        ? `☄ <b>${esc(d.victimNick)}</b> morreu no ataque de mísseis à cidade`
+        : d.byZone
+          ? `☣ <b>${esc(d.victimNick)}</b> morreu pro gás`
+          : `<b>${esc(d.killerNick || '???')}</b> ▸ ${esc(d.victimNick)} <i style="opacity:.6">${esc(d.weapon)}</i>`;
       MP.addKillFeed(feed);
-      if (d.victimId === INIT.id) { myDeathInfo = d; S.myPlacement = d.placement || S.myPlacement; }
+      if (d.victimId === INIT.id) {
+        myDeathInfo = d;
+        S.myPlacement = d.placement || S.myPlacement;
+        if (d.byCity) { // morto pelo ataque de mísseis: mensagem oficial da vítima
+          const ds = document.getElementById('deathSub');
+          if (ds) ds.textContent = 'Você morreu atingido pelo ataque de mísseis próximo à cidade!';
+        }
+        // servidor me eliminou (zona/AFK/mísseis) mas meu cliente ainda me acha vivo:
+        // força a morte local, senão viro fantasma jogando numa partida onde já morri
+        if (!MP.player.dead && (S.phase === 'PLAY' || S.phase === 'FALL' || S.phase === 'SHIP')) forceDeath = true;
+      }
       if (d.killerId === INIT.id) {
         S.myKills = d.killerKills;
         UI.toast(`☠ você eliminou <b>${esc(d.victimNick)}</b>!`, 'épico');
@@ -830,7 +968,6 @@
         MP.FX.burst(p.clone().setY(p.y + 3), new THREE.Vector3(0, 1, 0), 'spark');
         // baú lendário no lugar
         setTimeout(() => {
-          const g = crates.length; // reaproveita o sistema de baús
           const y = MP.heightAt(p.x, p.z);
           const mBox = new THREE.MeshStandardMaterial({ color: 0x5b4630, roughness: 0.7 });
           const mBand = new THREE.MeshStandardMaterial({ color: 0x2a1500, emissive: 0xffb03c, emissiveIntensity: 2.5 });
@@ -922,22 +1059,53 @@
       }
     });
 
+    /* posse de veículo arbitrada no servidor (mata a corrida do "mesmo carro") */
+    let myCarClaim = -1;
+    function claimCar(idx) {
+      myCarClaim = idx;
+      socket.timeout(2500).emit('enterCar', { idx }, (err, res) => {
+        if (err || !res || !res.ok) {
+          if (G.state.driving && myCarClaim === idx) {
+            G.tryToggleCar();
+            MP.centerMsg('Veículo ocupado!', 1500);
+          }
+          myCarClaim = -1;
+        }
+      });
+    }
+    socket.on('carTaken', d => { // outro levou o carro que estou tentando usar
+      if (d.id !== INIT.id && G.state.driving && myCarClaim === d.idx) {
+        G.tryToggleCar();
+        MP.centerMsg('Veículo ocupado!', 1500);
+        myCarClaim = -1;
+      }
+    });
+
     /* =============== envio do meu estado (10x/s) =============== */
     setInterval(() => {
       if (!window.__BR_active || !MP.state.started || MP.state.paused) return;
       if (S.phase === 'SPECT' || S.phase === 'ENDED' || MP.player.dead) return;
-      let p = MP.player.pos, rotY, car = -1;
+      let p = MP.player.pos, rotY, car = -1, heli = false;
       if (G.state.driving) { // dentro de carro: manda a pose do VEÍCULO, não a do boneco
         car = G.Car.vehicles.findIndex(v => v.group === G.Car.group);
         p = G.Car.group.position;
         _eul.setFromQuaternion(G.Car.group.quaternion);
         rotY = _eul.y;
+      } else if (G.state.flying) { // no helicóptero: idem (antes o boneco ficava no chão)
+        heli = true;
+        p = G.Heli.group.position;
+        rotY = G.Heli.group.rotation.y;
       } else {
         _eul.setFromQuaternion(MP.camera.quaternion);
         rotY = _eul.y;
       }
+      // transições de posse (só em partida; no solo o servidor recusaria)
+      if (S.phase === 'PLAY') {
+        if (car >= 0 && myCarClaim !== car) claimCar(car);
+        else if (car < 0 && myCarClaim >= 0) { socket.emit('leaveCar', { idx: myCarClaim }); myCarClaim = -1; }
+      }
       socket.volatile.emit('state', {
-        pos: [p.x, p.y, p.z], rotY, car,
+        pos: [p.x, p.y, p.z], rotY, car, heli,
         ship: S.phase === 'SHIP', chute: S.phase === 'FALL' && S.chuteOpen,
       });
     }, 100);
@@ -959,17 +1127,33 @@
       lastT = nowMs;
       if (!window.__BR_active) return;
 
+      /* morte decretada pelo servidor: aplica assim que o jogo deixar */
+      if (forceDeath && !MP.player.dead) {
+        MP.player.invulnUntil = 0;
+        window.__BR_freeze = false;
+        MP.playerDamage(99999, null);
+        if (MP.player.dead) forceDeath = false;
+      }
+
+      /* na nave/queda ninguém pode ser abatido (invulnerabilidade rolante) */
+      if ((S.phase === 'SHIP' || S.phase === 'FALL') && !MP.player.dead && !forceDeath)
+        MP.player.invulnUntil = MP.state.gameTime + 1;
+
       /* avatares: interpolação + animação de corrida + paraquedas + morte */
       const k = 1 - Math.exp(-12 * dt);
+      window.__BR_takenCars.clear(); // carros ocupados por remotos (bloqueia tecla E neles)
+      window.__BR_heliTaken = false;
       for (const rp of remotes.values()) {
+        if (rp.alive && rp.car >= 0) window.__BR_takenCars.add(rp.car);
+        if (rp.alive && rp.heli) window.__BR_heliTaken = true;
         if (rp.deadT > 0 && rp.deadT < 1.2) { // tombando
           rp.deadT += dt;
           rp.group.rotation.x = Math.min(rp.deadT * 2, Math.PI / 2);
           if (rp.deadT >= 1.2) rp.group.visible = false;
           continue;
         }
-        // visível também na nave (todo mundo viaja no convés); some dentro de carro
-        rp.group.visible = rp.alive && rp.car < 0;
+        // visível também na nave (todo mundo viaja no convés); some dentro de carro/heli
+        rp.group.visible = rp.alive && rp.car < 0 && !rp.heli;
         rp.group.position.lerp(rp.targetPos, k);
         let dy = rp.targetYaw - rp.yaw;
         dy = Math.atan2(Math.sin(dy), Math.cos(dy));
@@ -999,6 +1183,11 @@
             v.chassisBody.quaternion.setFromAxisAngle(_yAxis, rp.yaw);
           }
         }
+        // voando: o helicóptero (único no mapa) segue o piloto remoto
+        if (rp.heli && !G.state.flying) {
+          G.Heli.group.position.copy(rp.group.position);
+          G.Heli.group.rotation.set(0, rp.yaw, 0);
+        }
       }
 
       /* corpo a corpo: não dá pra atravessar outro jogador vivo */
@@ -1015,6 +1204,7 @@
       }
 
       stepBullets(dt);
+      skySync(dt);
 
       /* nave */
       if (ship && S.plan) {
@@ -1026,8 +1216,8 @@
         const sp = S.plan.ship;
         ship.g.rotation.y = Math.atan2(sp.to[0] - sp.from[0], sp.to[1] - sp.from[1]);
         if (S.phase === 'SHIP') {
-          // em cima do disco (antes ficava 4m ABAIXO do casco: ninguém via a nave, só gente flutuando)
-          MP.player.pos.set(_shipV.x + seatOx, _shipV.y + 1.35, _shipV.z + seatOz);
+          // DENTRO da cabine: pés no piso interno, todo mundo ao redor da janela
+          MP.player.pos.set(_shipV.x + seatOx, _shipV.y - 0.95, _shipV.z + seatOz);
           MP.player.vel.set(0, 0, 0);
           if (tm >= sp.flyTime) jumpFromShip(); // fim da rota: todo mundo pula
           UI.hint(`🛸 NA NAVE — [ESPAÇO] pra pular · auto em ${Math.max(0, sp.flyTime - tm).toFixed(0)}s`);
@@ -1053,7 +1243,9 @@
           dmgAcc = 0;
           const P = MP.player.pos;
           const dz = Math.hypot(P.x - zc.x, P.z - zc.z);
-          if (S.phase === 'PLAY' && !MP.player.dead && dz > zc.r)
+          const fora = S.phase === 'PLAY' && !MP.player.dead && dz > zc.r && !MP.state.cinematic;
+          UI.gasTint.style.opacity = fora ? '1' : '0'; // tela avermelha FORA da safe
+          if (fora)
             MP.playerDamage(zc.dps * 0.5, null); // se alguém me feriu há pouco, a kill ainda é dele
         }
       }
@@ -1100,7 +1292,8 @@
 
     /* hook de depuração/testes (inofensivo em produção) */
     window.__BR_debug = {
-      S, zc, crates, remotes, drops,
+      S, zc, crates, remotes, drops, LOBBY,
+      get ship() { return ship; },
       jump: jumpFromShip, spect: enterSpectator, openCrate: tryOpenCrate,
       get boss() { return boss; }, get bossHp() { return bossHp; },
       get bullets() { return bullets.length; },
