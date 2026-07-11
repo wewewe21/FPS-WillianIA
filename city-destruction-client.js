@@ -33,6 +33,7 @@
     let missiles = [];        // { m, from, to }
     let warheads = [];        // { m, from, to }
     let impactApplied = false;
+    let impactTimer = null;
     let trailAcc = 0, smokeAcc = 0, shakeT = 0;
     let releasePlayed = false;
 
@@ -149,19 +150,29 @@
       releasePlayed = false;
       MP.state.cinematic = true;
       G.mouse.shooting = G.mouse.clicked = G.mouse.aiming = false;
-      rig = { pos: MP.camera.position.clone(), quat: MP.camera.quaternion.clone(), fov: MP.camera.fov };
+      rig = { pos: MP.camera.position.clone(), quat: MP.camera.quaternion.clone(), fov: MP.camera.fov,
+        vis: MP.camera.children.map(c => c.visible) };
+      MP.camera.children.forEach(c => { c.visible = false; }); // arma/viewmodel fora da cena
       ev = P.buildCityEvent(cd.seed, qualityName());
       buildEventMeshes();
       MP.centerMsg('⚠ MÍSSEIS SE APROXIMANDO DA CIDADE', 3000);
       try { MP.SFX.init(); MP.SFX.missileIncoming(); } catch (e) { /* áudio bloqueado */ }
+      // rede de segurança: se o rAF estiver lento (máquina fraca / aba de fundo),
+      // a cidade ainda troca NO HORÁRIO — timer absoluto até o impacto
+      clearTimeout(impactTimer);
+      impactTimer = setTimeout(() => {
+        if (running && !impactApplied) applyImpact();
+      }, Math.max(0, cd.impactAt - clockNow()));
     }
     function endCinematic() {
       running = false;
       done = cd.eventId;
+      clearTimeout(impactTimer);
       disposeEventMeshes();
       MP.state.cinematic = false;
       MP.camera.fov = rig ? rig.fov : 75;
       MP.camera.updateProjectionMatrix();
+      if (rig && rig.vis) MP.camera.children.forEach((c, i) => { c.visible = rig.vis[i] !== false; });
       if (rig && !MP.player.dead) { // sobrevivente: câmera exatamente onde estava
         MP.camera.position.copy(rig.pos);
         MP.camera.quaternion.copy(rig.quat);
@@ -297,8 +308,10 @@
         if (!MP.state.started) return;
         if (running) { tickCinematic(dt); return; }
         const now = clockNow();
-        if (now >= cd.cinematicStartedAt && now < cd.impactAt + 3500) startCinematic();
-        else if (now >= cd.impactAt + 3500) { // entrou tarde demais: só o estado final
+        if (now >= cd.cinematicStartedAt && now < cd.impactAt + 3500) {
+          startCinematic();
+          tickCinematic(dt); // já dentro da janela: aplica câmera/impacto neste frame
+        } else if (now >= cd.impactAt + 3500) { // entrou tarde demais: só o estado final
           if (G.Structures.city.getState() !== 'destroyed') G.Structures.city.destroy();
           done = cd.eventId;
         }
