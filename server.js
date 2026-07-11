@@ -47,7 +47,7 @@ setInterval(() => {
   if (!rankDirty) return;
   rankDirty = false;
   fs.writeFile(RANK_FILE, JSON.stringify(globalRank), () => {});
-}, 5000);
+}, 5000).unref(); // unref: testes que dão require() conseguem encerrar
 function rankEntry(nick) {
   const key = nick.toLowerCase();
   if (!globalRank[key]) globalRank[key] = { nick, points: 0, wins: 0, kills: 0, matches: 0, sumPlace: 0 };
@@ -146,14 +146,15 @@ function rollChest(rng, luck = 0) {
 }
 
 /* ---------------- ciclo da partida ---------------- */
-function roster() {
+function roster(withPos) {
   return [...players.entries()].map(([id, p]) => ({
     id, nick: p.nick, colors: p.colors, kills: p.kills,
-    alive: p.alive, spectator: p.spectator, pos: p.pos,
+    alive: p.alive, spectator: p.spectator,
+    ...(withPos ? { pos: p.pos } : {}), // pos só no init — broadcast viraria wallhack
   }));
 }
 const sysChat = msg => io.emit('chat', { sys: true, msg });
-const broadcastRoster = () => io.emit('roster', { phase: match.phase, players: roster(), aliveCount: match.aliveCount, hostId });
+const broadcastRoster = () => io.emit('roster', { phase: match.phase, players: roster(false), aliveCount: match.aliveCount, hostId });
 
 function startCountdown() {
   if (match.phase !== 'LOBBY') return;
@@ -247,8 +248,8 @@ function checkVictory() {
    congela o loop e ficava "vivo flutuando fora da safe" pra sempre, travando
    a vitória. Aqui o servidor espelha o círculo e elimina quem o cliente não
    elimina: fora da zona, flutuando na altitude da nave ou AFK sem mandar estado. */
-function zoneAt(t) {
-  const ph = match.plan.zone;
+function zoneAt(t, plan = match.plan) {
+  const ph = plan.zone;
   let cur = null, shrinking = false, k = 0;
   for (const p of ph) {
     if (t < p.tWaitEnd) { cur = p; break; }
@@ -293,7 +294,7 @@ setInterval(() => {
       if (match.phase !== 'PLAYING') break; // partida acabou dentro do loop
     }
   }
-}, 1000);
+}, 1000).unref(); // unref: só relevante pros testes de unidade (listen mantém o processo vivo)
 
 /* ---------------- conexões ---------------- */
 io.on('connection', socket => {
@@ -316,7 +317,7 @@ io.on('connection', socket => {
     openedChests: [...match.openedChests],
     drops: [...match.drops.entries()].filter(([, d]) => !d.taken).map(([id, d]) => ({ id, pos: d.pos, items: d.items.length })),
     hostId,
-    players: roster().filter(p => p.id !== socket.id),
+    players: roster(true).filter(p => p.id !== socket.id),
     globalTop: topRank(),
   });
   broadcastRoster();
@@ -327,7 +328,11 @@ io.on('connection', socket => {
     p.nick = cleanNick(d && d.nick);
     if (d && Array.isArray(d.colors)) p.colors = d.colors.slice(0, 4).map(c => clean(c).slice(0, 9));
     broadcastRoster();
-    sysChat(`${p.nick} entrou${p.spectator ? ' (espectador até a próxima partida)' : ''}`);
+    // o lobby emite hello a cada tecla digitada no nick — só anuncia UMA vez
+    if (!p.greeted) {
+      p.greeted = true;
+      sysChat(`${p.nick} entrou${p.spectator ? ' (espectador até a próxima partida)' : ''}`);
+    }
   });
 
   socket.on('requestStart', () => {
@@ -352,6 +357,8 @@ io.on('connection', socket => {
   socket.on('state', d => {
     const p = players.get(socket.id);
     if (!p || !d || !Array.isArray(d.pos) || d.pos.length < 3) return;
+    // morto (não-espectador) não pilota avatar durante a partida
+    if (match.phase === 'PLAYING' && !p.alive && !p.spectator) return;
     const pos = d.pos.slice(0, 3).map(Number);
     // NaN/Infinity envenenava a interpolação dos outros clientes e cegava a zona
     if (!pos.every(Number.isFinite)) return;
@@ -363,6 +370,7 @@ io.on('connection', socket => {
     socket.volatile.broadcast.emit('playerUpdate', {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
       ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
+      heli: !!d.heli,
       nick: p.nick, colors: p.colors,
     });
   });
@@ -379,9 +387,14 @@ io.on('connection', socket => {
     p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
     if (p.hitWindow.length >= 12) return;
     p.hitWindow.push(now);
+    let fromPos = [0, 0, 0];
+    if (Array.isArray(d.fromPos)) {
+      const f = d.fromPos.slice(0, 3).map(Number);
+      if (f.length === 3 && f.every(Number.isFinite)) fromPos = f;
+    }
     io.to(d.targetId).emit('youWereHit', {
       dmg: Math.min(Math.max(+d.dmg || 0, 0), 95),
-      fromPos: Array.isArray(d.fromPos) ? d.fromPos : [0, 0, 0],
+      fromPos,
       shooterId: socket.id, shooterNick: p.nick,
       weapon: cleanSoft(d.weapon).slice(0, 24) || '???',
     });
@@ -411,6 +424,9 @@ io.on('connection', socket => {
   /* baús: primeiro a abrir leva; o servidor rola o loot */
   socket.on('openChest', (d, cb) => {
     if (typeof cb !== 'function') return;
+    const p = players.get(socket.id);
+    // espectador/morto abrindo baú = grief (queima o loot dos vivos)
+    if (!p || !p.alive) return cb({ ok: false });
     if (match.phase !== 'PLAYING' || !d || !d.key) return cb({ ok: false });
     const key = String(d.key).slice(0, 32);
     if (match.openedChests.has(key)) return cb({ ok: false, opened: true });
@@ -435,7 +451,18 @@ io.on('connection', socket => {
     if (!pos.every(Number.isFinite)) return;
     p.canDrop = false;
     const id = 'drop' + (++match.dropSeq);
-    const items = d.items.slice(0, 8); // armas + munição + colete + kit
+    // sanitiza o formato dos itens: só campos conhecidos, com limites
+    const items = d.items.slice(0, 8).map(it => {
+      if (!it || typeof it !== 'object') return null;
+      const o = { type: clean(it.type).slice(0, 8) };
+      if (Number.isInteger(it.weapon) && it.weapon >= 0 && it.weapon <= 5) o.weapon = it.weapon;
+      if (Number.isFinite(+it.ammo)) o.ammo = Math.max(0, Math.min(999, Math.round(+it.ammo)));
+      if (Number.isFinite(+it.amount)) o.amount = Math.max(0, Math.min(200, Math.round(+it.amount)));
+      const rar = clean(it.rarity).slice(0, 12);
+      if (rar) o.rarity = rar;
+      return o.type ? o : null;
+    }).filter(Boolean);
+    if (!items.length) return;
     match.drops.set(id, { pos, items, taken: false });
     io.emit('dropSpawn', { id, pos, items });
   });
@@ -492,12 +519,18 @@ io.on('connection', socket => {
   });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Servidor BR no ar em http://localhost:${PORT} · seed inicial ${match.seed}`);
-  console.log('====================================================');
-  console.log(`  CÓDIGO DO ANFITRIÃO: ${HOST_CODE}`);
-  console.log('  cole no lobby (campo "código do anfitrião") ou');
-  console.log(`  abra o jogo com ?host=${HOST_CODE} na URL`);
-  console.log('====================================================');
-});
+/* internos expostos pra suite de QA; o listen só roda quando executado
+   direto (node server.js) — require() nos testes não abre porta */
+module.exports = { buildPlan, zoneAt, rollChest, mulberry32, LIM };
+
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  server.listen(PORT, () => {
+    console.log(`Servidor BR no ar em http://localhost:${PORT} · seed inicial ${match.seed}`);
+    console.log('====================================================');
+    console.log(`  CÓDIGO DO ANFITRIÃO: ${HOST_CODE}`);
+    console.log('  cole no lobby (campo "código do anfitrião") ou');
+    console.log(`  abra o jogo com ?host=${HOST_CODE} na URL`);
+    console.log('====================================================');
+  });
+}

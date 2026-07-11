@@ -86,6 +86,17 @@ describe('Lobby e anfitrião', () => {
     assert.ok(nick.length <= 14);
   });
 
+  it('dado o nick digitado letra a letra (hello por tecla), então só anuncia a entrada uma vez', async t => {
+    const srv = await spawnServer(); t.after(() => srv.stop());
+    const a = await connect(srv.port); t.after(() => a.s.close());
+    const b = await connect(srv.port); t.after(() => b.s.close());
+    const chats = collect(b.s, 'chat');
+    for (const n of ['W', 'Wi', 'Wil', 'Will', 'Willi']) a.s.emit('hello', { nick: n });
+    await sleep(400);
+    const entradas = chats.filter(m => m.sys && m.msg.includes('entrou'));
+    assert.ok(entradas.length <= 2, `chat spammado: ${entradas.length} anúncios`); // a própria entrada de B conta 1
+  });
+
   it('dado um jogador comum, quando pede pra iniciar, então nada acontece', async t => {
     const srv = await spawnServer(); t.after(() => srv.stop());
     const { s } = await connect(srv.port); t.after(() => s.close());
@@ -163,6 +174,17 @@ describe('Estado e movimento', () => {
     t.after(() => clearInterval(iv));
     await sleep(500);
     assert.equal(upds.filter(u => u.id === a.init.id).length, 0, 'posição inválida passou pelo servidor');
+  });
+
+  it('dado um jogador morto, então o state dele não é repassado (avatar-marionete)', async t => {
+    const { clients } = await playing(t, 3);
+    const [a, b] = clients;
+    await ack(a.s, 'died', {});
+    const upds = collect(b.s, 'playerUpdate');
+    const iv = setInterval(() => a.s.emit('state', { pos: [5, 5, 5], rotY: 0 }), 60);
+    t.after(() => clearInterval(iv));
+    await sleep(500);
+    assert.equal(upds.filter(u => u.id === a.init.id).length, 0, 'morto pilotou avatar');
   });
 
   it('dada uma posição absurda, então ela é clampada aos limites do mundo', async t => {
@@ -302,6 +324,36 @@ describe('Loot', () => {
     a.s.emit('deathDrop', { pos: [2, 0, 2], items: [{ type: 'med' }] }); // spam
     await sleep(400);
     assert.equal(drops.length, 1, `spawnou ${drops.length} drops`);
+  });
+
+  it('dado um espectador, então ele não consegue queimar baú dos vivos', async t => {
+    const { srv } = await playing(t, 2);
+    const spec = await connect(srv.port); t.after(() => spec.s.close());
+    const res = await ack(spec.s, 'openChest', { key: 'c2' });
+    assert.equal(res.ok, false, 'espectador abriu baú');
+  });
+
+  it('dado um item malicioso no drop, então o servidor sanitiza formato e limites', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    const dropEv = once(b.s, 'dropSpawn');
+    a.s.emit('deathDrop', {
+      pos: [1, 0, 1],
+      items: [
+        { type: 'weapon<script>', weapon: 99, ammo: 999999, amount: -5, rarity: '<b>x', extra: 'y'.repeat(50000) },
+        { type: 'ammo', amount: 60 },
+        'lixo', null,
+      ],
+    });
+    const drop = await dropEv;
+    for (const it of drop.items) {
+      assert.ok(Object.keys(it).every(k => ['type', 'weapon', 'ammo', 'amount', 'rarity'].includes(k)),
+        'campo desconhecido vazou: ' + JSON.stringify(Object.keys(it)));
+      assert.ok(!/[<>]/.test(it.type + (it.rarity || '')), 'HTML vazou no item');
+      if (it.ammo !== undefined) assert.ok(it.ammo <= 999);
+      if (it.weapon !== undefined) assert.ok(it.weapon >= 0 && it.weapon <= 5);
+    }
+    assert.equal(drop.items.length, 2, 'itens-lixo deviam ser descartados');
   });
 
   it('dado um drop no chão, então só pega quem está perto — e uma vez só', async t => {

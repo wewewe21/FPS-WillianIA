@@ -2947,7 +2947,8 @@ function updateArmorHUD() {
   ui.armorFill.style.width = (player.armor / player.armorMax * 100) + '%';
 }
 function playerDamage(dmg, fromPos) {
-  if (player.dead || state.paused) return;
+  // no BR online, pausar NÃO pode dar imunidade (senão vira exploit em tiroteio)
+  if (player.dead || (state.paused && !window.__BR_active)) return;
   if (state.gameTime < (player.invulnUntil || 0)) return; // proteção de spawn
   if (player.armor > 0) { // armadura azul absorve 70% do dano até quebrar
     const absorb = Math.min(player.armor, dmg * 0.7);
@@ -3298,6 +3299,7 @@ const Heli = (() => {
 
   function tryEnter() {
     if (player.pos.distanceTo(group.position) > 5) return false;
+    if (window.__BR_heliTaken) { centerMsg('Helicóptero ocupado!', 1400); return false; }
     state.flying = true;
     ui.speedo.style.display = 'block';
     ui.ammoWrap.style.display = 'none';

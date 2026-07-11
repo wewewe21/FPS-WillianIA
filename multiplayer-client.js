@@ -351,6 +351,10 @@
 
     socket.emit('hello', { nick: S.nick, colors: S.myColors });
 
+    /* reconexão do socket.io ganharia um id novo no servidor (avatar duplicado,
+       identidade quebrada) — recarregar é o único caminho limpo */
+    socket.io.on('reconnect', () => location.reload());
+
     /* ---------- ping (mostrado ao lado do FPS quando habilitado) ---------- */
     setInterval(() => {
       const t0 = performance.now();

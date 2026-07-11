@@ -90,7 +90,7 @@
       const rp = {
         id, nick: nk || '???', alive: true, isBoss: false,
         group, body, targetPos: group.position.clone(), yaw: 0, targetYaw: 0,
-        chute: false, ship: false, car: -1, hitT: 0, deadT: 0, lastPos: group.position.clone(), speed: 0, walkPh: 0,
+        chute: false, ship: false, car: -1, heli: false, hitT: 0, deadT: 0, lastPos: group.position.clone(), speed: 0, walkPh: 0,
         sphCache: [
           { c: new THREE.Vector3(), r: 0.28, part: 'head' },
           { c: new THREE.Vector3(), r: 0.42, part: 'body' },
@@ -769,6 +769,9 @@
       if (!MP.state.pointerLocked) MP.centerMsg('clique na tela pra capturar o mouse', 2600);
     }
     document.addEventListener('click', e => {
+      // autoplay do navegador deixa o AudioContext suspenso até um gesto —
+      // sem isto a partida (iniciada via socket, sem clique) ficava MUDA
+      try { MP.SFX.init(); MP.SFX.resume(); } catch (err) {}
       if (S.chatOpen || e.target.closest('.brPanel') || e.target.closest('#brChatInput')) return;
       if (window.__BR_active && MP.state.started && !MP.state.paused && !MP.state.pointerLocked) {
         try { document.body.requestPointerLock(); } catch (err) {}
@@ -814,6 +817,7 @@
       rp.ship = !!d.ship;
       rp.chute = !!d.chute;
       rp.car = typeof d.car === 'number' ? d.car : -1;
+      rp.heli = !!d.heli;
     });
     socket.on('playerLeft', d => removeRemote(d.id));
     socket.on('youWereHit', d => {
@@ -951,18 +955,22 @@
     setInterval(() => {
       if (!window.__BR_active || !MP.state.started || MP.state.paused) return;
       if (S.phase === 'SPECT' || S.phase === 'ENDED' || MP.player.dead) return;
-      let p = MP.player.pos, rotY, car = -1;
+      let p = MP.player.pos, rotY, car = -1, heli = false;
       if (G.state.driving) { // dentro de carro: manda a pose do VEÍCULO, não a do boneco
         car = G.Car.vehicles.findIndex(v => v.group === G.Car.group);
         p = G.Car.group.position;
         _eul.setFromQuaternion(G.Car.group.quaternion);
         rotY = _eul.y;
+      } else if (G.state.flying) { // no helicóptero: idem (antes o boneco ficava no chão)
+        heli = true;
+        p = G.Heli.group.position;
+        rotY = G.Heli.group.rotation.y;
       } else {
         _eul.setFromQuaternion(MP.camera.quaternion);
         rotY = _eul.y;
       }
       socket.volatile.emit('state', {
-        pos: [p.x, p.y, p.z], rotY, car,
+        pos: [p.x, p.y, p.z], rotY, car, heli,
         ship: S.phase === 'SHIP', chute: S.phase === 'FALL' && S.chuteOpen,
       });
     }, 100);
@@ -999,16 +1007,18 @@
       /* avatares: interpolação + animação de corrida + paraquedas + morte */
       const k = 1 - Math.exp(-12 * dt);
       window.__BR_takenCars.clear(); // carros ocupados por remotos (bloqueia tecla E neles)
+      window.__BR_heliTaken = false;
       for (const rp of remotes.values()) {
         if (rp.alive && rp.car >= 0) window.__BR_takenCars.add(rp.car);
+        if (rp.alive && rp.heli) window.__BR_heliTaken = true;
         if (rp.deadT > 0 && rp.deadT < 1.2) { // tombando
           rp.deadT += dt;
           rp.group.rotation.x = Math.min(rp.deadT * 2, Math.PI / 2);
           if (rp.deadT >= 1.2) rp.group.visible = false;
           continue;
         }
-        // visível também na nave (todo mundo viaja no convés); some dentro de carro
-        rp.group.visible = rp.alive && rp.car < 0;
+        // visível também na nave (todo mundo viaja no convés); some dentro de carro/heli
+        rp.group.visible = rp.alive && rp.car < 0 && !rp.heli;
         rp.group.position.lerp(rp.targetPos, k);
         let dy = rp.targetYaw - rp.yaw;
         dy = Math.atan2(Math.sin(dy), Math.cos(dy));
@@ -1037,6 +1047,11 @@
             v.chassisBody.angularVelocity.set(0, 0, 0);
             v.chassisBody.quaternion.setFromAxisAngle(_yAxis, rp.yaw);
           }
+        }
+        // voando: o helicóptero (único no mapa) segue o piloto remoto
+        if (rp.heli && !G.state.flying) {
+          G.Heli.group.position.copy(rp.group.position);
+          G.Heli.group.rotation.set(0, rp.yaw, 0);
         }
       }
 
