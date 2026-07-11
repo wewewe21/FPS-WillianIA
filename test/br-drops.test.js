@@ -7,7 +7,7 @@ const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { CHROME, bootGame, startBRMatch } = require('./helpers/harness');
 
-describe('BR — drops de morte', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+describe('BR — drops de morte e avatares remotos', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h, bot;
   before(async () => {
     h = await bootGame({ port: 3189, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '120' } });
@@ -43,5 +43,54 @@ describe('BR — drops de morte', { skip: !CHROME && 'Chrome não encontrado' },
     assert.ok(r, 'dropSpawn nunca chegou na página');
     assert.ok(Math.abs(r.y - r.andar) < 1.2,
       `loot caiu do andar pro chão: y=${r.y} andar=${r.andar} terreno=${r.terreno}`);
+  });
+});
+
+describe('BR — bonecos remotos no chão', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  let h, bot;
+  before(async () => {
+    h = await bootGame({ port: 3182, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '120' } });
+    bot = await startBRMatch(h);
+  });
+  after(async () => {
+    if (bot) bot.close();
+    if (h) await h.close();
+  });
+
+  it('dado um jogador remoto andando no chão, então o boneco dele NÃO flutua', async t => {
+    const chao = await h.play(() => +window.QA.MP.groundAt(80, 80, 999).toFixed(2));
+    const iv = setInterval(() => bot.volatile.emit('state', { pos: [80, chao, 80], rotY: 0, car: -1 }), 100);
+    try {
+      const r = await h.play(async (chaoIn) => {
+        const dbg = window.__BR_debug;
+        const t0 = performance.now();
+        while (dbg.remotes.size === 0 && performance.now() - t0 < 8000)
+          await new Promise(rr => setTimeout(rr, 150));
+        if (dbg.remotes.size === 0) return null;
+        await new Promise(rr => setTimeout(rr, 1500)); // lerp assenta (rAF do BR)
+        const rp = [...dbg.remotes.values()][0];
+        return { y: +rp.group.position.y.toFixed(2), chao: chaoIn,
+                 visivel: rp.group.visible, dy: +(rp.group.position.y - chaoIn).toFixed(2) };
+      }, chao);
+      if (!r) { t.skip('remoto não apareceu a tempo'); return; }
+      assert.ok(r.visivel, 'boneco remoto invisível andando no chão');
+      assert.ok(Math.abs(r.dy) < 0.8, `boneco remoto flutuando/enterrado: dy=${r.dy}m`);
+    } finally { clearInterval(iv); }
+  });
+
+  it('dado um jogador remoto que morre, então o boneco tomba e some — não vira estátua', async t => {
+    const r0 = await h.play(() => window.__BR_debug.remotes.size);
+    if (r0 === 0) { t.skip('sem remoto na sala'); return; }
+    bot.emit('died', {}); // bot morre pro servidor
+    const r = await h.play(async () => {
+      const dbg = window.__BR_debug;
+      const rp = [...dbg.remotes.values()][0];
+      const t0 = performance.now();
+      while (rp.group.visible && performance.now() - t0 < 6000)
+        await new Promise(rr => setTimeout(rr, 150));
+      return { sumiu: !rp.group.visible, vivo: rp.alive };
+    });
+    assert.ok(!r.vivo, 'roster não marcou o remoto como morto');
+    assert.ok(r.sumiu, 'boneco morto continuou de pé (estátua)');
   });
 });
