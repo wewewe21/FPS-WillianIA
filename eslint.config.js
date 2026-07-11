@@ -18,7 +18,8 @@ module.exports = [
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'commonjs',
-      globals: globals.node,
+      // testes de jogabilidade rodam trechos dentro do navegador (page.evaluate)
+      globals: { ...globals.node, ...globals.browser },
     },
   },
   {

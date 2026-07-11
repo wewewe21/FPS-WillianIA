@@ -71,8 +71,17 @@ cobre tudo; zero problemas.
 - Smoke no Chrome: boot solo e BR, partida, queda, pouso, zero erros de runtime.
 - `npm run lint` zero problemas.
 
+### Etapa 5 — Specs de JOGABILIDADE ✅ (`test/gameplay.test.js`)
+O jogo inteiro roda num Chrome headless (WebGL por software) e o tempo avança
+por `__game.tick(1/60)` — determinístico, sem requestAnimationFrame, com o
+mapa fixado por `WORLD_SEED` (knob novo do servidor). 16 cenários:
+movimento/corrida, pulo (sem pulo duplo), gravidade, colisão com parede e
+com carro, tiro acertando inimigo, recarga, dano com armadura (70%), morte,
+kit médico, regen, dirigir/acelerar/sair do carro, decolar de helicóptero,
+slide e relógio do mundo. IA congelada no harness pra não sujar os asserts.
+
 ### Etapas futuras (fora desta rodada, por risco)
-- Separar o núcleo (player/IA/loop) em módulos — exige specs de gameplay
-  (movimento, recoil, IA) que hoje não existem.
+- Separar o núcleo (player/IA/loop) em módulos — as specs de gameplay acima
+  já dão a rede de segurança; falta cobrir recoil/IA antes de mexer nelas.
 - Física em Web Worker (design acima).
 - Bundler (Vite) + minificação para produção.

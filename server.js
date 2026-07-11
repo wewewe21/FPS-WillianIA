@@ -85,7 +85,8 @@ const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
 
 const match = {
   phase: 'LOBBY',            // LOBBY | COUNTDOWN | PLAYING | ENDED
-  seed: (Math.random() * 0xFFFFFFFF) >>> 0,
+  // WORLD_SEED fixa o mapa (QA/depuração); sem ela, seed aleatória por processo
+  seed: process.env.WORLD_SEED ? (+process.env.WORLD_SEED >>> 0) : (Math.random() * 0xFFFFFFFF) >>> 0,
   num: 0,
   t0: 0,                     // Date.now() do início (nave decola)
   plan: null,                // { ship, zone, boss } enviado a todos
