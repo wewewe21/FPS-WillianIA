@@ -297,7 +297,9 @@ for (const b of Structures.walls) {
   wb.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2);
   wb.updateAABB(); // CANNON calcula o AABB na criação (origem) e nunca mais — sem isto o broadphase não enxerga o corpo
   world.addBody(wb);
+  if (b.city) Structures.city.registerBody(wb); // destruição da cidade remove estes
 }
+Structures.city.bindPhysics(world);
 
 const treeSpots = []; // posições das árvores (LOD + minimapa)
 {

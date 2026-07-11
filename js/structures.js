@@ -203,6 +203,7 @@ export function createStructures(deps) {
   const cityMat = csmMat(new THREE.MeshStandardMaterial({
     map: fMap, emissiveMap: fEmis, emissive: 0xffffff, emissiveIntensity: 0.25, roughness: 0.8, metalness: 0.1 }));
   const cityGeos = [];
+  let emCidade = false; // marca walls/platforms urbanos p/ Structures.city
   function cityBox(w, h, d, x, y, z, solid = true) { // caixa texturizada (UV ~ por andar)
     const g = new THREE.BoxGeometry(w, h, d);
     const uv = g.attributes.uv;
@@ -210,18 +211,19 @@ export function createStructures(deps) {
     g.translate(x, y, z);
     cityGeos.push(g);
     if (solid) {
-      walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2 });
+      walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
       // telhado pisável: pousar de paraquedas/pular em prédio da cidade funciona
-      platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2 });
+      platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
     }
   }
   function floorSlab(w, d, x, y, z) { // andar: pisável + bloqueia bala, sem empurrar player
     sbox(w, 0.25, d, x, y - 0.13, z, 0x8b9099, false);
-    walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - 0.26, y1: y, z0: z - d / 2, z1: z + d / 2, noCollide: true });
-    platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y });
+    walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - 0.26, y1: y, z0: z - d / 2, z1: z + d / 2, noCollide: true, city: emCidade });
+    platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y, city: emCidade });
   }
   {
     const cx = CITY.x, cz = CITY.z, gy = heightAt(cx, cz);
+    emCidade = true;
     sites.push({ x: cx, z: cz, r: 88, type: 'cidade' });
     // ruas cruzadas + praça
     sbox(110, 0.12, 9, cx, gy + 0.02, cz + 26, 0x2b2e33, false);
@@ -258,7 +260,7 @@ export function createStructures(deps) {
       floorSlab(3, 10.6, cx - 7, fy, cz + 3.1);                 // laje da ala oeste
       // rampa (escada) k-1 -> k no poço
       const ry0 = gy + (k - 1) * fh, ry1 = fy;
-      platforms.push({ ramp: true, axis: 'z', x0: cx - 8.5, x1: cx - 5.5, z0: cz - 8.4, z1: cz - 2.4, y0: ry1, y1: ry0 });
+      platforms.push({ ramp: true, axis: 'z', x0: cx - 8.5, x1: cx - 5.5, z0: cz - 8.4, z1: cz - 2.4, y0: ry1, y1: ry0, city: emCidade });
       const rmp = new THREE.BoxGeometry(3, 0.22, 6.7);
       rmp.rotateX(Math.atan2(fh, 6));
       rmp.translate(cx - 7, (ry0 + ry1) / 2 - 0.1, cz - 5.4);
@@ -286,6 +288,7 @@ export function createStructures(deps) {
     heliSpot = { x: cx, y: towerTopY, z: cz };
     bazookaSpot = { x: cx + 6.5, y: towerTopY, z: cz + 6.5 };
     sbox(1.2, 0.7, 0.7, bazookaSpot.x, towerTopY + 0.35, bazookaSpot.z, 0x4a5240); // caixa da bazuca
+    emCidade = false;
   }
 
   /* ================= BASES MILITARES ================= */
@@ -375,6 +378,130 @@ export function createStructures(deps) {
     }
   }
 
-  return { sites, walls, rayHit, segBlocked, collide, FORT_POS, flames, smokeSpots, flags,
+  /* ============ DESTRUIÇÃO DA CIDADE — módulo fundo, interface pequena ============
+     Registro de tudo que é urbano (walls/platforms marcados city:true, corpos
+     CANNON registrados pelo game.js) + versão destruída construída JÁ NO BOOT
+     (invisível). destroy()/restore() trocam visual e colisão do mundo inteiro
+     de forma atômica: jogador, bala (rayHit), telhados e física dos veículos. */
+  const cityRuins = new THREE.Group();
+  cityRuins.name = 'cidadeDestruida';
+  cityRuins.visible = false;
+  const ruinWalls = [];   // colisores simplificados dos escombros (poucos)
+  {
+    const cx = CITY.x, cz = CITY.z, gy = heightAt(cx, cz);
+    const mRuina = csmMat(new THREE.MeshStandardMaterial({ color: 0x2e2c2a, roughness: 0.95 }));
+    const mQueim = csmMat(new THREE.MeshStandardMaterial({ color: 0x191715, roughness: 1 }));
+    const mViga = new THREE.MeshStandardMaterial({ color: 0x4a3f34, roughness: 0.7, metalness: 0.5 });
+    const mFogo = new THREE.MeshStandardMaterial({ color: 0x200800, emissive: 0xff7a2e, emissiveIntensity: 3 });
+    // chão urbano escurecido + "rachaduras" (faixas escuras finas)
+    const chao = new THREE.Mesh(new THREE.CircleGeometry(88, 40),
+      new THREE.MeshStandardMaterial({ color: 0x14120f, roughness: 1, transparent: true, opacity: 0.85 }));
+    chao.rotation.x = -Math.PI / 2;
+    chao.position.set(cx, gy + 0.05, cz);
+    cityRuins.add(chao);
+    for (let i = 0; i < 10; i++) {
+      const r = new THREE.Mesh(new THREE.PlaneGeometry(rand(14, 40), rand(0.5, 1.2)),
+        new THREE.MeshBasicMaterial({ color: 0x050505 }));
+      r.rotation.x = -Math.PI / 2;
+      r.rotation.z = rand(TAU);
+      r.position.set(cx + rand(-70, 70), gy + 0.07, cz + rand(-70, 70));
+      cityRuins.add(r);
+    }
+    // stubs dos prédios: metade inferior, inclinados e chamuscados + vigas
+    const lots = [[-34, -28, 11, 22], [-16, -34, 12, 16], [4, -30, 10, 26], [38, -26, 13, 18],
+      [-40, -2, 10, 14], [-38, 44, 12, 20], [-14, 42, 11, 24], [8, 44, 12, 15],
+      [40, 8, 11, 19], [42, 42, 13, 28], [-44, 18, 9, 12], [16, -8, 9, 13]];
+    let li = 0;
+    for (const [ox, oz, w, hOrig] of lots) {
+      const h = hOrig * rand(0.28, 0.45);
+      const stub = new THREE.Mesh(new THREE.BoxGeometry(w, h, w * 0.95), li % 2 ? mRuina : mQueim);
+      stub.position.set(cx + ox, gy + h / 2 - 0.4, cz + oz);
+      stub.rotation.z = rand(-0.09, 0.09);
+      stub.rotation.x = rand(-0.07, 0.07);
+      stub.castShadow = true;
+      cityRuins.add(stub);
+      for (let v = 0; v < 2; v++) {
+        const viga = new THREE.Mesh(new THREE.BoxGeometry(0.28, hOrig * rand(0.4, 0.7), 0.28), mViga);
+        viga.position.set(cx + ox + rand(-w / 2, w / 2), gy + viga.geometry.parameters.height / 2 - 0.3,
+          cz + oz + rand(-w / 2, w / 2));
+        viga.rotation.z = rand(-0.35, 0.35);
+        cityRuins.add(viga);
+      }
+      // colisor simplificado só nos 6 primeiros stubs: BAIXO (1,6m) — dá pra
+      // pular por cima; balas passam por cima; só barra quem anda reto nele
+      if (li < 6) ruinWalls.push({ x0: cx + ox - w / 2, x1: cx + ox + w / 2,
+        y0: gy - 0.4, y1: gy + 1.6, z0: cz + oz - w / 2, z1: cz + oz + w / 2, cityRuin: true });
+      li++;
+    }
+    // Torre Nexus severamente danificada: toco alto e torto
+    const toco = new THREE.Mesh(new THREE.BoxGeometry(13, 14, 13), mQueim);
+    toco.position.set(cx, gy + 6.6, cz);
+    toco.rotation.z = 0.12;
+    cityRuins.add(toco);
+    ruinWalls.push({ x0: cx - 6.5, x1: cx + 6.5, y0: gy - 0.4, y1: gy + 13, z0: cz - 6.5, z1: cz + 6.5, cityRuin: true });
+    // entulho instanciado (decorativo, sem física — barato)
+    const debGeo = new THREE.BoxGeometry(1, 0.7, 1);
+    const deb = new THREE.InstancedMesh(debGeo, mRuina, 120);
+    const dm = new THREE.Object3D();
+    for (let i = 0; i < 120; i++) {
+      const a = rand(TAU), r = rand(4, 84);
+      dm.position.set(cx + Math.cos(a) * r, gy + rand(0, 0.5), cz + Math.sin(a) * r);
+      dm.rotation.set(rand(TAU), rand(TAU), rand(TAU));
+      dm.scale.setScalar(rand(0.4, 1.8));
+      dm.updateMatrix();
+      deb.setMatrixAt(i, dm.matrix);
+    }
+    deb.castShadow = true;
+    cityRuins.add(deb);
+    // focos de fogo (cones emissive) + 2 luzes dinâmicas SÓ quando visível
+    for (const [fx, fz] of [[-30, -24], [18, 30], [40, 6]]) {
+      const fogo = new THREE.Mesh(new THREE.ConeGeometry(0.8, 1.6, 6), mFogo);
+      fogo.position.set(cx + fx, gy + 0.8, cz + fz);
+      cityRuins.add(fogo);
+    }
+    cityRuins.add(new THREE.PointLight(0xff7a2e, 1.6, 40, 1.4).translateX(cx - 30).translateY(gy + 3).translateZ(cz - 24));
+    cityRuins.add(new THREE.PointLight(0xff9a4e, 1.2, 34, 1.4).translateX(cx + 40).translateY(gy + 3).translateZ(cz + 6));
+    scene.add(cityRuins);
+  }
+
+  const city = {
+    center: { x: CITY.x, z: CITY.z },
+    radius: 95,
+    _state: 'intact',
+    _bodies: [],          // corpos CANNON das paredes urbanas (registrados pelo game.js)
+    _world: null,
+    _savedWalls: [], _savedPlatforms: [],
+    containsPoint(x, z) { return Math.hypot(x - CITY.x, z - CITY.z) <= this.radius; },
+    getState() { return this._state; },
+    setState(st) { if (st === 'destroyed') this.destroy(); else if (st === 'intact') this.restore(); },
+    registerBody(b) { this._bodies.push(b); },
+    bindPhysics(world) { this._world = world; },
+    destroy() {
+      if (this._state === 'destroyed') return;
+      this._state = 'destroyed';
+      cityMesh.visible = false;
+      cityRuins.visible = true;
+      // colisão: paredes/plataformas urbanas saem dos arrays COMPARTILHADOS
+      this._savedWalls = walls.filter(w => w.city);
+      this._savedPlatforms = platforms.filter(p => p.city);
+      for (let i = walls.length - 1; i >= 0; i--) if (walls[i].city) walls.splice(i, 1);
+      for (let i = platforms.length - 1; i >= 0; i--) if (platforms[i].city) platforms.splice(i, 1);
+      for (const rw of ruinWalls) walls.push(rw); // escombros: poucos colisores baixos
+      if (this._world) for (const b of this._bodies) this._world.removeBody(b);
+    },
+    restore() {
+      if (this._state === 'intact') return;
+      this._state = 'intact';
+      cityMesh.visible = true;
+      cityRuins.visible = false;
+      for (let i = walls.length - 1; i >= 0; i--) if (walls[i].cityRuin) walls.splice(i, 1);
+      for (const w of this._savedWalls) walls.push(w);
+      for (const p of this._savedPlatforms) platforms.push(p);
+      this._savedWalls = []; this._savedPlatforms = [];
+      if (this._world) for (const b of this._bodies) this._world.addBody(b);
+    },
+  };
+
+  return { sites, walls, rayHit, segBlocked, collide, FORT_POS, flames, smokeSpots, flags, city,
     cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY };
 }
