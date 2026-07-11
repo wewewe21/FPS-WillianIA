@@ -345,6 +345,73 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
     assert.ok(r.slideT > 0, `não deslizou (slideT=${r.slideT})`);
   });
 
+  it('dado um disparo em rajada, então o recoil levanta a mira e depois assenta', async () => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, MP = QA.MP;
+      QA.reset();
+      G.switchWeapon(0);
+      G.gun.mag = G.gun.magSize; G.gun.reloading = false;
+      QA.tick(30); // câmera assenta
+      const pitch0 = MP.camera.rotation.x;
+      G.mouse.shooting = true; G.mouse.clicked = true;
+      QA.tick(12); // rajada de ~0.2s
+      const pitchBurst = MP.camera.rotation.x;
+      G.mouse.shooting = false;
+      QA.tick(90); // recuperação
+      const pitchAfter = MP.camera.rotation.x;
+      return { sub: pitchBurst - pitch0, volta: Math.abs(pitchAfter - pitch0), pico: Math.abs(pitchBurst - pitch0) };
+    });
+    assert.ok(r.sub > 0.004, `recoil não subiu a mira (${r.sub.toFixed(4)} rad)`);
+    assert.ok(r.volta < r.pico, 'mira não assentou depois da rajada');
+  });
+
+  it('dada a IA ligada e um inimigo à vista, então ele sai da patrulha e engaja', async () => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, P = QA.MP.player;
+      QA.reset(40, 40);
+      const e = G.Enemies.list.find(x => x.alive);
+      if (!e) return null;
+      e.group.position.set(40, QA.MP.heightAt(40, 28), 28); // 12m à frente, área plana
+      e.fsm = 'PATRULHA';
+      e.alertT = 0; e.losT = 0;
+      window.__BR_active = false; // liga a IA só neste teste
+      const hp0 = P.health;
+      QA.tick(300); // 5s de jogo
+      window.__BR_active = true;  // congela de novo
+      const fsm = e.fsm;
+      e.group.position.set(-400, QA.MP.heightAt(-400, -400), -400); // some daqui
+      return { fsm, tomouDano: P.health < hp0 };
+    });
+    if (!r) return;
+    assert.ok(r.fsm !== 'PATRULHA' || r.tomouDano,
+      `inimigo ignorou o jogador a 12m (fsm=${r.fsm})`);
+  });
+
+  it('dada uma granada no pé do inimigo, então ele perde vida', async () => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G;
+      QA.reset(50, 50);
+      const e = G.Enemies.list.find(x => x.alive);
+      if (!e) return null;
+      e.group.position.set(55, QA.MP.heightAt(55, 55), 55);
+      e.health = 100;
+      G.Grenades.explode(e.group.position.clone());
+      return { hp: e.health, morreu: !e.alive };
+    });
+    if (!r) return;
+    assert.ok(r.hp < 100 || r.morreu, 'explosão não feriu o inimigo');
+  });
+
+  it('dado dano no COLOSSO, então o hp do boss desce', async () => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, THREE = QA.MP.THREE;
+      const hp0 = G.Boss.state.hp;
+      G.Boss.damage(60, G.Boss.pos().clone(), new THREE.Vector3(0, 0, 1), 'body');
+      return { hp0, hp1: G.Boss.state.hp };
+    });
+    assert.ok(r.hp1 < r.hp0, `boss não levou dano (${r.hp0} -> ${r.hp1})`);
+  });
+
   it('dado o tempo passando, então o dia avança (Env.tod)', async () => {
     const r = await play(() => {
       const QA = window.QA;

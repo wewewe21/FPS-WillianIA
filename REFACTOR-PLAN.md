@@ -80,8 +80,17 @@ com carro, tiro acertando inimigo, recarga, dano com armadura (70%), morte,
 kit médico, regen, dirigir/acelerar/sair do carro, decolar de helicóptero,
 slide e relógio do mundo. IA congelada no harness pra não sujar os asserts.
 
+### Etapa 6 — Núcleo aberto: IA e mundo em módulos ✅
+Com as specs de gameplay cobrindo também **recoil, IA engajando, granada em
+inimigo e dano no boss** (20 cenários), saíram do núcleo: `js/water.js`,
+`js/grass.js`, `js/enemies.js`, `js/boss.js`, `js/alien.js`, `js/amb.js`,
+`js/animals.js`, `js/night.js`, `js/interact.js`. O lint pegou 3 dependências
+escondidas que virariam crash (timeScale atribuído pelo boss/alien →
+`setTimeScale(v)`, `lastShotInfo` lido pela IA, `tryToggleCar` no Interact).
+`game.js`: 5.288 → **1.775 linhas** (bootstrap, cena, player, câmera, tiro,
+HUD, minimapa, loop e exports).
+
 ### Etapas futuras (fora desta rodada, por risco)
-- Separar o núcleo (player/IA/loop) em módulos — as specs de gameplay acima
-  já dão a rede de segurança; falta cobrir recoil/IA antes de mexer nelas.
+- Player/câmera/tiro/HUD em módulos próprios (o que restou no núcleo).
 - Física em Web Worker (design acima).
 - Bundler (Vite) + minificação para produção.
