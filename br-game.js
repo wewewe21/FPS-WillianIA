@@ -329,6 +329,38 @@
       UI.hint('🌀 caindo — [ESPAÇO] abre o paraquedas antes', 3000);
     }
 
+    /* =============== céu sincronizado: dia/noite e clima iguais pra todos ===============
+       cada cliente rodava o próprio relógio (pausa, aba oculta e slow-mo da morte
+       descolavam tudo) — aqui o horário é função pura do relógio da PARTIDA,
+       e o clima é sorteado por (seed ^ época), determinístico em todo cliente */
+    const DAY_LEN = 480, DAY_SPD = 0.62 / DAY_LEN, NIGHT_SPD = 1.9 / DAY_LEN; // espelho do Env
+    function todAt(t) {
+      let tod = 0.33, rem = Math.max(0, t);
+      for (let guard = 0; rem > 0 && guard < 96; guard++) {
+        const day = tod >= 0.25 && tod < 0.75;
+        const spd = day ? DAY_SPD : NIGHT_SPD;
+        const edge = day ? 0.75 : (tod < 0.25 ? 0.25 : 1.25);
+        const toEdge = (edge - tod) / spd;
+        if (toEdge > rem) { tod += rem * spd; break; }
+        tod = edge >= 1 ? edge - 1 : edge;
+        rem -= toEdge;
+      }
+      return tod % 1;
+    }
+    let skyAcc = 9; // força a 1ª sincronização de clima logo de cara
+    function skySync(dt) {
+      if (!S.plan || !MP.state.started) return;
+      G.Env.tod = todAt(S.matchT());
+      skyAcc += dt;
+      if (skyAcc > 1) {
+        skyAcc = 0;
+        const epoch = Math.floor(Math.max(0, S.matchT()) / 75); // clima muda a cada ~75s
+        const r = seededRng((INIT.worldSeed ^ Math.imul(epoch + 1, 2654435761)) >>> 0)();
+        const w = r < 0.52 ? 'limpo' : r < 0.8 ? 'chuva' : 'neve';
+        if (G.Env.weather !== w) G.Env.weather = w;
+      }
+    }
+
     /* =============== zona de gás =============== */
     let zoneWall = null;
     const zc = { x: 0, z: 0, r: 9999, nx: 0, nz: 0, nr: 9999, dps: 0, label: '', closesIn: 0, shrinking: false, started: false };
@@ -1069,6 +1101,7 @@
       }
 
       stepBullets(dt);
+      skySync(dt);
 
       /* nave */
       if (ship && S.plan) {

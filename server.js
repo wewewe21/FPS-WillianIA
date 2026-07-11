@@ -248,6 +248,13 @@ function checkVictory() {
    congela o loop e ficava "vivo flutuando fora da safe" pra sempre, travando
    a vitória. Aqui o servidor espelha o círculo e elimina quem o cliente não
    elimina: fora da zona, flutuando na altitude da nave ou AFK sem mandar estado. */
+/* posição esperada da nave em t (valida o flag ship dos clientes) */
+function shipPosAt(t, plan = match.plan) {
+  const sp = plan.ship;
+  const k = Math.min(Math.max(t / sp.flyTime, 0), 1.18);
+  return [sp.from[0] + (sp.to[0] - sp.from[0]) * k, sp.alt, sp.from[1] + (sp.to[1] - sp.from[1]) * k];
+}
+
 function zoneAt(t, plan = match.plan) {
   const ph = plan.zone;
   let cur = null, shrinking = false, k = 0;
@@ -365,8 +372,43 @@ io.on('connection', socket => {
     pos[0] = Math.max(-WORLD, Math.min(WORLD, pos[0]));
     pos[1] = Math.max(-100, Math.min(600, pos[1]));
     pos[2] = Math.max(-WORLD, Math.min(WORLD, pos[2]));
+    const now = Date.now();
+
+    /* ---- anti-cheat: teleporte/speedhack e abuso do flag "ship" ----
+       rejeitado = posição não propaga e lastState não renova (vira AFK pra zona) */
+    if (match.phase === 'PLAYING' && p.alive && !p.spectator && match.plan) {
+      const t = (now - match.t0) / 1000;
+      if (d.ship) {
+        // diz estar na nave: precisa estar NA nave (rota conhecida) e no tempo dela
+        if (t > match.plan.ship.flyTime + 8) { p.strikes = (p.strikes || 0) + 1; return; }
+        const sp = shipPosAt(t);
+        if (Math.hypot(pos[0] - sp[0], pos[2] - sp[2]) > 60) { p.strikes = (p.strikes || 0) + 1; return; }
+      } else if (p.lastPos) {
+        const dt = Math.max((now - p.lastPosT) / 1000, 0.05);
+        const hSpd = Math.hypot(pos[0] - p.lastPos[0], pos[2] - p.lastPos[2]) / dt;
+        const vSpd = Math.abs(pos[1] - p.lastPos[1]) / dt;
+        // carro esportivo ~42 m/s, queda 46 m/s: acima de 90/120 é teleporte
+        if (hSpd > 90 || vSpd > 120) {
+          p.strikes = (p.strikes || 0) + 1;
+          p.rejects = (p.rejects || 0) + 1;
+          if (p.strikes === 20) console.log(`[CHEAT] ${p.nick} (${socket.id}) movimento impossível: ${hSpd.toFixed(0)} m/s`);
+          if (p.strikes > 120) { console.log(`[CHEAT] ${p.nick} expulso por speedhack`); socket.disconnect(true); return; }
+          if (p.rejects <= 10) return; // rejeita; após 10 seguidas re-ancora (lag extremo legítimo)
+          p.rejects = 0;
+        } else {
+          p.rejects = 0;
+          if (hSpd > 55) p.strikes = (p.strikes || 0) + 1; // suspeito, mas passa
+        }
+      }
+      p.lastPos = pos;
+      p.lastPosT = now;
+    } else {
+      p.lastPos = pos;
+      p.lastPosT = now;
+    }
+
     p.pos = pos;
-    p.lastState = Date.now();
+    p.lastState = now;
     socket.volatile.broadcast.emit('playerUpdate', {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
       ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
@@ -387,13 +429,20 @@ io.on('connection', socket => {
     p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
     if (p.hitWindow.length >= 12) return;
     p.hitWindow.push(now);
+    // anti-cheat: orçamento de dano por atirador (520/s cobre o pior caso legítimo
+    // — fuzil automático só de headshot — e corta hack de dano infinito)
+    const dmgReq = Math.min(Math.max(+d.dmg || 0, 0), 95);
+    if (dmgReq <= 0) return;
+    p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
+    if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return;
+    p.dmgWindow.push({ t: now, d: dmgReq });
     let fromPos = [0, 0, 0];
     if (Array.isArray(d.fromPos)) {
       const f = d.fromPos.slice(0, 3).map(Number);
       if (f.length === 3 && f.every(Number.isFinite)) fromPos = f;
     }
     io.to(d.targetId).emit('youWereHit', {
-      dmg: Math.min(Math.max(+d.dmg || 0, 0), 95),
+      dmg: dmgReq,
       fromPos,
       shooterId: socket.id, shooterNick: p.nick,
       weapon: cleanSoft(d.weapon).slice(0, 24) || '???',
@@ -428,6 +477,10 @@ io.on('connection', socket => {
     // espectador/morto abrindo baú = grief (queima o loot dos vivos)
     if (!p || !p.alive) return cb({ ok: false });
     if (match.phase !== 'PLAYING' || !d || !d.key) return cb({ ok: false });
+    // anti-cheat: ninguém abre 2 baús em menos de 300ms (varredura automatizada)
+    const nowC = Date.now();
+    if (nowC - (p.lastChest || 0) < 300) return cb({ ok: false });
+    p.lastChest = nowC;
     const key = String(d.key).slice(0, 32);
     if (match.openedChests.has(key)) return cb({ ok: false, opened: true });
     match.openedChests.add(key);
@@ -484,7 +537,13 @@ io.on('connection', socket => {
     const p = players.get(socket.id);
     if (!p || !p.alive) return;
     if (match.phase !== 'PLAYING' || match.bossDead) return;
+    // anti-cheat: orçamento de dano no boss (1200/s por jogador)
+    const nowB = Date.now();
+    p.bossWindow = (p.bossWindow || []).filter(e => nowB - e.t < 1000);
     const dmg = Math.min(Math.max(+((d || {}).dmg) || 0, 0), 150);
+    if (dmg <= 0) return;
+    if (p.bossWindow.reduce((a, e) => a + e.d, 0) + dmg > 1200) return;
+    p.bossWindow.push({ t: nowB, d: dmg });
     match.bossHp = Math.max(0, match.bossHp - dmg);
     if (match.bossHp <= 0) {
       match.bossDead = true;

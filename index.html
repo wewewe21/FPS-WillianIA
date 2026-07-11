@@ -4510,9 +4510,9 @@ const Env = (() => {
   scene.add(rainMesh);
   const rainP = [];
   for (let i = 0; i < RN; i++) rainP.push({ x: rand(-22, 22), y: rand(0, 26), z: rand(-22, 22) });
-  // neve: flocos derivando
+  // neve: flocos hexagonais derivando (billboard — quad girando ficava "riscado")
   const SN = 350;
-  const snowMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.075, 0.075),
+  const snowMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.055, 6),
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }), SN);
   snowMesh.visible = false; snowMesh.frustumCulled = false;
   scene.add(snowMesh);
@@ -4595,13 +4595,16 @@ const Env = (() => {
     const showSnow = weather === 'neve' && weatherK > 0.04;
     snowMesh.visible = showSnow;
     if (showSnow) {
+      // flocos sempre de frente pra câmera: girar no yaw deixava o quad de lado (invisível/riscado)
+      _euler.setFromQuaternion(camera.quaternion);
+      const camYaw = _euler.y;
       snowMesh.count = Math.max(1, Math.floor(SN * weatherK));
       for (let i = 0; i < snowMesh.count; i++) {
         const p = snowP[i];
         p.y -= 2.6 * dt; p.ph += dt;
         if (p.y < -2) { p.y = 16; p.x = rand(-20, 20); p.z = rand(-20, 20); }
         _dummy2.position.set(cp.x + p.x + Math.sin(p.ph) * 0.9, cp.y + p.y - 6, cp.z + p.z + Math.cos(p.ph * 0.8) * 0.9);
-        _dummy2.rotation.set(0, p.ph, 0);
+        _dummy2.rotation.set(0, camYaw, p.ph); // encara a câmera, rodopia no próprio plano
         _dummy2.updateMatrix();
         snowMesh.setMatrixAt(i, _dummy2.matrix);
       }

@@ -309,8 +309,12 @@ describe('Loot', () => {
     const early = await ack(a.s, 'openChest', { key: 'boss' });
     assert.equal(early.ok, false, 'baú do boss abriu com o boss vivo');
     const deadEv = once(b.s, 'bossDead');
-    for (let i = 0; i < 30; i++) a.s.emit('bossHit', { dmg: 150 }); // 3600 hp
+    // orçamento anti-cheat de 1200 dano/s no boss: os 3600 hp exigem ~3s de tiros espaçados
+    const shooter = (async () => {
+      for (let i = 0; i < 60; i++) { a.s.emit('bossHit', { dmg: 150 }); await sleep(120); }
+    })();
     await deadEv;
+    await shooter.catch(() => {});
     const late = await ack(a.s, 'openChest', { key: 'boss' });
     assert.equal(late.ok, true);
     assert.equal(late.items[0].rarity, 'lendário');
@@ -375,6 +379,44 @@ describe('Loot', () => {
     await sleep(250);
     const gone = await ack(c.s, 'takeDrop', { id: drop.id });
     assert.equal(gone.ok, false);
+  });
+});
+
+/* =============== ANTI-CHEAT =============== */
+describe('Anti-cheat', () => {
+  it('dado um teleporte impossível, então o servidor descarta a posição (speedhack)', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    for (let i = 0; i < 3; i++) { a.s.emit('state', { pos: [1, 2, 3], rotY: 0 }); await sleep(80); }
+    const upds = collect(b.s, 'playerUpdate');
+    for (let i = 0; i < 5; i++) { a.s.emit('state', { pos: [800, 2, 3], rotY: 0 }); await sleep(80); }
+    await sleep(300);
+    const jumped = upds.filter(u => u.id === a.init.id && u.pos[0] > 700);
+    assert.equal(jumped.length, 0, 'teleporte de 800m foi aceito');
+  });
+
+  it('dado dano acima do orçamento (520/s), então o excedente é descartado', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    const hits = collect(b.s, 'youWereHit');
+    for (let i = 0; i < 12; i++)
+      a.s.emit('shotHit', { targetId: b.init.id, dmg: 95, weapon: 'HACK', fromPos: [0, 0, 0] });
+    await sleep(500);
+    const total = hits.reduce((s, h) => s + h.dmg, 0);
+    assert.ok(total <= 520, `passaram ${total} de dano num segundo`);
+    assert.ok(total >= 380, `orçamento cortou demais: ${total}`);
+  });
+
+  it('dado farm automatizado de baús, então há intervalo mínimo entre aberturas', async t => {
+    const { clients } = await playing(t, 2);
+    const [a] = clients;
+    const r1 = await ack(a.s, 'openChest', { key: 'r1' });
+    assert.equal(r1.ok, true);
+    const r2 = await ack(a.s, 'openChest', { key: 'r2' }); // < 300ms depois
+    assert.equal(r2.ok, false, 'abriu 2 baús em <300ms');
+    await sleep(400);
+    const r3 = await ack(a.s, 'openChest', { key: 'r3' });
+    assert.equal(r3.ok, true);
   });
 });
 

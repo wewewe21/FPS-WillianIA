@@ -1,7 +1,7 @@
 # QA — Mapa de bugs do Battle Royale
 
 Auditoria completa (código + testes) do modo Battle Royale, em duas ondas.
-Formato BDD: **Dado / Quando / Então**. Suite automatizada em `test/` (`npm test`, 32 cenários de integração + unidade).
+Formato BDD: **Dado / Quando / Então**. Suite automatizada em `test/` (`npm test`, 35 cenários de integração + unidade).
 
 ## Bugs corrigidos
 
@@ -40,6 +40,25 @@ Formato BDD: **Dado / Quando / Então**. Suite automatizada em `test/` (`npm tes
 | 26 | 🟡 média | servidor | Dado um item de drop forjado (campos gigantes, índices inválidos, HTML), então era armazenado e re-emitido como veio | Sanitização de formato: só campos conhecidos com limites | Loot |
 | 27 | 🟡 média | grief | Dado um espectador, quando emitia `openChest`, então **queimava o baú** dos vivos | Baú exige jogador vivo | Loot |
 | 28 | 🟢 baixa | servidor | Dado `fromPos` não numérico no tiro, então a seta de dano da vítima recebia NaN | Validação/fallback [0,0,0] | manual |
+
+## Bugs corrigidos — 3ª onda (reporte do usuário) + anti-cheat
+
+| # | Sev. | Área | Bug (BDD) | Correção | Teste |
+|---|------|------|-----------|----------|-------|
+| 29 | 🟠 alta | visual | Dada a neve caindo, quando os flocos giravam no eixo Y, então viravam quadrados "de lado" (riscos/formato errado) | Flocos hexagonais (CircleGeometry 6 lados) sempre de frente pra câmera, rodopiando no próprio plano | manual |
+| 30 | 🟠 alta | mundo | Dado o ciclo dia/noite, quando cada cliente rodava o próprio relógio (pausa, aba oculta, slow-mo de morte), então **cada jogador via um horário diferente** | Horário = função pura do relógio da partida (`todAt(matchT)`), aplicado todo frame; validado em jogo: tod exato pro tempo decorrido | manual |
+| 31 | 🟠 alta | mundo | Dado o clima (chuva/neve), quando cada cliente sorteava o próprio, então um via neve e outro sol | Clima determinístico por `seed ^ época` (troca a cada ~75s), igual em todo cliente; validado: override manual é corrigido em 1s | manual |
+
+### Anti-cheat adicionado (servidor)
+
+| Proteção | Regra | Teste |
+|----------|-------|-------|
+| Speedhack/teleporte | >90 m/s horizontal ou >120 m/s vertical → posição rejeitada; 10 rejeições seguidas re-ancoram (lag legítimo); >120 strikes → expulso | Anti-cheat |
+| Abuso do flag "nave" | Dizer que está na nave fora do tempo/rota real (>60m da rota conhecida) → rejeitado e vira AFK pra zona | Zona |
+| Dano infinito | Orçamento de 520 dano/s por atirador (pior caso legítimo: fuzil automático só de headshot ≈ 450/s) | Anti-cheat |
+| Dano no boss | Orçamento de 1200/s por jogador (cap por hit continua 150) | Loot (boss) |
+| Farm de baús | Intervalo mínimo de 300ms entre aberturas | Anti-cheat |
+| Já existentes | 12 hits/s, cap 95/hit, baú single-open, drop por proximidade, 1 drop/vida, formato de item sanitizado | suite |
 
 ## Testes de unidade novos (`test/plan.test.js`)
 
