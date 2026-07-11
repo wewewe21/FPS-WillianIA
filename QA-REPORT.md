@@ -85,3 +85,28 @@ Formato BDD: **Dado / Quando / Então**. Suite automatizada em `test/` (`npm tes
 ## Knobs de teste (env vars)
 
 `COUNTDOWN_S`, `NEXT_IN_S`, `FLY_TIME`, `BR_FAST` (acelera a zona autoritativa) — usados pela suite; em produção ficam nos padrões.
+
+## Stress test (30/60/100 jogadores) — `npm run stress [n] [--client]`
+
+Enxame de bots socket.io joga uma partida completa: nave → queda → andar
+dentro da zona → tiroteio → mortes/drops → vencedor. 5% dos bots "travam"
+(aba oculta) e 10% caem no meio — exercitando o backstop da zona e o churn.
+Um monitor mede RTT e valida invariantes (1 matchEnd, vencedor coerente,
+colocações únicas). `--client` põe um Chrome real no meio do enxame.
+
+| Bots | Resultado | RTT p95 | RSS servidor | Mensagens |
+|------|-----------|---------|--------------|-----------|
+| 30   | vencedor ok, 29 kills | 1,6 ms | 74 MB | ~99k |
+| 60   | vencedor ok, 59 kills | 0,5 ms | 74 MB | ~407k |
+| 100  | vencedor ok, 99 kills | 0,5 ms | 98 MB | ~1,14M |
+| 60 + cliente real | zero erros JS · 60 avatares · FPS lógico 46 | — | — | — |
+| 100 + cliente real | zero erros JS · 100 avatares · FPS lógico 44 | — | — | — |
+
+(FPS lógico = loop do jogo com render desligado, medido em Chrome headless na
+MESMA máquina que roda os 100 bots e o servidor — em máquina de jogador, com
+GPU real e sem o enxame local, a folga é maior.)
+
+### Bug encontrado e corrigido pelo stress
+| # | Sev. | Bug | Correção |
+|---|------|-----|----------|
+| 32 | 🟡 média | Dado churn de jogadores (entra/sai), então geometrias, materiais e texturas dos avatares e dos drops de loot **nunca eram liberados da GPU** (vazamento crescia partida após partida) | `disposeGroup()` em `removeRemote`/`removeDrop` |

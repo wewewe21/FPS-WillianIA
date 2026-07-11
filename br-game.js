@@ -114,10 +114,20 @@
       window.__MP_remotePlayers.push(rp);
       return rp;
     }
+    /* GPU: geometrias/materiais/texturas são POR avatar — sem dispose, cada
+       jogador que entra e sai da sala vazava memória de vídeo pra sempre */
+    function disposeGroup(g) {
+      g.traverse(o => {
+        if (o.geometry) o.geometry.dispose();
+        const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+        for (const m of mats) { if (m.map) m.map.dispose(); m.dispose(); }
+      });
+    }
     function removeRemote(id) {
       const rp = remotes.get(id);
       if (!rp) return;
       MP.scene.remove(rp.group);
+      disposeGroup(rp.group);
       remotes.delete(id);
       const i = window.__MP_remotePlayers.indexOf(rp);
       if (i >= 0) window.__MP_remotePlayers.splice(i, 1);
@@ -556,7 +566,7 @@
     }
     function removeDrop(id) {
       const d = drops.get(id);
-      if (d) { MP.scene.remove(d.g); drops.delete(id); }
+      if (d) { MP.scene.remove(d.g); disposeGroup(d.g); drops.delete(id); }
     }
     for (const d of INIT.drops || []) spawnDrop(d.id, d.pos);
 

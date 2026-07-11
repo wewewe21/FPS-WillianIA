@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/",
+    "stress": "node scripts/stress.js",
     "lint": "eslint server.js game.js js/ multiplayer-client.js br-game.js test/ eslint.config.js"
   },
   "engines": {
