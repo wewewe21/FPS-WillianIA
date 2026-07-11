@@ -182,6 +182,7 @@ world.defaultContactMaterial.restitution = 0.05;
   hfBody.addShape(hfShape);
   hfBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
   hfBody.position.set(-half, 0, half);
+  hfBody.updateAABB();
   world.addBody(hfBody);
 }
 
@@ -294,6 +295,7 @@ for (const b of Structures.walls) {
   if (hx < 0.04 || hy < 0.04 || hz < 0.04) continue;
   const wb = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
   wb.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2);
+  wb.updateAABB(); // CANNON calcula o AABB na criação (origem) e nunca mais — sem isto o broadphase não enxerga o corpo
   world.addBody(wb);
 }
 
@@ -322,6 +324,7 @@ const treeSpots = []; // posições das árvores (LOD + minimapa)
     addObstacle(x, z, 0.45 * s);
     const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * s, 1.8, 0.32 * s)) });
     body.position.set(x, y + 1.8, z);
+    body.updateAABB(); // idem paredes: AABB ficava na origem
     world.addBody(body);
   }
 }
@@ -377,6 +380,7 @@ function rebucketTrees(px, pz) {
       addObstacle(x, z, s * 0.8);
       const body = new CANNON.Body({ mass: 0, shape: new CANNON.Sphere(s * 0.75) });
       body.position.set(x, y + s * 0.2, z);
+      body.updateAABB(); // idem paredes: AABB ficava na origem
       world.addBody(body);
     }
   }
@@ -1752,7 +1756,7 @@ window.__game = {
   get fps() { return fpsVal; },
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
-  heightAt, biomeAt, groundAt,
+  heightAt, biomeAt, groundAt, obstaclesNear,
   forceStart() { startGame(false); },
   teleportToCar() {
     player.pos.set(Car.group.position.x + 3, heightAt(Car.group.position.x + 3, Car.group.position.z), Car.group.position.z);
@@ -1766,7 +1770,7 @@ window.__MP = {
   updateHealthHUD, updateArmorHUD, updateAmmoHUD, updateInvHUD, updateSlotsHUD,
   setTimeScale,
   FX, DmgNums, SFX, rayBlockedAt, weaponRoot, centerMsg, showBanner,
-  WATER_LEVEL, slopeAt, justPressed,
+  WATER_LEVEL, slopeAt, justPressed, world,
   socket: __mpSocket, spawn: __mpSpawn,
 };
 

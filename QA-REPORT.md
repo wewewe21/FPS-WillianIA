@@ -110,3 +110,18 @@ GPU real e sem o enxame local, a folga é maior.)
 | # | Sev. | Bug | Correção |
 |---|------|-----|----------|
 | 32 | 🟡 média | Dado churn de jogadores (entra/sai), então geometrias, materiais e texturas dos avatares e dos drops de loot **nunca eram liberados da GPU** (vazamento crescia partida após partida) | `disposeGroup()` em `removeRemote`/`removeDrop` |
+
+## Testes de colisão (`test/collision.test.js`, 13 cenários)
+
+Todas as camadas: parede AABB pelos 4 lados + expulsão de quem nasce dentro,
+andares de prédio (floorY), círculo de árvores/pedras, física CANNON dos
+veículos (parede, telhado e tronco), heli vs terreno, bala e explosão barradas
+por parede, limites do mundo e empurrão entre jogadores (com bot de rede real).
+
+### Bug crítico encontrado pelos testes de colisão
+| # | Sev. | Bug | Correção |
+|---|------|-----|----------|
+| 33 | 🔴 crítica | Dado qualquer corpo estático criado com `position.set()` após o construtor (paredes, árvores, pedras), então o AABB ficava **na origem para sempre** (o cannon-es calcula na criação e a flag já nasce consumida) → o broadphase nunca enxergava os corpos: **carros atravessavam prédios, árvores e pedras desde sempre** — a colisão de veículos contra o mundo simplesmente não existia | `body.updateAABB()` após posicionar, nos 4 pontos (paredes, árvores, pedras, heightfield) + 2 testes de regressão (telhado e tronco) |
+
+Nota: ninguém percebeu antes porque jogador e balas usam colisão própria em
+JS (funcionava); só a física dos veículos dependia do broadphase do CANNON.
