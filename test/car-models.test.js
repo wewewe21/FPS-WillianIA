@@ -61,12 +61,12 @@ describe('Modelos 3D dos veículos', { skip: !CHROME && 'Chrome não encontrado'
     assert.ok(report.vehicles.length >= 3, 'frota incompleta');
     assert.deepEqual([...new Set(report.vehicles.map(v => v.url))].sort(), [
       '/assets/models/gumball-car.optimized.glb',
-      '/assets/models/mazda-rx7.optimized.glb',
+      '/assets/models/mazda-rx7.v2.glb',
       '/assets/models/truck-drifter.optimized.glb',
     ]);
     for (const v of report.vehicles) {
       assert.equal(v.status, 'ready', `modelo não carregou: ${v.url} (${v.error || 'sem detalhe'})`);
-      assert.ok(v.importedMeshes > 0 && v.importedMeshes <= 12,
+      assert.ok(v.importedMeshes > 0 && v.importedMeshes <= 16,
         `${v.url} usa ${v.importedMeshes} malhas importadas`);
       assert.deepEqual(v.floorNodes, [], `${v.url} manteve piso auxiliar`);
       assert.ok(Math.abs(v.metrics.sizeX - v.collider.x * 0.98) < 0.06,
@@ -75,17 +75,65 @@ describe('Modelos 3D dos veículos', { skip: !CHROME && 'Chrome não encontrado'
         `${v.url} não acompanha a largura do collider`);
       assert.ok(Math.abs(v.metrics.minY - v.groundOffset) < 0.04,
         `${v.url} não foi apoiado no chão`);
-      if (v.url.endsWith('/mazda-rx7.optimized.glb')) {
+      if (v.url.endsWith('/mazda-rx7.v2.glb')) {
         assert.ok(Math.abs(v.modelYaw - Math.PI) < 1e-6, 'RX-7 está com a traseira apontada para +X');
-        assert.equal(v.mappedMaterials, 0, 'RX-7 preto manteve a paleta sem contraste');
-        assert.equal(v.standardMaterials, v.importedMeshes,
-          'RX-7 não recebeu material iluminado por variante');
+        // derivado v2: cores reais do modelo (emissive->baseColor), materiais iluminados
+        assert.ok(v.standardMaterials > 0, 'RX-7 sem material iluminado');
       }
     }
-    assert.ok(report.uniqueVertices <= 55000,
+    // orçamento: o RX-7 v2 preserva os materiais reais (sem palette destrutiva)
+    // ao custo de ~2k vértices a mais — ainda irrisório perto do mundo
+    assert.ok(report.uniqueVertices <= 60000,
       `geometria única acima do orçamento: ${report.uniqueVertices} vértices`);
     assert.deepEqual(report.hooks, { render: true, advance: true },
       'hooks determinísticos do playtest não foram expostos');
     assert.deepEqual(h.pageErrors, [], `erros de página: ${h.pageErrors.join('\n')}`);
+  });
+});
+
+
+describe('Veículos assentados e com as cores do modelo', { skip: !CHROME && 'Chrome não encontrado' }, () => {
+  let h;
+  before(async () => { h = await bootGame({ port: 3194 }); });
+  after(async () => { if (h) await h.close(); });
+
+  it('dado o mundo com física assentada, então nenhum carro fica enterrado no chão', async () => {
+    const r = await h.play(async () => {
+      const G = window.QA.G, MP = window.QA.MP, THREE = MP.THREE;
+      await G.Car.ready;
+      window.QA.tick(300); // 5s de física: suspensão assenta e o alinhamento roda
+      return G.Car.vehicles.map(v => {
+        const box = new THREE.Box3().setFromObject(v.group);
+        const solo = MP.heightAt(v.group.position.x, v.group.position.z);
+        return { tipo: v.cfg.name, fundoVsSolo: +(box.min.y - solo).toFixed(2) };
+      });
+    });
+    for (const v of r) {
+      assert.ok(v.fundoVsSolo > -0.25, `${v.tipo} enterrado ${v.fundoVsSolo}m no chão`);
+      assert.ok(v.fundoVsSolo < 0.6, `${v.tipo} flutuando ${v.fundoVsSolo}m acima do chão`);
+    }
+  });
+
+  it('dado o esportivo, então mantém os materiais do modelo (não vira um bloco de uma cor só)', async () => {
+    const r = await h.play(async () => {
+      const G = window.QA.G;
+      await G.Car.ready;
+      const v = G.Car.vehicles.find(x => x.cfg.name === 'ESPORTIVO GT');
+      const cores = new Set();
+      let pretos = 0, total = 0;
+      v.group.traverse(o => {
+        if (!o.isMesh || !o.userData.importedCarModel) return;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          if (!m || !m.color) continue;
+          total++;
+          const hex = m.color.getHexString();
+          cores.add(hex);
+          if (hex === '000000') pretos++;
+        }
+      });
+      return { cores: [...cores].slice(0, 8), unicas: cores.size, pretos, total };
+    });
+    assert.ok(r.unicas >= 3, `esportivo monocromático (${r.unicas} cor: ${r.cores.join(',')})`);
+    assert.ok(r.pretos < r.total, 'todos os materiais do esportivo estão pretos');
   });
 });

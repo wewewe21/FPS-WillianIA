@@ -28,7 +28,7 @@ app.use((req, res, next) => {
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
   'city-destruction-client.js', 'city-destruction-protocol.js'];
-const MODEL_ASSETS = ['gumball-car.optimized.glb', 'truck-drifter.optimized.glb', 'mazda-rx7.optimized.glb'];
+const MODEL_ASSETS = ['gumball-car.optimized.glb', 'truck-drifter.optimized.glb', 'mazda-rx7.v2.glb'];
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
 for (const f of MODEL_ASSETS)

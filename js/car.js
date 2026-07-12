@@ -87,10 +87,16 @@ export function createCar(deps) {
     removeAuxiliaryNodes(imported);
     imported.traverse(obj => {
       if (!obj.isMesh) return;
-      if (cfg.modelTint != null) {
-        obj.material = new THREE.MeshStandardMaterial({
-          color: cfg.modelTint, metalness: 0.55, roughness: 0.32,
-        });
+      // pintura fosca nos materiais sem textura: com o sol do deserto + bloom,
+      // lataria clara e lisa estourava num clarão branco
+      for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+        if (m && m.isMeshStandardMaterial && !m.map) {
+          m.roughness = 0.85; m.metalness = 0.05;
+          // albedo 1.0 sob o sol estoura o limiar do bloom (carro vira clarão):
+          // rebaixa só os tons quase-brancos pra um branco de tinta
+          const l = m.color.r * 0.299 + m.color.g * 0.587 + m.color.b * 0.114;
+          if (l > 0.72) m.color.multiplyScalar(0.72 / l);
+        }
       }
       obj.castShadow = false; // CSM tem 4 cascatas: sombra por submalha quadruplicaria draw calls.
       obj.receiveShadow = false;
@@ -141,6 +147,8 @@ export function createCar(deps) {
       v.group.add(root);
       for (const wheel of v.wheelMeshes) wheel.visible = false; // o GLB já contém suas rodas.
       v.modelMetrics = metrics;
+      v.modelRoot = root;
+      v.modelAlignPending = true; // altura final vem das rodas físicas (raycast)
       v.modelStatus = 'ready';
     } catch (err) {
       v.modelStatus = 'fallback';
@@ -173,8 +181,7 @@ export function createCar(deps) {
   const mkSport = c => ({ name: 'ESPORTIVO GT', mass: 420, half: [1.9, 0.32, 0.88],
     wheels: [[1.35, -0.02, 0.82], [1.35, -0.02, -0.82], [-1.3, -0.02, 0.82], [-1.3, -0.02, -0.82]],
     wheelR: 0.42, wheelW: 0.3, force: 5200, steer: 0.5, brake: 60, grip: 2.2, awd: true, engine: 'sport',
-    modelUrl: '/assets/models/mazda-rx7.optimized.glb', modelYaw: Math.PI,
-    modelTint: c,
+    modelUrl: '/assets/models/mazda-rx7.v2.glb', modelYaw: Math.PI,
     build: () => buildPlaceholder([1.9, 0.32, 0.88], c) });
   let cur = makeVehicle(CFG_BUGGY, 7.5, -6);
   for (const s of Structures.carSpots) {
@@ -219,6 +226,17 @@ export function createCar(deps) {
         const wt = v.vehicle.wheelInfos[i].worldTransform;
         v.wheelMeshes[i].position.copy(wt.position);
         v.wheelMeshes[i].quaternion.copy(wt.quaternion);
+      }
+      /* altura real: o offset teórico ignorava o curso da suspensão e o
+         modelo afundava ~0,5m. Com o chassi em repouso (suspensão assentada,
+         inclusive dormindo), alinha o fundo do modelo ao terreno — uma vez. */
+      if (v.modelAlignPending && v.chassisBody.velocity.lengthSquared() < 0.04) {
+        v.modelAlignPending = false;
+        v.group.updateMatrixWorld(true);
+        const solo = heightAt(v.group.position.x, v.group.position.z);
+        const box = new THREE.Box3().setFromObject(v.modelRoot);
+        v.modelRoot.position.y += (solo + 0.04 - box.min.y);
+        v.modelRoot.updateMatrixWorld(true);
       }
     }
     // poeira + áudio do veículo atual
