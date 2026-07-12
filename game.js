@@ -31,6 +31,7 @@ import { createBoss } from './js/boss.js';
 import { createAmb } from './js/amb.js';
 import { createAnimals } from './js/animals.js';
 import { createNight } from './js/night.js';
+import { createSkeletons } from './js/skeletons.js';
 import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
 
@@ -1455,6 +1456,8 @@ const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL
    ================================================================ */
 const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags });
 
+const Skeletons = createSkeletons({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed, player, playerDamage, extraTargets, Pickups });
+
 /* ================================================================
    BOSS 2 — O VISITANTE (alien na cratera do deserto) -> arma PLASMA
    ================================================================ */
@@ -1663,6 +1666,7 @@ function tick(forceDt) {
   Car.update(dt, t);
   Heli.update(dt, t);
   if (!window.__BR_active) Enemies.update(dt, t); // BR: sem inimigos comuns
+  if (!window.__BR_active) Skeletons.update(dt, t); // BR: esqueletos também ficam de fora
   Animals.update(dt, t);
   if (!window.__BR_active || window.__BR_zumbis) Night.update(dt, t); // BR: zumbis só se a sala ligar
   Grenades.update(dt, t);
@@ -1780,7 +1784,7 @@ window.addEventListener('resize', () => {
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
-  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano,
+  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
