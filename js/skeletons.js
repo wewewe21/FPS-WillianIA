@@ -1,15 +1,16 @@
 /* esqueletos caçadores: vários espalhados pelo mapa, caçam o player
-   sem parar e ATRAVESSAM tudo (árvores, pedras, paredes — fantasmas
-   de osso: nada de colisão, só o chão). Batem de perto, morrem com
-   tiro (extraTargets) e renascem longe. Modelo GLB com rig — a marcha
-   é procedural nos ossos (o GLB não traz ciclo de caminhada). */
+   sem parar, DESVIANDO de árvores, pedras e paredes (têm corpo: a
+   colisão empurra pra fora e o excesso vira deslize tangencial, então
+   eles contornam e seguem a caça). Batem de perto, morrem com tiro
+   (extraTargets) e renascem longe. Modelo GLB com rig — a marcha é
+   procedural nos ossos (o GLB não traz ciclo de caminhada). */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 
 export function createSkeletons(deps) {
   const { rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed,
-    player, playerDamage, extraTargets, Pickups } = deps;
+    player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear } = deps;
 
   const COUNT = 7, HP = 90, SPEED = 3.1, MELEE_DMG = 12, MELEE_RANGE = 1.8, MELEE_CD = 1.1;
   const list = [];
@@ -32,6 +33,7 @@ export function createSkeletons(deps) {
     scene.add(g);
     const sk = {
       group: g, alive: false, hp: 0, yaw: 0, phase: rand(TAU),
+      side: list.length % 2 ? 1 : -1, // lado fixo do contorno (metade pra cada)
       hitT: 0, respawnT: 0, groanT: rand(6), bones: null,
       sph: [{ c: new THREE.Vector3(), r: 0.45, part: 'body' }, { c: new THREE.Vector3(), r: 0.28, part: 'head' }],
       pos() { return g.position; },
@@ -111,7 +113,7 @@ export function createSkeletons(deps) {
         }
         continue;
       }
-      // caça eterna: direto na direção do player, sem desviar de nada
+      // caça eterna: anda na direção do player...
       const dx = player.pos.x - g.position.x, dz = player.pos.z - g.position.z;
       const dP = Math.hypot(dx, dz);
       if (dP > 1.5 && !player.dead) {
@@ -119,6 +121,17 @@ export function createSkeletons(deps) {
         g.position.z += dz / dP * SPEED * dt;
         sk.yaw = Math.atan2(dx, dz);
       }
+      // ...mas tem corpo: árvore/pedra empurra pra fora, com deslize
+      // tangencial pra contornar (sem ele, rota alinhada ao centro trava)
+      for (const o of obstaclesNear(g.position.x, g.position.z)) {
+        const ox = g.position.x - o.x, oz = g.position.z - o.z;
+        const d = Math.hypot(ox, oz), rr = o.r + 0.35;
+        if (d >= rr || d < 1e-4) continue;
+        const push = rr - d;
+        g.position.x += (ox / d) * push + (-oz / d) * push * sk.side;
+        g.position.z += (oz / d) * push + (ox / d) * push * sk.side;
+      }
+      Structures.collide(g.position, 0.35, 1.8); // paredes/ruínas também seguram
       g.position.y = heightAt(g.position.x, g.position.z);
       g.rotation.y = sk.yaw;
       // marcha procedural: coxas alternam, braços apontam pro player, queixo bate

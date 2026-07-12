@@ -19,7 +19,9 @@ function spawnServer(env = {}) {
   const proc = spawn(process.execPath, [SERVER], {
     env: {
       ...process.env, PORT: String(port), HOST_CODE: 'QA123',
-      COUNTDOWN_S: '1', NEXT_IN_S: '60', ...env,
+      COUNTDOWN_S: '1', NEXT_IN_S: '60',
+      GAS_DEFAULT: 'classica', // legado assume gás clássico; modos têm testes próprios
+      ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

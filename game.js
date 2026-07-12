@@ -1456,7 +1456,7 @@ const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL
    ================================================================ */
 const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags });
 
-const Skeletons = createSkeletons({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed, player, playerDamage, extraTargets, Pickups });
+const Skeletons = createSkeletons({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear });
 
 /* ================================================================
    BOSS 2 — O VISITANTE (alien na cratera do deserto) -> arma PLASMA
@@ -1672,7 +1672,9 @@ function tick(forceDt) {
   Grenades.update(dt, t);
   Rockets.update(dt, t);
   Pickups.update(dt, t);
-  if (!window.__BR_active) { Boss.update(dt, t); Alien.update(dt, t); Missions.update(); }
+  if (!window.__BR_active) { Boss.update(dt, t); Missions.update(); }
+  // Visitante volta ao BR quando a sala permite (playtest: "o alien sumiu")
+  if (!window.__BR_active || window.__BR_alien) Alien.update(dt, t);
   Interact.update(dt, t);
   FX.update(dt);
   Amb.update(dt, t);

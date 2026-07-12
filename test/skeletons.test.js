@@ -1,8 +1,8 @@
 /* ================================================================
    QA — ESQUELETOS caçadores.
-   Vários espalhados pelo mapa, caçam o player sem parar, atravessam
-   qualquer obstáculo (fantasmas de osso), batem de perto e morrem
-   com tiro (extraTargets). Renascem longe depois de mortos.
+   Vários espalhados pelo mapa, caçam o player sem parar, DESVIAM
+   de árvores/pedras/paredes (são esqueletos, não fantasmas), batem
+   de perto e morrem com tiro (extraTargets). Renascem longe.
    Os testes de comportamento dirigem Skeletons.update() direto —
    QA.tick com __BR_active=false acordaria os 12 soldados de IA e
    eles matam o player no meio da medição.
@@ -69,7 +69,7 @@ describe('Esqueletos (caçadores que atravessam tudo)', { skip: !CHROME && 'Chro
       `não caçou: ${r.antes.toFixed(1)}m → ${r.depois.toFixed(1)}m`);
   });
 
-  it('dado um obstáculo no caminho, então o esqueleto passa direto por dentro', async () => {
+  it('dado um obstáculo no caminho, então o esqueleto DESVIA e continua a caça', async () => {
     const r = await play(() => {
       const QA = window.QA, G = window.__game, S = G.Skeletons, sk = S.list[1];
       QA.reset(30, 30);
@@ -97,10 +97,11 @@ describe('Esqueletos (caçadores que atravessam tudo)', { skip: !CHROME && 'Chro
       return { r: obst.r, minDistObst, dInicio, dFinal };
     });
     if (r.semObstaculo) return; // mundo sem obstáculo perto neste seed — nada a validar
-    assert.ok(r.minDistObst < Math.max(0.4, r.r * 0.6),
-      `desviou do obstáculo (r=${r.r.toFixed(1)}m, passou a ${r.minDistObst.toFixed(1)}m)`);
-    // 5s a 3,1m/s ≈ 15m — colisão teria segurado/defletido a marcha
-    assert.ok(r.dFinal < r.dInicio - 12,
+    // esqueleto tem corpo: não entra no miolo da árvore/pedra
+    assert.ok(r.minDistObst > r.r * 0.55,
+      `atravessou o obstáculo (r=${r.r.toFixed(1)}m, chegou a ${r.minDistObst.toFixed(1)}m do centro)`);
+    // ...mas contorna e segue a caça (5s a 3,1m/s ≈ 15m em linha reta)
+    assert.ok(r.dFinal < r.dInicio - 8,
       `travou no obstáculo: ${r.dInicio.toFixed(1)}m → ${r.dFinal.toFixed(1)}m`);
   });
 

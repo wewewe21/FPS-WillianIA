@@ -265,6 +265,14 @@
               <label><input type="checkbox" id="fgAnimais"> Animais no mapa</label>
               <label><input type="checkbox" id="fgZumbis"> Zumbis à noite ☠</label>
               <label><input type="checkbox" id="fgCidade"> Destruição automática da cidade ☄</label>
+              <label><input type="checkbox" id="fgAlien"> Visitante alienígena 👽</label>
+              <label>Zona de gás:
+                <select id="fgGas" class="brInput">
+                  <option value="auto">sorteia o modo</option>
+                  <option value="classica">clássica — fecha pro centro</option>
+                  <option value="inversa">inversa — cresce do centro</option>
+                  <option value="off">desligada</option>
+                </select></label>
               <label>Bots na sala:
                 <select id="fgBots" class="brInput">
                   <option value="0">nenhum</option>
@@ -344,7 +352,8 @@
       if (btn) btn.addEventListener('click', () => socket.emit('requestStart'));
       const fg = { golem: document.getElementById('fgGolem'),
         animais: document.getElementById('fgAnimais'), zumbis: document.getElementById('fgZumbis'),
-        cidade: document.getElementById('fgCidade'),
+        cidade: document.getElementById('fgCidade'), alien: document.getElementById('fgAlien'),
+        gas: document.getElementById('fgGas'),
         bots: document.getElementById('fgBots'), ciclo: document.getElementById('fgCiclo') };
       const syncFlagsUI = () => {
         const isHost = INIT.id === S.hostId;
@@ -352,6 +361,8 @@
         if (fg.animais) { fg.animais.checked = S.flags.animais; fg.animais.disabled = !isHost; }
         if (fg.zumbis) { fg.zumbis.checked = !!S.flags.zumbis; fg.zumbis.disabled = !isHost; }
         if (fg.cidade) { fg.cidade.checked = S.flags.cidade !== false; fg.cidade.disabled = !isHost; }
+        if (fg.alien) { fg.alien.checked = S.flags.alien !== false; fg.alien.disabled = !isHost; }
+        if (fg.gas) { fg.gas.value = S.flags.gas || 'auto'; fg.gas.disabled = !isHost; }
         if (fg.bots) { fg.bots.value = String(S.flags.bots || 0); fg.bots.disabled = !isHost; }
         if (fg.ciclo) { fg.ciclo.value = S.flags.ciclo; fg.ciclo.disabled = !isHost; }
       };
@@ -359,8 +370,9 @@
       syncFlagsUI();
       const sendFlags = () => socket.emit('setFlags',
         { golem: fg.golem.checked, animais: fg.animais.checked, zumbis: fg.zumbis.checked,
-          cidade: fg.cidade.checked, bots: +fg.bots.value, ciclo: fg.ciclo.value });
-      for (const k of ['golem', 'animais', 'zumbis', 'cidade', 'bots', 'ciclo'])
+          cidade: fg.cidade.checked, alien: fg.alien.checked, gas: fg.gas.value,
+          bots: +fg.bots.value, ciclo: fg.ciclo.value });
+      for (const k of ['golem', 'animais', 'zumbis', 'cidade', 'alien', 'gas', 'bots', 'ciclo'])
         if (fg[k]) fg[k].addEventListener('change', sendFlags);
       const hIn = document.getElementById('brHostCode'), hBtn = document.getElementById('brHostBtn');
       if (hBtn) hBtn.addEventListener('click', () => claimHost(hIn.value));
