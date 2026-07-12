@@ -98,6 +98,12 @@ export function createCar(deps) {
           if (l > 0.72) m.color.multiplyScalar(0.72 / l);
         }
       }
+      // cor por veículo SÓ na lataria (material nomeado no cfg): o clone é
+      // obrigatório — o GLB fica em cache e é compartilhado entre os carros
+      if (cfg.bodyTint != null && obj.material && obj.material.name === cfg.bodyMaterial) {
+        obj.material = obj.material.clone();
+        obj.material.color.setHex(cfg.bodyTint);
+      }
       obj.castShadow = false; // CSM tem 4 cascatas: sombra por submalha quadruplicaria draw calls.
       obj.receiveShadow = false;
       obj.userData.importedCarModel = true;
@@ -182,6 +188,7 @@ export function createCar(deps) {
     wheels: [[1.35, -0.02, 0.82], [1.35, -0.02, -0.82], [-1.3, -0.02, 0.82], [-1.3, -0.02, -0.82]],
     wheelR: 0.42, wheelW: 0.3, force: 5200, steer: 0.5, brake: 60, grip: 2.2, awd: true, engine: 'sport',
     modelUrl: '/assets/models/mazda-rx7.v2.glb', modelYaw: Math.PI,
+    bodyTint: c, bodyMaterial: '02_-_Default', // pinta a carroceria, preserva o resto
     build: () => buildPlaceholder([1.9, 0.32, 0.88], c) });
   let cur = makeVehicle(CFG_BUGGY, 7.5, -6);
   for (const s of Structures.carSpots) {

@@ -114,6 +114,29 @@ describe('Veículos assentados e com as cores do modelo', { skip: !CHROME && 'Ch
     }
   });
 
+  it('dados os DOIS esportivos, então cada um tem lataria de cor própria (vidros/rodas preservados)', async () => {
+    const r = await h.play(async () => {
+      const G = window.QA.G;
+      await G.Car.ready;
+      const esportivos = G.Car.vehicles.filter(x => x.cfg.name === 'ESPORTIVO GT');
+      return esportivos.map(v => {
+        let lataria = null, outros = 0;
+        v.group.traverse(o => {
+          if (!o.isMesh || !o.userData.importedCarModel) return;
+          const m = o.material;
+          if (m.name === v.cfg.bodyMaterial) lataria = m.color.getHexString();
+          else outros++;
+        });
+        return { lataria, outros };
+      });
+    });
+    assert.ok(r.length >= 2, 'menos de 2 esportivos na frota');
+    const cores = new Set(r.map(x => x.lataria));
+    assert.ok(!cores.has(null) && !cores.has(undefined), 'lataria não encontrada em algum esportivo');
+    assert.ok(cores.size >= 2, `todos os esportivos com a mesma lataria: ${[...cores].join(',')}`);
+    for (const x of r) assert.ok(x.outros > 5, 'detalhes do modelo sumiram junto com o tint');
+  });
+
   it('dado o esportivo, então mantém os materiais do modelo (não vira um bloco de uma cor só)', async () => {
     const r = await h.play(async () => {
       const G = window.QA.G;
