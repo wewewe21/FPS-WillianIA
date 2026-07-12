@@ -15,6 +15,16 @@ const { Server } = require('socket.io');
 const CityProto = require('./city-destruction-protocol.js');
 
 const app = express();
+/* cache: código do jogo REVALIDA sempre (no-cache + ETag = 304 barato) —
+   sem isto o Cloudflare/navegador seguravam js antigo por 4h e o jogador
+   via a versão velha mesmo com o deploy no ar. Modelos 3D são pesados e
+   têm nome próprio versionado: podem cachear por 1 dia. */
+app.use((req, res, next) => {
+  if (req.path.startsWith('/assets/models/'))
+    res.set('Cache-Control', 'public, max-age=86400');
+  else res.set('Cache-Control', 'no-cache');
+  next();
+});
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
   'city-destruction-client.js', 'city-destruction-protocol.js'];

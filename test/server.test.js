@@ -301,6 +301,21 @@ describe('Combate', () => {
   });
 
 /* =============== LOOT =============== */
+describe('Cache HTTP (atualizações chegam nos jogadores)', () => {
+  it('dado o código do jogo, então revalida sempre; modelos pesados podem cachear', async t => {
+    // bug de playtest: sem cache-control da origem, o Cloudflare/navegador
+    // seguravam js antigo por 4h — deploy no ar e jogador vendo carro velho
+    const srv = await spawnServer(); t.after(() => srv.stop());
+    const h = async p => (await fetch(`http://localhost:${srv.port}${p}`)).headers;
+    for (const p of ['/', '/game.js', '/js/car.js', '/br-game.js']) {
+      const cc = (await h(p)).get('cache-control') || '';
+      assert.match(cc, /no-cache/, `${p} sem no-cache (ficaria 4h preso no edge/navegador): "${cc}"`);
+    }
+    const glb = (await h('/assets/models/mazda-rx7.optimized.glb')).get('cache-control') || '';
+    assert.match(glb, /max-age=[1-9]/, `modelo sem cache longo: "${glb}"`);
+  });
+});
+
 describe('Loot', () => {
   it('dado um baú, então abre uma única vez e avisa os outros', async t => {
     const { clients } = await playing(t, 2);
