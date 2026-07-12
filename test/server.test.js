@@ -315,6 +315,24 @@ describe('Loot', () => {
     assert.equal(r2.opened, true);
   });
 
+  it('dado o fim da partida, então o lobby seguinte não herda os baús da rodada anterior', async t => {
+    const rankFile = path.join('/tmp', `fps-chest-reset-${process.pid}-${Date.now()}.json`);
+    const { clients, srv } = await playing(t, 2, { NEXT_IN_S: '1', RANK_FILE: rankFile });
+    const [a, b] = clients;
+    const opened = await ack(a.s, 'openChest', { key: 'c1' });
+    assert.equal(opened.ok, true);
+
+    const nextMatch = once(a.s, 'nextMatch');
+    a.s.emit('died', { killerId: b.init.id, weapon: 'QA' });
+    await nextMatch;
+
+    const reloaded = await connect(srv.port);
+    t.after(() => reloaded.s.close());
+    assert.equal(reloaded.init.phase, 'LOBBY');
+    assert.deepEqual(reloaded.init.openedChests, [],
+      'o init do lobby recarregado ainda trouxe baús abertos da partida encerrada');
+  });
+
   it('dado o baú do boss, então só abre depois do GOLEM morrer', async t => {
     const { clients } = await playing(t, 2);
     const [a, b] = clients;
