@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 
 export function createGrass(deps) {
-  const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY } = deps;
+  const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO } = deps;
   const N = CFG.GRASS_CHUNKS;                       // grade NxN
   const SIZE = CFG.GRASS_CHUNK_SIZE;
   const PER_CHUNK = Math.floor(CFG.GRASS_TOTAL / (N * N));
@@ -162,6 +162,8 @@ export function createGrass(deps) {
       // distrito urbano é asfalto: grama não brota no perímetro da cidade
       // (escala ~zero: até lâmina de 1,5cm pontilhava verde no chão claro)
       if (CITY && Math.hypot(wx + lx - CITY.x, wz + lz - CITY.z) < 92) s = 0.0001;
+      // cone do vulcão é rocha nua: grama não brota na encosta
+      if (VOLCANO && Math.hypot(wx + lx - VOLCANO.x, wz + lz - VOLCANO.z) < VOLCANO.r * 0.95) s = 0.0001;
       dummy.scale.set(rand(0.8, 1.25), s, 1);
       dummy.updateMatrix();
       chunk.mesh.setMatrixAt(i, dummy.matrix);

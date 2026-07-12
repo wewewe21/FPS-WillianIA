@@ -25,6 +25,7 @@ import { createPickups } from './js/pickups.js';
 import { createEnv } from './js/env.js';
 import { createWater } from './js/water.js';
 import { createGrass } from './js/grass.js';
+import { createVolcano } from './js/volcano.js';
 import { createEnemies } from './js/enemies.js';
 import { createBoss } from './js/boss.js';
 import { createAmb } from './js/amb.js';
@@ -62,7 +63,7 @@ if (window.io) {
 
 
 const { simplex, heightAt, buildHeightGrid, groundAt, slopeAt, terrainNormal, biomeAt,
-  platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY } = createTerrain({ lerp, clamp });
+  platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY, VOLCANO } = createTerrain({ lerp, clamp });
 
 const SFX = createSFX({ SETTINGS, clamp, rand });
 
@@ -194,6 +195,7 @@ const COL_ROCK    = new THREE.Color(0x8d8f96);
 const COL_DIRT    = new THREE.Color(0x9a7e54);
 const COL_FOREST  = new THREE.Color(0x3e7a31);
 const COL_SNOW    = new THREE.Color(0xe8eef4);
+const COL_BASALT  = new THREE.Color(0x241d1a); // rocha vulcânica escura
 
 let terrainMesh;
 {
@@ -217,6 +219,10 @@ let terrainMesh;
     if (slope > 0.7) c.lerp(COL_ROCK, THREE.MathUtils.smoothstep(slope, 0.7, 1.05));   // rocha
     if (h > 17) c.lerp(COL_ROCK, THREE.MathUtils.smoothstep(h, 17, 26));               // topos rochosos
     if (h > 21) c.lerp(COL_SNOW, THREE.MathUtils.smoothstep(h, 21, 28));               // picos nevados
+    // vulcão: basalto escuro cobre neve/rocha clara (casa com o modelo 3D)
+    const dVol = Math.hypot(x - VOLCANO.x, z - VOLCANO.z);
+    if (dVol < VOLCANO.r * 1.15)
+      c.lerp(COL_BASALT, 0.9 * (1 - THREE.MathUtils.smoothstep(dVol, VOLCANO.r * 0.8, VOLCANO.r * 1.15)));
     const dCity = Math.hypot(x - CITY.x, z - CITY.z);
     if (dCity < 62) c.lerp(COL_ROCK, 0.55).multiplyScalar(0.55);                       // asfalto urbano
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
@@ -236,7 +242,7 @@ const Water = createWater({ CFG, WATER_LEVEL, scene, sunDir });
    GRAMA REATIVA — InstancedMesh em chunks que acompanham o player.
    Vento no vertex shader + dobra quando player/carro passam.
    ================================================================ */
-const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY });
+const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO });
 
 /* ================================================================
    VEGETAÇÃO — árvores (2 LODs), pedras e flores, tudo InstancedMesh
@@ -1317,6 +1323,8 @@ function playerDamage(dmg, fromPos) {
   }
 }
 
+const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat });
+
 const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys });
 
 const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos });
@@ -1636,6 +1644,7 @@ function tick(forceDt) {
     FX.update(dt);
     Amb.update(dt, menuT);
     Water.update(menuT);
+    Volcano.update(dt, menuT);
     if (sky.material.uniforms.time) sky.material.uniforms.time.value = menuT;
     camera.updateMatrixWorld();
     csm.update();
@@ -1664,6 +1673,7 @@ function tick(forceDt) {
   FX.update(dt);
   Amb.update(dt, t);
   Water.update(t);
+  Volcano.update(dt, t);
 
   /* áudio de clima (chuva) */
   SFX.musicUpdate();
@@ -1770,7 +1780,7 @@ window.addEventListener('resize', () => {
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
-  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass,
+  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
