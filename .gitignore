@@ -1,0 +1,13 @@
+node_modules/
+.agents/
+.claude/
+skills-lock.json
+.venv/
+docker-compose.prod.yml
+docker-compose.override*.yml
+.env
+
+# modelos-fonte dos carros (pesados) — só os otimizados em assets/models vao pro repo
+/gumball_car.glb
+/low-poly_truck_car_drifter.glb
+/mazda_rx7_stylised.glb
