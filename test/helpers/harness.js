@@ -12,7 +12,10 @@ const CHROME = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr
 async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} }) {
   const puppeteer = require('puppeteer-core');
   const srv = spawn(process.execPath, [path.join(__dirname, '..', '..', 'server.js')], {
-    env: { ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed, ...extraEnv },
+    // GAS_DEFAULT clássico: testes determinísticos (o 'auto' de produção sorteia
+    // modo por partida; os modos novos têm testes dedicados que setam a flag)
+    env: { ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed,
+      GAS_DEFAULT: 'classica', ...extraEnv },
     stdio: 'ignore',
   });
   await new Promise(r => setTimeout(r, 800));

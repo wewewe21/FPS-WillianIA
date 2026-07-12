@@ -416,6 +416,8 @@
     }
     function updateZone() {
       if (!S.plan) return;
+      if (S.plan.gas === 'off' || !S.plan.zone.length) { zc.label = '☮ sem gás nesta partida'; return; }
+      const inv = S.plan.gas === 'inversa';
       const t = S.matchT();
       const ph = S.plan.zone;
       const first = ph[0];
@@ -430,7 +432,7 @@
         zc.x = last.nx; zc.z = last.nz; zc.r = last.r1;
         zc.nx = last.nx; zc.nz = last.nz; zc.nr = last.r1;
         zc.dps = last.dps + 3;
-        zc.label = '☠ ZONA FINAL';
+        zc.label = inv ? '☠ GÁS NO MÁXIMO — viva nas bordas' : '☠ ZONA FINAL';
         zc.shrinking = false;
         return;
       }
@@ -438,12 +440,12 @@
         zc.x = cur.cx + (cur.nx - cur.cx) * k;
         zc.z = cur.cz + (cur.nz - cur.cz) * k;
         zc.r = cur.r0 + (cur.r1 - cur.r0) * k;
-        zc.label = '⚠ ZONA FECHANDO';
+        zc.label = inv ? '⚠ GÁS CRESCENDO' : '⚠ ZONA FECHANDO';
       } else {
         zc.x = cur.cx; zc.z = cur.cz; zc.r = cur.r0;
         zc.closesIn = Math.max(0, cur.tWaitEnd - t);
         const m = Math.floor(zc.closesIn / 60), s = Math.floor(zc.closesIn % 60);
-        zc.label = `⭘ zona fecha em ${m}:${String(s).padStart(2, '0')}`;
+        zc.label = `⭘ ${inv ? 'gás cresce' : 'zona fecha'} em ${m}:${String(s).padStart(2, '0')}`;
       }
       zc.nx = cur.nx; zc.nz = cur.nz; zc.nr = cur.r1;
       zc.dps = cur.dps;
@@ -454,29 +456,23 @@
       const Ssz = UI.zoneMapC.width;
       const W = (v) => (v + LIM) / (2 * LIM) * Ssz;
       const P = MP.player.pos;
-      const fora = S.plan && Math.hypot(P.x - zc.x, P.z - zc.z) > zc.r;
+      const inv = S.plan && S.plan.gas === 'inversa';
+      const semGas = S.plan && (S.plan.gas === 'off' || !S.plan.zone.length);
+      const dz = Math.hypot(P.x - zc.x, P.z - zc.z);
+      const fora = S.plan && !semGas && (inv ? dz < zc.r : dz > zc.r);
       c2.clearRect(0, 0, Ssz, Ssz);
-      // fundo: avermelha quando VOCÊ está fora da safe
+      // fundo: avermelha quando VOCÊ está no gás
       c2.fillStyle = fora && S.phase === 'PLAY' ? 'rgba(70,18,14,.9)' : 'rgba(20,30,26,.85)';
       c2.fillRect(0, 0, Ssz, Ssz);
-      if (S.plan) {
-        // área SAFE preenchida (clara) + borda branca
-        c2.fillStyle = 'rgba(160,255,190,.14)';
+      if (S.plan && !semGas) {
+        // círculo preenchido: SAFE clara (clássica) ou GÁS vermelho (inversa)
+        c2.fillStyle = inv ? 'rgba(255,90,60,.20)' : 'rgba(160,255,190,.14)';
         c2.beginPath(); c2.arc(W(zc.x), W(zc.z), zc.r / (2 * LIM) * Ssz, 0, Math.PI * 2); c2.fill();
         c2.strokeStyle = 'rgba(255,255,255,.9)'; c2.lineWidth = 1.6;
         c2.beginPath(); c2.arc(W(zc.x), W(zc.z), zc.r / (2 * LIM) * Ssz, 0, Math.PI * 2); c2.stroke();
         c2.strokeStyle = 'rgba(126,224,129,.95)'; c2.lineWidth = 1.3;
         c2.beginPath(); c2.arc(W(zc.nx), W(zc.nz), zc.nr / (2 * LIM) * Ssz, 0, Math.PI * 2); c2.stroke();
-        if (S.phase === 'SHIP' || S.phase === 'FALL') { // rota da nave
-          c2.strokeStyle = 'rgba(45,214,196,.7)';
-          c2.setLineDash([3, 3]);
-          c2.beginPath();
-          c2.moveTo(W(S.plan.ship.from[0]), W(S.plan.ship.from[1]));
-          c2.lineTo(W(S.plan.ship.to[0]), W(S.plan.ship.to[1]));
-          c2.stroke();
-          c2.setLineDash([]);
-        }
-        if (fora) { // seta VOCÊ → safe (caminho mais curto)
+        if (fora) { // seta VOCÊ → safe (borda radial: vale pra clássica e inversa)
           const ang = Math.atan2(zc.z - P.z, zc.x - P.x);
           const px = W(P.x), pz = W(P.z);
           const bx = W(zc.x + Math.cos(ang + Math.PI) * zc.r), bz = W(zc.z + Math.sin(ang + Math.PI) * zc.r);
@@ -485,6 +481,15 @@
           c2.beginPath(); c2.moveTo(px, pz); c2.lineTo(bx, bz); c2.stroke();
           c2.setLineDash([]);
         }
+      }
+      if (S.plan && (S.phase === 'SHIP' || S.phase === 'FALL')) { // rota da nave (mesmo sem gás)
+        c2.strokeStyle = 'rgba(45,214,196,.7)';
+        c2.setLineDash([3, 3]);
+        c2.beginPath();
+        c2.moveTo(W(S.plan.ship.from[0]), W(S.plan.ship.from[1]));
+        c2.lineTo(W(S.plan.ship.to[0]), W(S.plan.ship.to[1]));
+        c2.stroke();
+        c2.setLineDash([]);
       }
       if (boss && boss.alive) {
         c2.fillStyle = '#ffb03c';
@@ -847,7 +852,7 @@
         try { for (const a of G.Animals.list) { a.alive = false; if (a.group) a.group.visible = false; } }
         catch (e) { /* módulo ausente: segue */ }
       }
-      buildZoneWall();
+      if (S.plan && S.plan.gas !== 'off') buildZoneWall(); // sala pode desligar o gás
       buildCrates();
       buildBoss();
       if (!ship) ship = buildShip();
@@ -891,6 +896,7 @@
       S.myKills = 0; S.myPlacement = 0; recapShown = false; myDeathInfo = null;
       bossDeadFlag = !S.flags.golem; // GOLEM desligado pela regra da sala: nem constrói
       window.__BR_zumbis = !!S.flags.zumbis;
+      window.__BR_alien = S.flags.alien !== false; // Visitante de volta ao BR (regra da sala)
       sendCity(d.plan.city ? { ...d.plan.city, state: 'intact' } : null);
       bossHp = bossMaxHp = d.plan.boss.hp;
       beginMatch(false);
@@ -1230,7 +1236,8 @@
       }
 
       /* zona */
-      if (S.plan && (S.phase === 'PLAY' || S.phase === 'FALL' || S.phase === 'SHIP' || S.phase === 'SPECT')) {
+      if (S.plan && S.plan.gas !== 'off' &&
+          (S.phase === 'PLAY' || S.phase === 'FALL' || S.phase === 'SHIP' || S.phase === 'SPECT')) {
         updateZone();
         if (zoneWall) {
           zoneWall.position.x = zc.x; zoneWall.position.z = zc.z;
@@ -1243,11 +1250,16 @@
           dmgAcc = 0;
           const P = MP.player.pos;
           const dz = Math.hypot(P.x - zc.x, P.z - zc.z);
-          const fora = S.phase === 'PLAY' && !MP.player.dead && dz > zc.r && !MP.state.cinematic;
-          UI.gasTint.style.opacity = fora ? '1' : '0'; // tela avermelha FORA da safe
+          // gás mata onde o gás está: fora do círculo (clássica) / dentro (inversa)
+          const dentroDoGas = S.plan.gas === 'inversa' ? dz < zc.r : dz > zc.r;
+          const fora = S.phase === 'PLAY' && !MP.player.dead && dentroDoGas && !MP.state.cinematic;
+          UI.gasTint.style.opacity = fora ? '1' : '0'; // tela avermelha DENTRO do gás
           if (fora)
             MP.playerDamage(zc.dps * 0.5, null); // se alguém me feriu há pouco, a kill ainda é dele
         }
+      } else if (S.plan && S.plan.gas === 'off') {
+        zc.label = '☮ sem gás nesta partida';
+        if (UI.gasTint.style.opacity !== '0') UI.gasTint.style.opacity = '0';
       }
 
       bossStep(dt);

@@ -28,7 +28,8 @@ app.use((req, res, next) => {
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
   'city-destruction-client.js', 'city-destruction-protocol.js'];
-const MODEL_ASSETS = ['gumball-car.optimized.glb', 'truck-drifter.optimized.glb', 'mazda-rx7.v2.glb'];
+const MODEL_ASSETS = ['gumball-car.optimized.glb', 'truck-drifter.optimized.glb', 'mazda-rx7.v2.glb',
+  'volcano.v1.glb', 'skeleton.v1.glb'];
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
 for (const f of MODEL_ASSETS)
@@ -111,6 +112,10 @@ const FLOAT_AFTER_S = BR_FAST ? 3 : 60;  // "nunca pousou" vale a partir daqui
 const AFK_MS = BR_FAST ? 4000 : 45000;
 const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
 const CLAIM_COOLDOWN_MS = Math.max(500, +process.env.CLAIM_COOLDOWN_MS || 30000);
+// GAS_DEFAULT (QA): fixa o modo inicial do gás — os testes legados assumem a
+// clássica; em produção o padrão é 'auto' (cada partida sorteia o modo)
+const GAS_DEFAULT = ['auto', 'classica', 'inversa', 'off'].includes(process.env.GAS_DEFAULT)
+  ? process.env.GAS_DEFAULT : 'auto';
 const CITY_DELAY_MS = Math.max(500, +process.env.CITY_DESTRUCTION_DELAY_MS || CityProto.DELAY_DEFAULT);
 const CITY_IMPACT_MS = Math.max(300, +process.env.CITY_DESTRUCTION_IMPACT_DELAY_MS || CityProto.IMPACT_DELAY_DEFAULT);
 
@@ -127,7 +132,7 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
-  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true }, // regras da sala (só o host altera)
+  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true }, // regras da sala (só o host altera)
   cityDestruction: { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null },
   countdownTimer: null, endTimer: null,
 };
@@ -148,7 +153,7 @@ function freeCarsOf(id) {
   }
 }
 
-function buildPlan(seed) {
+function buildPlan(seed, gasMode = 'classica') {
   const rng = mulberry32(seed ^ 0x9E3779B9);
   // nave: atravessa o mapa passando perto do centro
   const a = rng() * Math.PI * 2;
@@ -157,14 +162,31 @@ function buildPlan(seed) {
     to: [-Math.cos(a) * 620 + (rng() - 0.5) * 300, -Math.sin(a) * 620 + (rng() - 0.5) * 300],
     alt: 250, flyTime: FLY_TIME,
   };
-  // zona: 5 fases encolhendo; cada centro cabe dentro do círculo anterior
-  const radii = [560, 340, 200, 110, 55, 24];
-  const waits = [50, 45, 40, 35, 30];   // s parado antes de encolher
-  const shrinks = [30, 28, 24, 20, 16]; // s encolhendo
+  // flag da sala: gás pode ser sorteado, invertido ou desligado (playtest:
+  // "fechando de fora pra dentro sempre fica chato" + vulcão no canto)
+  const gas = gasMode === 'auto' ? (rng() < 0.55 ? 'classica' : 'inversa') : gasMode;
+  if (gas === 'off') return { ship, zone: [], gas, boss: { hp: 3600 } };
+  // ritmo folgado: dá pra explorar o mapa antes do gás apertar
+  const waits = [110, 80, 65, 50, 40];  // s parado antes de mexer
+  const shrinks = [40, 32, 26, 22, 18]; // s em movimento
   const dps = [1, 2, 4, 7, 12];
-  let cx = (rng() - 0.5) * 300, cz = (rng() - 0.5) * 300;
   const phases = [];
-  let t = ship.flyTime + 20; // gás só começa a contar depois da queda
+  let t = ship.flyTime + 30; // gás só começa a contar depois da queda
+  if (gas === 'inversa') {
+    // gás nasce pequeno no centro e cresce: o endgame é nas BORDAS do mapa
+    // (centro fixo perto do meio — os 4 cantos, vulcão incluso, sobram)
+    const radii = [16, 70, 150, 240, 360, 480];
+    const cx = (rng() - 0.5) * 120, cz = (rng() - 0.5) * 120;
+    for (let i = 0; i < 5; i++) {
+      phases.push({ cx, cz, r0: radii[i], nx: cx, nz: cz, r1: radii[i + 1],
+        tWaitEnd: t + waits[i], tShrinkEnd: t + waits[i] + shrinks[i], dps: dps[i] });
+      t += waits[i] + shrinks[i];
+    }
+    return { ship, zone: phases, gas, boss: { hp: 3600 } };
+  }
+  // clássica: 5 fases encolhendo; cada centro cabe dentro do círculo anterior
+  const radii = [560, 340, 200, 110, 55, 24];
+  let cx = (rng() - 0.5) * 300, cz = (rng() - 0.5) * 300;
   for (let i = 0; i < 5; i++) {
     const r0 = radii[i], r1 = radii[i + 1];
     const ang = rng() * Math.PI * 2, d = rng() * Math.max(0, r0 - r1) * 0.8;
@@ -174,7 +196,7 @@ function buildPlan(seed) {
     t += waits[i] + shrinks[i];
     cx = nx; cz = nz;
   }
-  return { ship, zone: phases, boss: { hp: 3600 } };
+  return { ship, zone: phases, gas, boss: { hp: 3600 } };
 }
 
 /* loot dos baús — rolado no servidor (anti-trapaça leve) */
@@ -233,7 +255,7 @@ function startMatch() {
   match.phase = 'PLAYING';
   match.num++;
   match.t0 = Date.now();
-  match.plan = buildPlan(match.seed);
+  match.plan = buildPlan(match.seed, match.flags.gas);
   resetRoundState();
   match.plan.flags = { ...match.flags }; // congela as regras da partida
   // destruição da cidade: timestamps ABSOLUTOS do servidor (fonte de verdade)
@@ -370,6 +392,8 @@ function shipPosAt(t, plan = match.plan) {
 
 function zoneAt(t, plan = match.plan) {
   const ph = plan.zone;
+  if (!ph || !ph.length) return null; // gás desligado pela sala
+  const inversa = plan.gas === 'inversa';
   let cur = null, shrinking = false, k = 0;
   for (const p of ph) {
     if (t < p.tWaitEnd) { cur = p; break; }
@@ -377,13 +401,13 @@ function zoneAt(t, plan = match.plan) {
   }
   if (!cur) {
     const last = ph[ph.length - 1];
-    return { x: last.nx, z: last.nz, r: last.r1, dps: last.dps + 3 };
+    return { x: last.nx, z: last.nz, r: last.r1, dps: last.dps + 3, inversa };
   }
   if (shrinking) return {
     x: cur.cx + (cur.nx - cur.cx) * k, z: cur.cz + (cur.nz - cur.cz) * k,
-    r: cur.r0 + (cur.r1 - cur.r0) * k, dps: cur.dps,
+    r: cur.r0 + (cur.r1 - cur.r0) * k, dps: cur.dps, inversa,
   };
-  return { x: cur.cx, z: cur.cz, r: cur.r0, dps: cur.dps };
+  return { x: cur.cx, z: cur.cz, r: cur.r0, dps: cur.dps, inversa };
 }
 setInterval(() => {
   if (match.phase !== 'PLAYING' || !match.plan) return;
@@ -394,10 +418,12 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, p] of players) {
     if (p.spectator || !p.alive) continue;
-    const outside = Math.hypot(p.pos[0] - zone.x, p.pos[2] - zone.z) > zone.r + 1;
+    const dz = zone ? Math.hypot(p.pos[0] - zone.x, p.pos[2] - zone.z) : 0;
+    // gás mata onde o gás está: fora do círculo (clássica) ou dentro (inversa)
+    const inGas = zone ? (zone.inversa ? dz < zone.r - 1 : dz > zone.r + 1) : false;
     const floating = p.pos[1] > 120 && t > flyT + FLOAT_AFTER_S; // nunca pousou
     const afk = now - (p.lastState || match.t0) > AFK_MS;        // parou de mandar estado
-    if (outside || floating) p.zoneHp -= zone.dps * ZONE_DRAIN_X + (floating ? 6 : 0);
+    if (inGas || floating) p.zoneHp -= (zone ? zone.dps : 4) * ZONE_DRAIN_X + (floating ? 6 : 0);
     else if (afk) p.zoneHp -= 25;
     else p.zoneHp = Math.min(ZONE_HP, p.zoneHp + 8);
     if (p.zoneHp <= 0) {
@@ -409,7 +435,7 @@ setInterval(() => {
         killerId: null, killerNick: null, killerKills: 0,
         weapon: 'ZONA', byZone: true, placement: p.placement,
       });
-      console.log(`[ZONA] servidor eliminou ${p.nick} (fora=${outside} voando=${floating} afk=${afk})`);
+      console.log(`[ZONA] servidor eliminou ${p.nick} (gás=${inGas} voando=${floating} afk=${afk})`);
       broadcastRoster();
       checkVictory();
       if (match.phase !== 'PLAYING') break; // partida acabou dentro do loop
@@ -490,7 +516,9 @@ io.on('connection', socket => {
     if (typeof d.animais === 'boolean') match.flags.animais = d.animais;
     if (typeof d.zumbis === 'boolean') match.flags.zumbis = d.zumbis;
     if (typeof d.cidade === 'boolean') match.flags.cidade = d.cidade;
+    if (typeof d.alien === 'boolean') match.flags.alien = d.alien;
     if (['auto', 'dia', 'noite'].includes(d.ciclo)) match.flags.ciclo = d.ciclo;
+    if (['auto', 'classica', 'inversa', 'off'].includes(d.gas)) match.flags.gas = d.gas;
     if (Number.isInteger(d.bots)) {
       const n = Math.max(0, Math.min(8, d.bots));
       if (n !== match.flags.bots) { match.flags.bots = n; syncBots(); }
@@ -732,7 +760,7 @@ io.on('connection', socket => {
     if (hostId === socket.id) hostId = null;
     freeCarsOf(socket.id);
     if (players.size === 0) { // sala vazia: sessão volta ao estado de fábrica
-      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true };
+      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true };
       match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
       if (match.phase === 'COUNTDOWN' && match.countdownTimer) clearInterval(match.countdownTimer);
       if (match.phase !== 'PLAYING' && match.phase !== 'ENDED') match.phase = 'LOBBY';
