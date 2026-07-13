@@ -171,3 +171,13 @@ ou enterrado — inimigos, animais, pickups, veículos e bosses comparados com o
 chão real (groundAt), no spawn e após 5s de IA andando; reporta TODOS os
 violadores. O detector foi validado plantando um inimigo a 12m do chão
 (acusou na hora). Resultado no jogo: **zero violadores** nos dois cenários.
+
+## Bugs mapeados na exploração de personagens/inimigos (Bugs #40–42)
+
+Mapeamento de falhas relatadas em exploração visual e jogabilidade no modo Battle Royale:
+
+| # | Sev. | Área | Bug relatado / Sintoma | Arquivo(s) | Causa Raiz Mapeada |
+|---|------|------|------------------------|------------|---------------------|
+| 40 | 🟠 alta | IA / BR | **7 Esqueletos parados sem movimento**: os esqueletos ficam imóveis no mapa como estátuas durante partidas BR | `game.js:1692`<br>`js/skeletons.js:66-99` | No modo Battle Royale (`window.__BR_active = true`), o loader GLTF carrega assincronamente e instancia os 7 esqueletos no terreno com `sk.group.visible = true` e `sk.alive = true`. Porém, em `game.js`, o update é bloqueado por `if (!window.__BR_active) Skeletons.update(dt, t);`, deixando-os visíveis porém congelados no BR. |
+| 41 | 🟠 alta | Boss / BR | **Boss do Castelo andando de ré e sem atirar**: o GOLEM patrulha o forte virado para trás e não dispara projéteis à distância | `br-game.js:657-681`<br>`br-game.js:708-726` | **Andando de ré**: a malha do GOLEM é construída voltada para `-Z` (`core` em `Z = -0.85`), mas `bossStep()` define `group.rotation.y = Math.atan2(fwx, fwz)` (que assume frente em `+Z`), girando a frente 180° para trás do sentido do trajeto.<br>**Sem atirar**: o boss do BR só possui ataque corpo a corpo em área (`d < 8`), sem disparo à distância (`fireOrb`) como o boss do modo solo. |
+| 42 | 🟡 média | Jogabilidade / Áudio | **Tomando dano sem saber de onde / sensação de "bots invisíveis"** ao explorar o mapa | `js/animals.js:116-121`<br>`br-game.js:1248-1259` | **Lobos silenciosos**: lobos (`makeAnimal(true)`) continuam ativos no BR e caçam em raio de 24m. Por terem modelo pequeno (~0.5m) e **não emitirem som ao morder** (`playerDamage` sem chamada a `SFX.bite/growl`), atacam de surpresa no mato. Além disso, mortes por lobo no BR reportam `"morreu pro gás"` no kill feed, criando a sensação de dano fantasma ou bot invisível. |

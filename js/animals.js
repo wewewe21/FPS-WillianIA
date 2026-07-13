@@ -2,8 +2,29 @@
 import * as THREE from 'three';
 
 export function createAnimals(deps) {
-  const { clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups } = deps;
+  const { clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups,
+    Structures = null, obstaclesNear = null, SFX = null } = deps;
   const list = [];
+  const _biteFrom = new THREE.Vector3(), _biteTo = new THREE.Vector3();
+
+  function biteBlocked(a) {
+    _biteFrom.copy(a.group.position); _biteFrom.y += 0.55 * a.size;
+    _biteTo.copy(player.pos); _biteTo.y += 0.7;
+    if (Structures && typeof Structures.segBlocked === 'function' && Structures.segBlocked(_biteFrom, _biteTo)) return true;
+    if (typeof obstaclesNear !== 'function') return false;
+
+    const dx = _biteTo.x - _biteFrom.x, dz = _biteTo.z - _biteFrom.z;
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 1e-6) return false;
+    const mx = (_biteFrom.x + _biteTo.x) * 0.5, mz = (_biteFrom.z + _biteTo.z) * 0.5;
+    for (const o of obstaclesNear(mx, mz)) {
+      const k = clamp(((o.x - _biteFrom.x) * dx + (o.z - _biteFrom.z) * dz) / len2, 0, 1);
+      const nx = _biteFrom.x + dx * k, nz = _biteFrom.z + dz * k;
+      const ox = nx - o.x, oz = nz - o.z;
+      if (ox * ox + oz * oz < o.r * o.r) return true;
+    }
+    return false;
+  }
   function quadruped(color, size, predator) {
     const g = new THREE.Group();
     const mat = csmMat(new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
@@ -63,8 +84,9 @@ export function createAnimals(deps) {
     g.position.set(s.x, heightAt(s.x, s.z), s.z);
     const a = {
       predator, size, group: g, legs,
-      alive: true, hp: predator ? 70 : 40,
+      alive: true, enabled: true, hp: predator ? 70 : 40,
       yaw: rand(TAU), phase: rand(TAU), speedF: 0,
+      side: list.length % 2 ? 1 : -1,
       wander: rand(3, 8), biteT: 0, deadT: 0,
       sph: [{ c: new THREE.Vector3(), r: 0.55 * size, part: 'body' }, { c: new THREE.Vector3(), r: 0.24 * size, part: 'head' }],
       pos() { return g.position; },
@@ -76,7 +98,7 @@ export function createAnimals(deps) {
         return this.sph;
       },
       damage(dmg, hitPos, dir, head) {
-        if (!this.alive) return false;
+        if (!this.alive || !this.enabled) return false;
         this.hp -= dmg;
         this.fleeing = 6; // tomou tiro: foge (ou ataca, se lobo)
         if (this.hp <= 0) {
@@ -99,6 +121,7 @@ export function createAnimals(deps) {
   function update(dt, t) {
     for (const a of list) {
       const g = a.group;
+      if (!a.enabled) continue;
       if (!a.alive) { // tomba de lado e some
         a.deadT += dt;
         g.rotation.z = Math.min(Math.PI / 2, a.deadT * 3);
@@ -108,18 +131,26 @@ export function createAnimals(deps) {
           g.rotation.z = 0;
           a.hp = a.predator ? 70 : 40;
           a.alive = true;
+          g.visible = true;
         }
         continue;
       }
       const dP = g.position.distanceTo(player.pos);
+      const moveStartX = g.position.x, moveStartZ = g.position.z;
       let tx = null, tz = null, speed = 0;
       if (a.predator && dP < 24 && !player.dead) { // lobo caça
         tx = player.pos.x; tz = player.pos.z; speed = 4.4;
-        if (dP < 1.7 && a.biteT <= 0) {
+        if (dP < 1.7 && a.biteT <= 0 && !biteBlocked(a)) {
           a.biteT = 1.2;
-          playerDamage(8 + (Math.random() * 5 | 0), g.position);
+          playerDamage(8 + (Math.random() * 5 | 0), g.position, { type: 'animal' });
+          if (SFX && typeof SFX.groan === 'function') SFX.groan();
         }
       } else if (!a.predator && (dP < 12 || a.fleeing > 0)) { // cervo foge
+        if (dP < 1.6 && a.biteT <= 0 && !biteBlocked(a)) { // encurralado: cabeçada/chifrada defensiva
+          a.biteT = 1.5;
+          playerDamage(6 + (Math.random() * 4 | 0), g.position, { type: 'animal' });
+          if (SFX && typeof SFX.groan === 'function') SFX.groan();
+        }
         tx = g.position.x + (g.position.x - player.pos.x);
         tz = g.position.z + (g.position.z - player.pos.z);
         speed = 5.2;
@@ -148,13 +179,35 @@ export function createAnimals(deps) {
           a.yaw += dy * Math.min(1, 6 * dt);
         }
       }
+      if (typeof obstaclesNear === 'function') for (const o of obstaclesNear(g.position.x, g.position.z)) {
+        let ox = g.position.x - o.x, oz = g.position.z - o.z;
+        let d = Math.hypot(ox, oz);
+        const rr = o.r + 0.28 * a.size;
+        if (d >= rr) continue;
+        if (d < 1e-4) { ox = a.side; oz = 0; d = 1; }
+        const push = rr - d;
+        const nx = ox / d, nz = oz / d;
+        g.position.x += nx * push - nz * push * a.side * 0.45;
+        g.position.z += nz * push + nx * push * a.side * 0.45;
+      }
+      if (Structures && typeof Structures.collide === 'function') Structures.collide(g.position, 0.28 * a.size, 1.1 * a.size);
       g.position.y = heightAt(g.position.x, g.position.z);
-      g.rotation.y = a.yaw;
+      const movedX = g.position.x - moveStartX, movedZ = g.position.z - moveStartZ;
+      if (movedX * movedX + movedZ * movedZ > 1e-8) a.yaw = Math.atan2(movedX, movedZ);
+      // A malha foi construída olhando para +X; a IA usa yaw 0 como movimento +Z.
+      g.rotation.y = a.yaw - Math.PI / 2;
       a.phase += dt * (2 + spd * 2.6);
       const sw = Math.sin(a.phase * 2.4) * 0.55 * clamp(spd / 4, 0.12, 1);
       a.legs[0].rotation.x = sw; a.legs[3].rotation.x = sw;
       a.legs[1].rotation.x = -sw; a.legs[2].rotation.x = -sw;
     }
   }
-  return { update, list };
+  function setEnabled(enabled) {
+    const on = !!enabled;
+    for (const a of list) {
+      a.enabled = on;
+      a.group.visible = on && a.alive;
+    }
+  }
+  return { update, list, setEnabled };
 }

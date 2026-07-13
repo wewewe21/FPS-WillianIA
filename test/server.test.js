@@ -7,7 +7,9 @@
 'use strict';
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const { spawn } = require('node:child_process');
+const os = require('node:os');
 const path = require('node:path');
 const { io } = require('socket.io-client');
 
@@ -16,10 +18,15 @@ let nextPort = 21000 + (process.pid % 500) * 10;
 
 function spawnServer(env = {}) {
   const port = nextPort++;
+  const rankFile = env.RANK_FILE || path.join(os.tmpdir(),
+    `fps-server-rank-${process.pid}-${port}-${Date.now()}.json`);
+  const removeRankFile = !env.RANK_FILE;
   const proc = spawn(process.execPath, [SERVER], {
     env: {
       ...process.env, PORT: String(port), HOST_CODE: 'QA123',
-      COUNTDOWN_S: '1', NEXT_IN_S: '60', ...env,
+      COUNTDOWN_S: '1', NEXT_IN_S: '60',
+      GAS_DEFAULT: 'classica', // legado assume gás clássico; modos têm testes próprios
+      RANK_FILE: rankFile, ...env,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -28,7 +35,18 @@ function spawnServer(env = {}) {
     proc.stdout.on('data', d => {
       if (String(d).includes('Servidor BR no ar')) {
         clearTimeout(to);
-        res({ port, proc, stop: () => proc.kill() });
+        res({
+          port, proc,
+          stop: () => new Promise(resolve => {
+            const done = () => {
+              if (removeRankFile) fs.rmSync(rankFile, { force: true });
+              resolve();
+            };
+            if (proc.exitCode !== null) return done();
+            proc.once('exit', done);
+            proc.kill();
+          }),
+        });
       }
     });
     proc.on('exit', c => rej(new Error('servidor morreu cedo, código ' + c)));
@@ -164,6 +182,19 @@ describe('Estado e movimento', () => {
     assert.equal(mine[mine.length - 1].car, 2);
   });
 
+  it('dado um bot armado, então replica marca e arma para os clientes', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('hello', { nick: 'BotQA', bot: true });
+    const upds = collect(b.s, 'playerUpdate');
+    a.s.emit('state', { pos: [2, 2, 2], rotY: 0, heldWeapon: 'FUZIL' });
+    await sleep(350);
+    const mine = upds.filter(u => u.id === a.init.id).at(-1);
+    assert.ok(mine, 'estado do bot não chegou');
+    assert.equal(mine.bot, true);
+    assert.equal(mine.heldWeapon, 'FUZIL');
+  });
+
   it('dado um state com posição inválida (não numérica), então ele é descartado', async t => {
     const { clients } = await playing(t, 2);
     const [a, b] = clients;
@@ -212,6 +243,50 @@ describe('Combate', () => {
     assert.equal(d.shooterNick, 'QA0');
   });
 
+  it('dado um tiro válido, então replica o disparo para efeito visual', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    const fired = collect(b.s, 'playerFired');
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 20, weapon: 'FUZIL', fromPos: [0, 1.5, 0] });
+    await sleep(350);
+    assert.equal(fired.length, 1, 'evento visual não foi replicado');
+    const d = fired[0];
+    assert.equal(d.shooterId, a.init.id);
+    assert.equal(d.targetId, b.init.id);
+    assert.equal(d.weapon, 'FUZIL');
+  });
+
+  it('dado um disparo que errou, então replica o visual sem causar dano', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: [0, 2, 0], rotY: 0, heldWeapon: 'DMR' });
+    b.s.emit('state', { pos: [20, 2, 0], rotY: 0 });
+    await sleep(250);
+    const fired = collect(b.s, 'playerFired');
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotFired', {
+      weapon: 'DMR', fromPos: [0, 3.5, 0], toPos: [20, 3, 1],
+    });
+    await sleep(350);
+    assert.equal(fired.length, 1, 'erro de pontaria ficou invisível');
+    assert.equal(fired[0].weapon, 'DMR');
+    assert.equal(hits.length, 0, 'disparo visual causou dano');
+  });
+
+  it('rejeita origem forjada longe da posição autoritativa do atirador', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: [0, 2, 0], rotY: 0, heldWeapon: 'FUZIL' });
+    b.s.emit('state', { pos: [10, 2, 0], rotY: 0 });
+    await sleep(250);
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotHit', {
+      targetId: b.init.id, dmg: 20, weapon: 'FUZIL', fromPos: [500, 2, 0],
+    });
+    await sleep(350);
+    assert.equal(hits.length, 0, 'origem falsa contornou cobertura/validação do servidor');
+  });
+
   it('dado um atirador morto, então os tiros dele são ignorados', async t => {
     const { clients } = await playing(t, 3);
     const [a, , c] = clients;
@@ -243,6 +318,59 @@ describe('Combate', () => {
     assert.ok(hits.length >= 10, `só ${hits.length} chegaram`);
   });
 
+  it('dado alvo além do alcance máximo, então o servidor rejeita o tiro', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: [0, 2, 0], rotY: 0 });
+    b.s.emit('state', { pos: [500, 2, 0], rotY: 0 });
+    await sleep(250);
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 20, weapon: 'FUZIL', fromPos: [0, 2, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 0, 'tiro atravessou 500m do mapa');
+  });
+
+  it('dadas as armas novas dos assets (SNIPER/RAJADA), então o dano passa na validação', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: [0, 2, 0], rotY: 0, heldWeapon: 'SNIPER "AGULHA"' });
+    b.s.emit('state', { pos: [200, 2, 0], rotY: 0 });
+    await sleep(250);
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 46, weapon: 'SNIPER "AGULHA"', fromPos: [0, 3.5, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 1, 'sniper nova foi rejeitada pelo servidor');
+    assert.equal(hits[0].weapon, 'SNIPER');
+    // rajada usa o código ESCOPETA: alcance de 120m vale pra ela
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 30, weapon: 'ESCOPETA "RAJADA"', fromPos: [0, 3.5, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 1, 'rajada a 200m deveria ser rejeitada (código ESCOPETA = 120m)');
+  });
+
+  it('dada faca fora do alcance corpo a corpo, então o servidor rejeita o dano', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: [0, 2, 0], rotY: 0, heldWeapon: 'FACA "AURORA"' });
+    b.s.emit('state', { pos: [12, 2, 0], rotY: 0 });
+    await sleep(250);
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 24, weapon: 'FACA "AURORA"', fromPos: [0, 2, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 0, 'faca causou dano a 12m');
+  });
+
+  it('dado atirador ainda em queda, então o servidor rejeita o tiro', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: [0, 30, 0], rotY: 0, chute: true });
+    b.s.emit('state', { pos: [2, 30, 0], rotY: 0, chute: true });
+    await sleep(250);
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 20, weapon: 'FUZIL', fromPos: [0, 30, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 0, 'jogador atirou durante a queda');
+  });
+
   it('dada uma morte com killer, então a kill é creditada com colocação', async t => {
     const { clients } = await playing(t, 3);
     const [a, b] = clients;
@@ -254,6 +382,33 @@ describe('Combate', () => {
     assert.equal(res.placement, 3); // morreu com 3 vivos = #3
   });
 
+  it('dada morte por animal, então não anuncia gás nem credita atacante antigo', async t => {
+    const { clients } = await playing(t, 3);
+    const [a, b] = clients;
+    const killed = once(a.s, 'playerKilled');
+    await ack(b.s, 'died', {
+      killerId: a.init.id,
+      weapon: 'FUZIL',
+      byZone: true,
+      cause: { type: 'animal' },
+    });
+    const k = await killed;
+    assert.equal(k.killerId, null);
+    assert.equal(k.byZone, false);
+    assert.equal(k.cause, 'animal');
+  });
+
+  it('dada morte por gás, então a causa tipada prevalece', async t => {
+    const { clients } = await playing(t, 3);
+    const [a, b] = clients;
+    const killed = once(a.s, 'playerKilled');
+    await ack(b.s, 'died', { byZone: false, cause: { type: 'gas' } });
+    const k = await killed;
+    assert.equal(k.killerId, null);
+    assert.equal(k.byZone, true);
+    assert.equal(k.cause, 'gas');
+  });
+
   it('dado um suicídio (killerId = eu mesmo), então não credita kill', async t => {
     const { clients } = await playing(t, 3);
     const [a] = clients;
@@ -261,6 +416,7 @@ describe('Combate', () => {
     await ack(a.s, 'died', { killerId: a.init.id, weapon: 'GRANADA' });
     const k = await killed;
     assert.equal(k.killerKills, 0);
+    assert.equal(k.killerId, null);
   });
 
   it('dado um espectador apontado como killer, então ele não ganha a kill', async t => {
@@ -330,6 +486,17 @@ describe('Loot', () => {
     assert.equal(r2.opened, true);
   });
 
+  it('dado o baú do heliponto (torre), então entrega a BAZUCA como recompensa do topo', async t => {
+    const { clients } = await playing(t, 2);
+    const [a] = clients;
+    const r = await ack(a.s, 'openChest', { key: 'torre' });
+    assert.equal(r.ok, true);
+    const arma = r.items.find(it => it.type === 'weapon');
+    assert.ok(arma, 'baú do heliponto veio sem arma');
+    assert.equal(arma.weapon, 3, 'recompensa do topo deveria ser a BAZUCA (índice 3)');
+    assert.ok(arma.ammo >= 3, 'bazuca sem munição');
+  });
+
   it('dado o fim da partida, então o lobby seguinte não herda os baús da rodada anterior', async t => {
     const rankFile = path.join('/tmp', `fps-chest-reset-${process.pid}-${Date.now()}.json`);
     const { clients, srv } = await playing(t, 2, { NEXT_IN_S: '1', RANK_FILE: rankFile });
@@ -339,7 +506,8 @@ describe('Loot', () => {
 
     const nextMatch = once(a.s, 'nextMatch');
     a.s.emit('died', { killerId: b.init.id, weapon: 'QA' });
-    await nextMatch;
+    const next = await nextMatch;
+    assert.ok(Number.isInteger(next.worldSeed), 'nextMatch não informou a seed do mapa novo aos bots persistentes');
 
     const reloaded = await connect(srv.port);
     t.after(() => reloaded.s.close());
@@ -348,8 +516,8 @@ describe('Loot', () => {
       'o init do lobby recarregado ainda trouxe baús abertos da partida encerrada');
   });
 
-  it('dado o baú do boss, então só abre depois do GOLEM morrer', async t => {
-    const { clients } = await playing(t, 2);
+  it('dado o baú do boss, então só abre depois da morte e o GOLEM revive na rodada seguinte', async t => {
+    const { clients, srv } = await playing(t, 2, { NEXT_IN_S: '1' });
     const [a, b] = clients;
     const early = await ack(a.s, 'openChest', { key: 'boss' });
     assert.equal(early.ok, false, 'baú do boss abriu com o boss vivo');
@@ -363,6 +531,12 @@ describe('Loot', () => {
     const late = await ack(a.s, 'openChest', { key: 'boss' });
     assert.equal(late.ok, true);
     assert.equal(late.items[0].rarity, 'lendário');
+    const next = once(b.s, 'nextMatch');
+    await ack(a.s, 'died', { killerId: b.init.id, weapon: 'FUZIL', cause: { type: 'player' } });
+    await next;
+    const reloaded = await connect(srv.port);
+    t.after(() => reloaded.s.close());
+    assert.equal(reloaded.init.bossDead, false, 'GOLEM continuou morto na rodada seguinte');
   });
 
   it('dado um drop de morte, então só vale um por vida', async t => {
@@ -457,11 +631,35 @@ describe('Anti-cheat', () => {
     const [a, b] = clients;
     const hits = collect(b.s, 'youWereHit');
     for (let i = 0; i < 12; i++)
-      a.s.emit('shotHit', { targetId: b.init.id, dmg: 95, weapon: 'HACK', fromPos: [0, 0, 0] });
+      a.s.emit('shotHit', { targetId: b.init.id, dmg: 95, weapon: 'FUZIL', fromPos: [0, 0, 0] });
     await sleep(500);
     const total = hits.reduce((s, h) => s + h.dmg, 0);
     assert.ok(total <= 520, `passaram ${total} de dano num segundo`);
     assert.ok(total >= 380, `orçamento cortou demais: ${total}`);
+  });
+
+  it('dada arma que não existe no jogo, então o servidor descarta o dano inteiro', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 40, weapon: 'HACK', fromPos: [0, 0, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 0, 'arma inventada causou dano');
+  });
+
+  it('dado flag de nave forjado fora da rota, então o estado é rejeitado e vira inatividade', async t => {
+    const { clients, plan } = await playing(t, 2, { BR_FAST: '1', FLY_TIME: '2' });
+    const [a, b] = clients;
+    const z0 = plan.zone[0];
+    const iv = setInterval(() => {
+      a.s.emit('state', { pos: [z0.cx, 5, z0.cz], rotY: 0 });
+      b.s.emit('state', { pos: [900, 250, 900], rotY: 0, ship: true }); // "nave" longe da rota
+    }, 150);
+    t.after(() => clearInterval(iv));
+    const k = await once(a.s, 'playerKilled');
+    assert.equal(k.victimId, b.init.id);
+    assert.equal(k.byZone, false, 'nave forjada foi tratada como gás');
+    assert.equal(k.weapon, 'INATIVIDADE', 'estado forjado deveria virar AFK');
   });
 
   it('dado farm automatizado de baús, então há intervalo mínimo entre aberturas', async t => {
@@ -580,10 +778,12 @@ describe('Zona autoritativa (servidor mata quem o cliente não mata)', () => {
     const { clients, plan } = await playing(t, 2, { BR_FAST: '1', FLY_TIME: '2' });
     const [a, b] = clients;
     const z0 = plan.zone[0];
-    // A joga normal no centro; B fica "flutuando" longe, na rota da nave
+    // A joga normal no centro; B fica parado no gás, longe do círculo.
+    // (sem flag ship: nave forjada fora da rota agora é REJEITADA pelo
+    // anti-cheat e viraria INATIVIDADE — caso coberto no bloco Anti-cheat)
     const iv = setInterval(() => {
       a.s.emit('state', { pos: [z0.cx, 5, z0.cz], rotY: 0 });
-      b.s.emit('state', { pos: [900, 250, 900], rotY: 0, ship: true });
+      b.s.emit('state', { pos: [900, 5, 900], rotY: 0 });
     }, 150);
     t.after(() => clearInterval(iv));
     const killedP = once(a.s, 'playerKilled');
@@ -604,7 +804,8 @@ describe('Zona autoritativa (servidor mata quem o cliente não mata)', () => {
     t.after(() => clearInterval(iv));
     const k = await once(a.s, 'playerKilled');
     assert.equal(k.victimId, b.init.id);
-    assert.equal(k.byZone, true);
+    assert.equal(k.byZone, false);
+    assert.equal(k.cause, 'environment');
   });
 });
 

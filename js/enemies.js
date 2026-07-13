@@ -268,7 +268,7 @@ export function createEnemies(deps) {
     const range = _eFrom.distanceTo(_eTo);
     if (miss < 0.5 && !player.dead) {
       FX.spawnTracer(_eFrom, _eTo, 0xff8866);
-      playerDamage((e.heavy ? rand(9, 14) : rand(6, 11)) | 0, _eFrom);
+      playerDamage((e.heavy ? rand(9, 14) : rand(6, 11)) | 0, _eFrom, { type: 'enemy' });
     } else {
       _v3.copy(_eFrom).addScaledVector(_eDir, range + rand(2, 8));
       _v3.y = Math.max(_v3.y, heightAt(_v3.x, _v3.z));

@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 
 export function createAlien(deps) {
-  const { rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Chars } = deps;
+  const { rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Structures = null, Chars = null } = deps;
   // acha um ponto de deserto para a queda do disco
   let SITE = { x: 260, z: 260 };
   for (let i = 0; i < 200; i++) {
@@ -88,12 +88,23 @@ export function createAlien(deps) {
     .catch(err => console.error('Alien GLB falhou — Visitante segue procedural:', err));
 
   const B = { alive: true, active: false, hp: 1900, hpMax: 1900, yaw: 0, phase: 0, nextShot: 0, blinkT: 6, deadT: -1, respawnT: 0 };
+  const _moveFrom = new THREE.Vector3(), _moveTo = new THREE.Vector3();
+  function tryMoveTo(x, z) {
+    if (Math.abs(x) > 520 || Math.abs(z) > 520 || heightAt(x, z) <= WATER_LEVEL + 0.5) return false;
+    _moveFrom.copy(group.position); _moveFrom.y += 1;
+    _moveTo.set(x, heightAt(x, z) + 1, z);
+    if (Structures && typeof Structures.segBlocked === 'function' && Structures.segBlocked(_moveFrom, _moveTo)) return false;
+    group.position.x = x;
+    group.position.z = z;
+    if (Structures && typeof Structures.collide === 'function') Structures.collide(group.position, 0.55, 3.8);
+    return true;
+  }
   const orbs = [];
   const orbMat = new THREE.MeshStandardMaterial({ color: 0x03130f, emissive: 0x35ffc8, emissiveIntensity: 4, roughness: 0.3 });
   for (let i = 0; i < 6; i++) {
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), orbMat);
     m.visible = false; scene.add(m);
-    orbs.push({ m, vel: new THREE.Vector3(), live: false });
+    orbs.push({ m, vel: new THREE.Vector3(), live: false, life: 0 });
   }
   const sph = [
     { c: new THREE.Vector3(), r: 0.75, part: 'head' },
@@ -129,13 +140,20 @@ export function createAlien(deps) {
   function update(dt, t) {
     for (const o of orbs) {
       if (!o.live) continue;
-      o.m.position.addScaledVector(o.vel, dt);
-      o.m.scale.setScalar(1 + Math.sin(t * 26) * 0.15);
-      const d = o.m.position.distanceTo(player.pos);
-      if (d < 1.2 || o.m.position.y < heightAt(o.m.position.x, o.m.position.z) + 0.2) {
+      o.life -= dt;
+      _v2.copy(o.m.position).addScaledVector(o.vel, dt);
+      if (Structures && Structures.segBlocked(o.m.position, _v2)) {
         o.live = false; o.m.visible = false;
         FX.burst(o.m.position, _v1.set(0, 1, 0), 'spark');
-        if (d < 4) playerDamage(Math.round(16 * (1 - d / 5)) + 5, o.m.position);
+        continue;
+      }
+      o.m.position.copy(_v2);
+      o.m.scale.setScalar(1 + Math.sin(t * 26) * 0.15);
+      const d = o.m.position.distanceTo(player.pos);
+      if (o.life <= 0 || d < 1.2 || o.m.position.y < heightAt(o.m.position.x, o.m.position.z) + 0.2) {
+        o.live = false; o.m.visible = false;
+        FX.burst(o.m.position, _v1.set(0, 1, 0), 'spark');
+        if (o.life > 0 && d < 4) playerDamage(Math.round(16 * (1 - d / 5)) + 5, o.m.position, { type: 'alien' });
       }
     }
     if (!B.alive) {
@@ -167,16 +185,16 @@ export function createAlien(deps) {
       B.blinkT = rand(4, 7);
       FX.burst(group.position, _v1.set(0, 1, 0), 'spark');
       const a = rand(TAU);
-      group.position.x += Math.cos(a) * 10;
-      group.position.z += Math.sin(a) * 10;
-      FX.burst(group.position, _v1.set(0, 1, 0), 'spark');
+      if (tryMoveTo(group.position.x + Math.cos(a) * 10, group.position.z + Math.sin(a) * 10)) {
+        FX.burst(group.position, _v1.set(0, 1, 0), 'spark');
+      }
     }
     // persegue flutuando
     const dx = player.pos.x - group.position.x, dz = player.pos.z - group.position.z;
     const d = Math.hypot(dx, dz);
     if (d > 12) {
-      group.position.x += dx / d * 3.4 * dt;
-      group.position.z += dz / d * 3.4 * dt;
+      tryMoveTo(group.position.x + dx / d * 3.4 * dt,
+        group.position.z + dz / d * 3.4 * dt);
     }
     B.yaw = Math.atan2(dx, dz);
     group.rotation.y = B.yaw;
@@ -193,7 +211,7 @@ export function createAlien(deps) {
       for (let i = 0; i < 3; i++) {
         const o = orbs.find(o => !o.live);
         if (!o) break;
-        o.live = true; o.m.visible = true;
+        o.live = true; o.m.visible = true; o.life = 4.5;
         o.m.position.set(group.position.x, group.position.y + 2.8, group.position.z);
         _v2.copy(player.pos); _v2.y += 1.2;
         _v2.x += rand(-2, 2) * i; _v2.z += rand(-2, 2) * i;

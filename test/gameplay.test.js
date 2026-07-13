@@ -255,6 +255,34 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
     assert.ok(r.subiu > 2, `não decolou: subiu ${r.subiu.toFixed(1)}m`);
   });
 
+  it('dado o helicóptero em voo, então dá pra ATIRAR e a bala nasce no heli', async t => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, P = QA.MP.player;
+      QA.reset();
+      const h = G.Heli.group.position;
+      P.pos.set(h.x + 2, h.y, h.z);
+      QA.tick(1);
+      G.tryToggleCar(); // entra no heli
+      const voando = G.state.flying;
+      const gun = G.arsenal[0];
+      const locked0 = gun.locked;
+      gun.locked = false;
+      G.switchWeapon(0);
+      QA.tick(70);
+      gun.mag = gun.magSize; gun.reloading = false; gun.lastShot = -99;
+      const mag0 = gun.mag;
+      G.mouse.shooting = true; G.mouse.clicked = true;
+      QA.tick(3);
+      G.mouse.shooting = false; G.mouse.clicked = false;
+      const mag1 = gun.mag;
+      G.tryToggleCar(); // sai
+      gun.locked = locked0;
+      return { voando, mag0, mag1 };
+    });
+    assert.ok(r.voando, 'não entrou no heli');
+    assert.ok(r.mag1 < r.mag0, `não atirou do heli (mag ${r.mag0} → ${r.mag1})`);
+  });
+
   it('dado sprint + CTRL, então desliza (slide)', async t => {
     const r = await play(() => {
       const QA = window.QA, G = QA.G, P = QA.MP.player;

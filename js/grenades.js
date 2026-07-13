@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 
 export function createGrenades(deps) {
-  const { clamp, rand, _v1, heightAt, terrainNormal, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets, groundAt } = deps;
+  const { clamp, rand, _v1, heightAt, terrainNormal, rayBlockedAt, Structures = null, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets, groundAt } = deps;
   const N = 6;
   const pool = [];
   const gMat = new THREE.MeshStandardMaterial({ color: 0x2c3328, roughness: 0.5, metalness: 0.3 });
@@ -47,7 +47,18 @@ export function createGrenades(deps) {
   }
 
   const _n = new THREE.Vector3();
-  function explode(p) {
+  const _blastOrigin = new THREE.Vector3(), _blastDir = new THREE.Vector3();
+  const _nadePrev = new THREE.Vector3(), _nadeDir = new THREE.Vector3();
+  function blastClear(p, target, targetLift = 1) {
+    if (typeof rayBlockedAt !== 'function') return true;
+    _blastOrigin.copy(p); _blastOrigin.y += 0.2;
+    _blastDir.copy(target); _blastDir.y += targetLift; _blastDir.sub(_blastOrigin);
+    const len = _blastDir.length();
+    if (len < 0.01) return true;
+    _blastDir.multiplyScalar(1 / len);
+    return rayBlockedAt(_blastOrigin, _blastDir, len) >= len - 0.15;
+  }
+  function explode(p, kind = 'GRANADA') {
     SFX.explosion();
     boomT = 0.35;
     boomLight.position.copy(p);
@@ -64,35 +75,39 @@ export function createGrenades(deps) {
     for (const e of Enemies.list) {
       if (!e.alive) continue;
       const d = e.group.position.distanceTo(p);
-      if (d < R) {
+      if (d < R && blastClear(p, e.group.position)) {
         _n.copy(e.group.position).sub(p).normalize();
         e.damage(Math.round(135 * (1 - d / R) + 25), e.group.position, _n, false);
       }
     }
     for (const B2 of Bosses) {
       if (!B2.alive) continue;
-      const d = B2.pos().distanceTo(p);
-      if (d < R + 2) {
-        _n.copy(B2.pos()).sub(p).normalize();
+      const bossPos = B2.pos();
+      const d = bossPos.distanceTo(p);
+      if (d < R + 2 && blastClear(p, bossPos, 2)) {
+        _n.copy(bossPos).sub(p).normalize();
         B2.damage(Math.round(110 * (1 - d / (R + 2)) + 20), p, _n, 'body');
       }
     }
     for (const a of extraTargets) {
-      if (!a.alive) continue;
-      const d = a.pos().distanceTo(p);
-      if (d < R) {
-        _n.copy(a.pos()).sub(p).normalize();
+      if (!a.alive || a.enabled === false) continue;
+      const targetPos = a.pos();
+      const d = targetPos.distanceTo(p);
+      if (d < R && blastClear(p, targetPos)) {
+        _n.copy(targetPos).sub(p).normalize();
         a.damage(Math.round(120 * (1 - d / R) + 20), p, _n, false);
       }
     }
-    if (window.__BR_splash) window.__BR_splash(p, R, 110); // BR: fere jogadores remotos/boss
+    if (window.__BR_splash) window.__BR_splash(p, R, 110, kind); // BR: fere jogadores remotos/boss
     const dp = player.pos.distanceTo(p);
-    if (dp < 6.5) playerDamage(Math.round(55 * (1 - dp / 6.5)), p);
+    if (dp < 6.5 && blastClear(p, player.pos)) {
+      playerDamage(Math.round(55 * (1 - dp / 6.5)), p, { type: 'explosion' });
+    }
     addTrauma(clamp(0.9 - dp * 0.04, 0.15, 0.9));
     // o carro sente a onda de choque
     const dcx = Car.chassisBody.position.x - p.x, dcy = Car.chassisBody.position.y - p.y, dcz = Car.chassisBody.position.z - p.z;
     const dc = Math.hypot(dcx, dcy, dcz);
-    if (dc < 9 && dc > 0.1) {
+    if (dc < 9 && dc > 0.1 && blastClear(p, Car.chassisBody.position)) {
       const f = 3800 * (1 - dc / 9) / dc;
       Car.chassisBody.wakeUp(); // pode estar dormindo (PERF)
       Car.chassisBody.applyImpulse(new CANNON.Vec3(dcx * f, Math.abs(dcy) * f + 600, dcz * f));
@@ -113,7 +128,25 @@ export function createGrenades(deps) {
         continue;
       }
       n.vel.y -= 18 * dt;
+      _nadePrev.copy(n.g.position);
       n.g.position.addScaledVector(n.vel, dt);
+      if (Structures && typeof Structures.segBlocked === 'function' &&
+          Structures.segBlocked(_nadePrev, n.g.position)) {
+        _nadeDir.copy(n.g.position).sub(_nadePrev);
+        const segLen = _nadeDir.length();
+        if (segLen > 1e-5 && typeof Structures.rayHit === 'function') {
+          _nadeDir.multiplyScalar(1 / segLen);
+          const hitD = Structures.rayHit(_nadePrev, _nadeDir, segLen);
+          if (Number.isFinite(hitD)) {
+            n.g.position.copy(_nadePrev).addScaledVector(_nadeDir,
+              Math.max(0, Math.min(segLen, hitD) - 0.06));
+          } else n.g.position.copy(_nadePrev);
+        } else n.g.position.copy(_nadePrev);
+        n.vel.x *= -0.48;
+        n.vel.z *= -0.48;
+        n.vel.y *= 0.65;
+        SFX.bounce();
+      }
       n.g.rotation.x += n.spin * dt;
       n.g.rotation.z += n.spin * 0.7 * dt;
       const gTer = heightAt(n.g.position.x, n.g.position.z);

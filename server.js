@@ -28,6 +28,7 @@ app.use((req, res, next) => {
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
   'city-destruction-client.js', 'city-destruction-protocol.js'];
+
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
 // modelos 3D: static restrito à pasta (o express.static bloqueia path traversal);
@@ -42,6 +43,11 @@ const clean = s => String(s == null ? '' : s).replace(/[<>&"']/g, '').trim();
 // versão leve: preserva aspas (nomes de arma, chat) — o cliente escapa antes de renderizar
 const cleanSoft = s => String(s == null ? '' : s).replace(/[<>&]/g, '').trim();
 const cleanNick = n => clean(n).slice(0, 14) || 'Recruta';
+const WEAPON_CODES = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA', 'SNIPER'];
+function weaponCode(value) {
+  const raw = cleanSoft(value).toUpperCase().slice(0, 48);
+  return WEAPON_CODES.find(code => raw === code || raw.startsWith(code + ' ')) || null;
+}
 function mulberry32(seed) {
   let s = seed >>> 0;
   return () => {
@@ -111,6 +117,10 @@ const FLOAT_AFTER_S = BR_FAST ? 3 : 60;  // "nunca pousou" vale a partir daqui
 const AFK_MS = BR_FAST ? 4000 : 45000;
 const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
 const CLAIM_COOLDOWN_MS = Math.max(500, +process.env.CLAIM_COOLDOWN_MS || 30000);
+// GAS_DEFAULT (QA): fixa o modo inicial do gás — os testes legados assumem a
+// clássica; em produção o padrão é 'auto' (cada partida sorteia o modo)
+const GAS_DEFAULT = ['auto', 'classica', 'inversa', 'off'].includes(process.env.GAS_DEFAULT)
+  ? process.env.GAS_DEFAULT : 'auto';
 const CITY_DELAY_MS = Math.max(500, +process.env.CITY_DESTRUCTION_DELAY_MS || CityProto.DELAY_DEFAULT);
 const CITY_IMPACT_MS = Math.max(300, +process.env.CITY_DESTRUCTION_IMPACT_DELAY_MS || CityProto.IMPACT_DELAY_DEFAULT);
 
@@ -127,7 +137,7 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
-  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true }, // regras da sala (só o host altera)
+  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true }, // regras da sala (só o host altera)
   cityDestruction: { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null },
   countdownTimer: null, endTimer: null,
 };
@@ -136,6 +146,9 @@ function resetRoundState() {
   match.openedChests.clear();
   match.drops.clear();
   match.dropSeq = 0;
+  match.bossHp = 0;
+  match.bossMaxHp = 0;
+  match.bossDead = !match.flags.golem;
   match.carOwners = {};
 }
 
@@ -148,7 +161,7 @@ function freeCarsOf(id) {
   }
 }
 
-function buildPlan(seed) {
+function buildPlan(seed, gasMode = 'classica') {
   const rng = mulberry32(seed ^ 0x9E3779B9);
   // nave: atravessa o mapa passando perto do centro
   const a = rng() * Math.PI * 2;
@@ -157,14 +170,31 @@ function buildPlan(seed) {
     to: [-Math.cos(a) * 620 + (rng() - 0.5) * 300, -Math.sin(a) * 620 + (rng() - 0.5) * 300],
     alt: 250, flyTime: FLY_TIME,
   };
-  // zona: 5 fases encolhendo; cada centro cabe dentro do círculo anterior
-  const radii = [560, 340, 200, 110, 55, 24];
-  const waits = [50, 45, 40, 35, 30];   // s parado antes de encolher
-  const shrinks = [30, 28, 24, 20, 16]; // s encolhendo
+  // flag da sala: gás pode ser sorteado, invertido ou desligado (playtest:
+  // "fechando de fora pra dentro sempre fica chato" + vulcão no canto)
+  const gas = gasMode === 'auto' ? (rng() < 0.55 ? 'classica' : 'inversa') : gasMode;
+  if (gas === 'off') return { ship, zone: [], gas, boss: { hp: 3600 } };
+  // ritmo folgado: dá pra explorar o mapa antes do gás apertar
+  const waits = [110, 80, 65, 50, 40];  // s parado antes de mexer
+  const shrinks = [40, 32, 26, 22, 18]; // s em movimento
   const dps = [1, 2, 4, 7, 12];
-  let cx = (rng() - 0.5) * 300, cz = (rng() - 0.5) * 300;
   const phases = [];
-  let t = ship.flyTime + 20; // gás só começa a contar depois da queda
+  let t = ship.flyTime + 30; // gás só começa a contar depois da queda
+  if (gas === 'inversa') {
+    // gás nasce pequeno no centro e cresce: o endgame é nas BORDAS do mapa
+    // (centro fixo perto do meio — os 4 cantos, vulcão incluso, sobram)
+    const radii = [16, 70, 150, 240, 360, 480];
+    const cx = (rng() - 0.5) * 120, cz = (rng() - 0.5) * 120;
+    for (let i = 0; i < 5; i++) {
+      phases.push({ cx, cz, r0: radii[i], nx: cx, nz: cz, r1: radii[i + 1],
+        tWaitEnd: t + waits[i], tShrinkEnd: t + waits[i] + shrinks[i], dps: dps[i] });
+      t += waits[i] + shrinks[i];
+    }
+    return { ship, zone: phases, gas, boss: { hp: 3600 } };
+  }
+  // clássica: 5 fases encolhendo; cada centro cabe dentro do círculo anterior
+  const radii = [560, 340, 200, 110, 55, 24];
+  let cx = (rng() - 0.5) * 300, cz = (rng() - 0.5) * 300;
   for (let i = 0; i < 5; i++) {
     const r0 = radii[i], r1 = radii[i + 1];
     const ang = rng() * Math.PI * 2, d = rng() * Math.max(0, r0 - r1) * 0.8;
@@ -174,7 +204,7 @@ function buildPlan(seed) {
     t += waits[i] + shrinks[i];
     cx = nx; cz = nz;
   }
-  return { ship, zone: phases, boss: { hp: 3600 } };
+  return { ship, zone: phases, gas, boss: { hp: 3600 } };
 }
 
 /* loot dos baús — rolado no servidor (anti-trapaça leve) */
@@ -189,10 +219,13 @@ const WEAPON_TIERS = [ // idx do arsenal: 1=escopeta 0=fuzil 2=DMR 3=bazuca 4=pl
 function rollChest(rng, luck = 0) {
   const items = [];
   const r = rng() + luck;
-  if (r < 0.38) items.push({ type: 'ammo', amount: 40 + Math.floor(rng() * 50) });
-  else if (r < 0.62) items.push({ type: 'weapon', ...WEAPON_TIERS[rng() < 0.5 ? 0 : 1] }); // incomum: escopeta clássica ou rajada
-  else if (r < 0.82) items.push({ type: 'weapon', ...WEAPON_TIERS[rng() < 0.55 ? 2 : 3] }); // raro: fuzil ou sniper leve
-  else if (r < 0.94) items.push({ type: 'weapon', ...WEAPON_TIERS[4] });
+  // todo mundo nasce só de faca: baú sem arma parece "baú vazio" — munição
+  // solta caiu de 38% pra 12% e o resto sempre entrega uma arma (as bandas
+  // preservam as proporções de raridade do arsenal expandido)
+  if (r < 0.12) items.push({ type: 'ammo', amount: 40 + Math.floor(rng() * 50) });
+  else if (r < 0.46) items.push({ type: 'weapon', ...WEAPON_TIERS[rng() < 0.5 ? 0 : 1] }); // incomum: escopeta clássica ou rajada
+  else if (r < 0.74) items.push({ type: 'weapon', ...WEAPON_TIERS[rng() < 0.55 ? 2 : 3] }); // raro: fuzil ou sniper leve
+  else if (r < 0.92) items.push({ type: 'weapon', ...WEAPON_TIERS[4] });
   else items.push({ type: 'weapon', ...WEAPON_TIERS[5] });
   if (rng() < 0.55) items.push({ type: 'med' });
   if (rng() < 0.3) items.push({ type: 'armor', amount: 50 });
@@ -204,7 +237,7 @@ function rollChest(rng, luck = 0) {
 function roster(withPos) {
   return [...players.entries()].map(([id, p]) => ({
     id, nick: p.nick, colors: p.colors, kills: p.kills,
-    alive: p.alive, spectator: p.spectator,
+    alive: p.alive, spectator: p.spectator, bot: !!p.bot,
     ...(withPos ? { pos: p.pos } : {}), // pos só no init — broadcast viraria wallhack
   }));
 }
@@ -235,7 +268,7 @@ function startMatch() {
   match.phase = 'PLAYING';
   match.num++;
   match.t0 = Date.now();
-  match.plan = buildPlan(match.seed);
+  match.plan = buildPlan(match.seed, match.flags.gas);
   resetRoundState();
   match.plan.flags = { ...match.flags }; // congela as regras da partida
   // destruição da cidade: timestamps ABSOLUTOS do servidor (fonte de verdade)
@@ -305,7 +338,7 @@ function endMatch(winnerId) {
     resetRoundState();
     match.phase = 'LOBBY';
     for (const p of players.values()) { p.spectator = false; p.alive = false; p.placement = 0; }
-    io.emit('nextMatch', {}); // clientes recarregam e voltam pro lobby com a seed nova
+    io.emit('nextMatch', { worldSeed: match.seed }); // browser recarrega; bots persistentes reconstroem o mapa
   }, NEXT_IN_S * 1000);
 }
 
@@ -348,6 +381,7 @@ setInterval(() => {
         victimId: id, victimNick: p.nick,
         killerId: null, killerNick: null, killerKills: 0,
         weapon: 'MÍSSEIS', byZone: false, byCity: true,
+        cause: 'city',
         placement: p.placement,
       });
       console.log(`[CIDADE] ${p.nick} morreu no ataque de mísseis`);
@@ -372,6 +406,8 @@ function shipPosAt(t, plan = match.plan) {
 
 function zoneAt(t, plan = match.plan) {
   const ph = plan.zone;
+  if (!ph || !ph.length) return null; // gás desligado pela sala
+  const inversa = plan.gas === 'inversa';
   let cur = null, shrinking = false, k = 0;
   for (const p of ph) {
     if (t < p.tWaitEnd) { cur = p; break; }
@@ -379,13 +415,13 @@ function zoneAt(t, plan = match.plan) {
   }
   if (!cur) {
     const last = ph[ph.length - 1];
-    return { x: last.nx, z: last.nz, r: last.r1, dps: last.dps + 3 };
+    return { x: last.nx, z: last.nz, r: last.r1, dps: last.dps + 3, inversa };
   }
   if (shrinking) return {
     x: cur.cx + (cur.nx - cur.cx) * k, z: cur.cz + (cur.nz - cur.cz) * k,
-    r: cur.r0 + (cur.r1 - cur.r0) * k, dps: cur.dps,
+    r: cur.r0 + (cur.r1 - cur.r0) * k, dps: cur.dps, inversa,
   };
-  return { x: cur.cx, z: cur.cz, r: cur.r0, dps: cur.dps };
+  return { x: cur.cx, z: cur.cz, r: cur.r0, dps: cur.dps, inversa };
 }
 setInterval(() => {
   if (match.phase !== 'PLAYING' || !match.plan) return;
@@ -396,10 +432,12 @@ setInterval(() => {
   const now = Date.now();
   for (const [id, p] of players) {
     if (p.spectator || !p.alive) continue;
-    const outside = Math.hypot(p.pos[0] - zone.x, p.pos[2] - zone.z) > zone.r + 1;
+    const dz = zone ? Math.hypot(p.pos[0] - zone.x, p.pos[2] - zone.z) : 0;
+    // gás mata onde o gás está: fora do círculo (clássica) ou dentro (inversa)
+    const inGas = zone ? (zone.inversa ? dz < zone.r - 1 : dz > zone.r + 1) : false;
     const floating = p.pos[1] > 120 && t > flyT + FLOAT_AFTER_S; // nunca pousou
     const afk = now - (p.lastState || match.t0) > AFK_MS;        // parou de mandar estado
-    if (outside || floating) p.zoneHp -= zone.dps * ZONE_DRAIN_X + (floating ? 6 : 0);
+    if (inGas || floating) p.zoneHp -= (zone ? zone.dps : 4) * ZONE_DRAIN_X + (floating ? 6 : 0);
     else if (afk) p.zoneHp -= 25;
     else p.zoneHp = Math.min(ZONE_HP, p.zoneHp + 8);
     if (p.zoneHp <= 0) {
@@ -409,9 +447,10 @@ setInterval(() => {
       io.emit('playerKilled', {
         victimId: id, victimNick: p.nick,
         killerId: null, killerNick: null, killerKills: 0,
-        weapon: 'ZONA', byZone: true, placement: p.placement,
+        weapon: inGas ? 'ZONA' : (floating ? 'QUEDA' : 'INATIVIDADE'),
+        byZone: inGas, cause: inGas ? 'gas' : 'environment', placement: p.placement,
       });
-      console.log(`[ZONA] servidor eliminou ${p.nick} (fora=${outside} voando=${floating} afk=${afk})`);
+      console.log(`[ZONA] servidor eliminou ${p.nick} (gás=${inGas} voando=${floating} afk=${afk})`);
       broadcastRoster();
       checkVictory();
       if (match.phase !== 'PLAYING') break; // partida acabou dentro do loop
@@ -426,6 +465,7 @@ io.on('connection', socket => {
     nick: 'Recruta', colors: null, kills: 0,
     alive: false, spectator: isMidMatch, placement: 0,
     pos: [0, 0, 0], lastChat: 0, hitWindow: [], lastState: Date.now(), zoneHp: ZONE_HP, canDrop: true,
+    bot: false, heldWeapon: 'FACA', ship: false, fall: false, chute: false,
   });
 
   socket.emit('init', {
@@ -451,6 +491,7 @@ io.on('connection', socket => {
   socket.on('hello', d => {
     const p = players.get(socket.id); if (!p) return;
     p.nick = cleanNick(d && d.nick);
+    p.bot = !!(d && d.bot);
     if (d && Array.isArray(d.colors)) p.colors = d.colors.slice(0, 4).map(c => clean(c).slice(0, 9));
     broadcastRoster();
     // o lobby emite hello a cada tecla digitada no nick — só anuncia UMA vez
@@ -492,7 +533,9 @@ io.on('connection', socket => {
     if (typeof d.animais === 'boolean') match.flags.animais = d.animais;
     if (typeof d.zumbis === 'boolean') match.flags.zumbis = d.zumbis;
     if (typeof d.cidade === 'boolean') match.flags.cidade = d.cidade;
+    if (typeof d.alien === 'boolean') match.flags.alien = d.alien;
     if (['auto', 'dia', 'noite'].includes(d.ciclo)) match.flags.ciclo = d.ciclo;
+    if (['auto', 'classica', 'inversa', 'off'].includes(d.gas)) match.flags.gas = d.gas;
     if (Number.isInteger(d.bots)) {
       const n = Math.max(0, Math.min(8, d.bots));
       if (n !== match.flags.bots) { match.flags.bots = n; syncBots(); }
@@ -568,12 +611,16 @@ io.on('connection', socket => {
     }
 
     p.pos = pos;
+    p.ship = !!d.ship;
+    p.fall = !!d.fall || !!d.chute;
+    p.chute = !!d.chute;
+    p.heldWeapon = weaponCode(d.heldWeapon) || p.heldWeapon;
     p.lastState = now;
     socket.volatile.broadcast.emit('playerUpdate', {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
       ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
-      heli: !!d.heli,
-      nick: p.nick, colors: p.colors,
+      heli: !!d.heli, fall: p.fall,
+      nick: p.nick, colors: p.colors, bot: !!p.bot, heldWeapon: p.heldWeapon,
     });
   });
 
@@ -584,6 +631,19 @@ io.on('connection', socket => {
     if (match.phase !== 'PLAYING' || !p.alive) return;
     const victim = players.get(d.targetId);
     if (!victim.alive) return;
+    const weapon = weaponCode(d.weapon);
+    if (!weapon) return;
+    const maxRange = weapon === 'FACA' ? 4 : weapon === 'ESCOPETA' ? 120 : 320;
+    // A nave/queda é uma fase invulnerável e tiros além do alcance útil não existem.
+    if (p.ship || p.fall || victim.ship || victim.fall) return;
+    if (Math.hypot(p.pos[0] - victim.pos[0], p.pos[1] - victim.pos[1], p.pos[2] - victim.pos[2]) > maxRange) return;
+    let fromPos = [p.pos[0], p.pos[1] + 1.5, p.pos[2]];
+    if (Array.isArray(d.fromPos)) {
+      const f = d.fromPos.slice(0, 3).map(Number);
+      if (f.length !== 3 || !f.every(Number.isFinite) ||
+          Math.hypot(f[0] - p.pos[0], f[1] - p.pos[1], f[2] - p.pos[2]) > 5) return;
+      fromPos = f;
+    }
     // anti-flood: no máx 12 acertos reportados por segundo por atirador
     const now = Date.now();
     p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
@@ -596,17 +656,69 @@ io.on('connection', socket => {
     p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
     if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return;
     p.dmgWindow.push({ t: now, d: dmgReq });
-    let fromPos = [0, 0, 0];
-    if (Array.isArray(d.fromPos)) {
-      const f = d.fromPos.slice(0, 3).map(Number);
-      if (f.length === 3 && f.every(Number.isFinite)) fromPos = f;
-    }
+    socket.broadcast.emit('playerFired', {
+      shooterId: socket.id, targetId: d.targetId, weapon,
+      fromPos, toPos: victim.pos.slice(0, 3),
+    });
     io.to(d.targetId).emit('youWereHit', {
       dmg: dmgReq,
       fromPos,
       shooterId: socket.id, shooterNick: p.nick,
-      weapon: cleanSoft(d.weapon).slice(0, 24) || '???',
+      weapon,
     });
+  });
+
+  /* dano explosivo (granada/bazuca) tem protocolo próprio: a origem é o
+     PONTO DE IMPACTO, não o atirador — senão granada com FACA equipada
+     era rejeitada pelo alcance de 4 m e a vítima checava cobertura contra
+     a posição errada. MÍSSEIS do evento da cidade são do SERVIDOR e não
+     passam por aqui: tipo fora da lista é descartado. */
+  socket.on('explosionHit', d => {
+    const p = players.get(socket.id);
+    if (!p || !d || !players.has(d.targetId)) return;
+    if (match.phase !== 'PLAYING' || !p.alive) return;
+    const victim = players.get(d.targetId);
+    if (!victim.alive) return;
+    const kind = d.kind === 'GRANADA' || d.kind === 'BAZUCA' ? d.kind : null;
+    if (!kind) return;
+    if (p.ship || p.fall || victim.ship || victim.fall) return;
+    const impact = Array.isArray(d.impactPos) ? d.impactPos.slice(0, 3).map(Number) : [];
+    if (impact.length !== 3 || !impact.every(Number.isFinite)) return;
+    // granada não voa o mapa inteiro; foguete tem o alcance de tiro normal
+    const maxReach = kind === 'BAZUCA' ? 340 : 80;
+    if (Math.hypot(impact[0] - p.pos[0], impact[1] - p.pos[1], impact[2] - p.pos[2]) > maxReach) return;
+    // além do raio real do splash (7,5 m + folga de lag) não existe dano
+    if (Math.hypot(impact[0] - victim.pos[0], impact[1] - victim.pos[1], impact[2] - victim.pos[2]) > 12) return;
+    const now = Date.now();
+    p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
+    if (p.hitWindow.length >= 12) return;
+    p.hitWindow.push(now);
+    // teto = dano máximo real no epicentro (110 * 1 + 20); orçamento é o mesmo dos tiros
+    const dmgReq = Math.min(Math.max(+d.dmg || 0, 0), 130);
+    if (dmgReq <= 0) return;
+    p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
+    if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return;
+    p.dmgWindow.push({ t: now, d: dmgReq });
+    io.to(d.targetId).emit('youWereHit', {
+      dmg: dmgReq, fromPos: impact,
+      shooterId: socket.id, shooterNick: p.nick,
+      weapon: kind,
+    });
+  });
+
+  socket.on('shotFired', d => {
+    const p = players.get(socket.id);
+    if (!p || !d || match.phase !== 'PLAYING' || !p.alive || p.ship || p.fall) return;
+    const weapon = weaponCode(d.weapon);
+    if (!weapon || !Array.isArray(d.fromPos) || !Array.isArray(d.toPos)) return;
+    const fromPos = d.fromPos.slice(0, 3).map(Number);
+    const toPos = d.toPos.slice(0, 3).map(Number);
+    if (fromPos.length !== 3 || toPos.length !== 3 ||
+        !fromPos.every(Number.isFinite) || !toPos.every(Number.isFinite)) return;
+    const maxRange = weapon === 'FACA' ? 4 : weapon === 'ESCOPETA' ? 120 : 320;
+    if (Math.hypot(fromPos[0] - p.pos[0], fromPos[1] - p.pos[1], fromPos[2] - p.pos[2]) > 5) return;
+    if (Math.hypot(toPos[0] - fromPos[0], toPos[1] - fromPos[1], toPos[2] - fromPos[2]) > maxRange) return;
+    socket.broadcast.emit('playerFired', { shooterId: socket.id, targetId: null, weapon, fromPos, toPos });
   });
 
   socket.on('died', (d, cb) => {
@@ -615,15 +727,24 @@ io.on('connection', socket => {
     victim.alive = false;
     victim.placement = match.aliveCount; // morreu agora = posição atual
     match.lastDead = socket.id; // se todos caírem juntos, o último a morrer vence
-    let killer = d && d.killerId ? players.get(d.killerId) : null;
+    const allowedCauses = new Set([
+      'player', 'gas', 'animal', 'skeleton', 'zombie', 'ghost', 'golem',
+      'alien', 'boss', 'enemy', 'explosion', 'lava', 'environment', 'city',
+    ]);
+    const cause = d && d.cause && allowedCauses.has(d.cause.type) ? d.cause.type : null;
+    const environmentalCause = cause && cause !== 'player';
+    let killer = !environmentalCause && d && d.killerId ? players.get(d.killerId) : null;
     if (killer && killer.spectator) killer = null; // espectador não mata ninguém
-    if (killer && d.killerId !== socket.id) killer.kills++;
+    if (killer && d.killerId === socket.id) killer = null; // suicídio não vira eliminação própria no feed
+    if (killer) killer.kills++;
+    const byZone = cause ? cause === 'gas' : !!(d && d.byZone);
     io.emit('playerKilled', {
       victimId: socket.id, victimNick: victim.nick,
       killerId: killer ? d.killerId : null, killerNick: killer ? killer.nick : null,
       killerKills: killer ? killer.kills : 0,
-      weapon: cleanSoft(d && d.weapon).slice(0, 24) || (d && d.byZone ? 'ZONA' : '???'),
-      byZone: !!(d && d.byZone),
+      weapon: cleanSoft(d && d.weapon).slice(0, 24) || (byZone ? 'ZONA' : '???'),
+      byZone,
+      cause: cause || (byZone ? 'gas' : (killer ? 'player' : 'environment')),
       placement: victim.placement,
     });
     freeCarsOf(socket.id); // motorista morto libera o carro
@@ -649,9 +770,12 @@ io.on('connection', socket => {
     // baú lendário só existe depois do GOLEM cair — e só se o GOLEM existe na sala
     if (key === 'boss' && (!match.bossDead || !match.flags.golem)) { match.openedChests.delete(key); return cb({ ok: false }); }
     const rng = mulberry32((match.seed ^ [...key].reduce((a, c) => a * 31 + c.charCodeAt(0) | 0, 7)) >>> 0);
+    // 'torre' = baú do heliponto: recompensa fixa por escalar a TORRE NEXUS
     const items = key === 'boss'
       ? [{ type: 'weapon', rarity: 'lendário', weapon: 4, ammo: 160 }, { type: 'armor', amount: 100 }, { type: 'med' }, { type: 'med' }]
-      : rollChest(rng);
+      : key === 'torre'
+        ? [{ type: 'weapon', rarity: 'lendário', weapon: 3, ammo: 6 }, { type: 'armor', amount: 50 }, { type: 'med' }]
+        : rollChest(rng);
     socket.broadcast.emit('chestOpened', { key });
     cb({ ok: true, items });
   });
@@ -734,7 +858,7 @@ io.on('connection', socket => {
     if (hostId === socket.id) hostId = null;
     freeCarsOf(socket.id);
     if (players.size === 0) { // sala vazia: sessão volta ao estado de fábrica
-      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true };
+      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true };
       match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
       if (match.phase === 'COUNTDOWN' && match.countdownTimer) clearInterval(match.countdownTimer);
       if (match.phase !== 'PLAYING' && match.phase !== 'ENDED') match.phase = 'LOBBY';

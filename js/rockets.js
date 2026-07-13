@@ -4,9 +4,10 @@
 import * as THREE from 'three';
 
 export function createRockets(deps) {
-  const { rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss } = deps;
+  const { rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses = [], extraTargets = [] } = deps;
   const pool = [];
   const _prevR = new THREE.Vector3(); // posição anterior do foguete (temp exclusivo)
+  const _segR = new THREE.Vector3();
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x3a3f3a, roughness: 0.5 });
   for (let i = 0; i < 4; i++) {
     const m = new THREE.Group();
@@ -39,15 +40,35 @@ export function createRockets(deps) {
         FX.spawnParticle(r.m.position, _v2.set(rand(-0.5, 0.5), rand(0.2, 0.8), rand(-0.5, 0.5)), 0x9b958c, 0.16, 0.5, -0.3);
       }
       let boom = r.m.position.y < heightAt(r.m.position.x, r.m.position.z) + 0.2;
-      if (!boom && Structures.segBlocked(_prevR, r.m.position)) boom = true; // parede detona (antes atravessava prédio)
+      if (!boom && Structures.segBlocked(_prevR, r.m.position)) {
+        _segR.copy(r.m.position).sub(_prevR);
+        const segLen = _segR.length();
+        if (segLen > 1e-5 && typeof Structures.rayHit === 'function') {
+          _segR.multiplyScalar(1 / segLen);
+          const hitD = Structures.rayHit(_prevR, _segR, segLen);
+          if (Number.isFinite(hitD)) {
+            r.m.position.copy(_prevR).addScaledVector(_segR, Math.max(0, Math.min(segLen, hitD) - 0.04));
+          } else r.m.position.copy(_prevR);
+        } else r.m.position.copy(_prevR);
+        boom = true;
+      }
       if (!boom) for (const e of Enemies.list) if (e.alive && e.group.position.distanceToSquared(r.m.position) < 2.3) { boom = true; break; }
       if (!boom && Boss.alive && Boss.pos().distanceTo(r.m.position) < 2.6) boom = true;
+      if (!boom) for (const b of Bosses) {
+        if (b !== Boss && b.alive && b.pos().distanceTo(r.m.position) < 2.6) { boom = true; break; }
+      }
+      if (!boom) for (const a of extraTargets) {
+        if (a.alive && a.enabled !== false && a.pos().distanceToSquared(r.m.position) < 2.3) {
+          boom = true;
+          break;
+        }
+      }
       // espoleta de proximidade também pros jogadores remotos (BR)
       if (!boom && window.__MP_remotePlayers) for (const rp of window.__MP_remotePlayers)
         if (rp.alive && rp.group.position.distanceToSquared(r.m.position) < 4) { boom = true; break; }
       if (boom || r.m.position.distanceTo(player.pos) > 340) {
         r.live = false; r.m.visible = false;
-        Grenades.explode(r.m.position);
+        Grenades.explode(r.m.position, 'BAZUCA');
       }
     }
   }

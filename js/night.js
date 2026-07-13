@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 
 export function createNight(deps) {
-  const { rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags } = deps;
+  const { rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, obstaclesNear, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags } = deps;
   const zMat = csmMat(new THREE.MeshStandardMaterial({ color: 0x5a7a3e, roughness: 0.85 }));
   const zRag = csmMat(new THREE.MeshStandardMaterial({ color: 0x3c3a30, roughness: 0.9 }));
   const gMat = new THREE.MeshBasicMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.28, depthWrite: false });
@@ -73,6 +73,29 @@ export function createNight(deps) {
   for (let i = 0; i < 5; i++) makeCreature(true);
   let wasDeepNight = false;
 
+  /* mordida/toque não atravessa parede, árvore nem pedra — o fantasma pode
+     FLUTUAR através delas (design), mas o golpe precisa de contato real */
+  const _attackFrom = new THREE.Vector3(), _attackTo = new THREE.Vector3();
+  function meleeBlocked(c) {
+    const g = c.group;
+    _attackFrom.set(g.position.x, g.position.y + 1, g.position.z);
+    _attackTo.set(player.pos.x, player.pos.y + 0.9, player.pos.z);
+    if (Math.abs(_attackTo.y - _attackFrom.y) > 1.8) return true; // andar de cima/baixo
+    if (Structures && typeof Structures.segBlocked === 'function' &&
+        Structures.segBlocked(_attackFrom, _attackTo)) return true;
+    if (typeof obstaclesNear !== 'function') return false;
+    const dx = _attackTo.x - _attackFrom.x, dz = _attackTo.z - _attackFrom.z;
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 1e-8) return false;
+    for (const o of obstaclesNear((_attackFrom.x + _attackTo.x) * 0.5, (_attackFrom.z + _attackTo.z) * 0.5)) {
+      const k = Math.max(0, Math.min(1,
+        ((o.x - _attackFrom.x) * dx + (o.z - _attackFrom.z) * dz) / len2));
+      const nx = _attackFrom.x + dx * k, nz = _attackFrom.z + dz * k;
+      if ((nx - o.x) ** 2 + (nz - o.z) ** 2 < o.r * o.r) return true;
+    }
+    return false;
+  }
+
   function update(dt, t) {
     const nk = Env.nightK;
     if (nk > 0.8) wasDeepNight = true;
@@ -104,14 +127,16 @@ export function createNight(deps) {
       if (dP > 1.4 && !player.dead) {
         const dx = player.pos.x - g.position.x, dz = player.pos.z - g.position.z;
         const d = Math.hypot(dx, dz);
-        g.position.x += dx / d * speed * dt;
-        g.position.z += dz / d * speed * dt;
-        c.yaw = Math.atan2(dx, dz);
+        if (d > 1e-4) { // player exatamente acima/abaixo: d=0 viraria NaN
+          g.position.x += dx / d * speed * dt;
+          g.position.z += dz / d * speed * dt;
+          c.yaw = Math.atan2(dx, dz);
+        }
       }
       c.hitT = Math.max(0, c.hitT - dt);
-      if (dP < 1.6 && c.hitT <= 0 && !player.dead) {
+      if (dP < 1.6 && c.hitT <= 0 && !player.dead && !meleeBlocked(c)) {
         c.hitT = c.ghost ? 0.8 : 1.2;
-        playerDamage(c.ghost ? 7 : 13, g.position);
+        playerDamage(c.ghost ? 7 : 13, g.position, { type: c.ghost ? 'ghost' : 'zombie' });
         if (c.ghost) SFX.whisper();
       }
       c.phase += dt * 4;

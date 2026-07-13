@@ -4,6 +4,7 @@
 'use strict';
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
+const os = require('node:os');
 const path = require('node:path');
 
 const CHROME = [
@@ -16,8 +17,14 @@ const CHROME = [
 
 async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} }) {
   const puppeteer = require('puppeteer-core');
+  const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(),
+    `fps-harness-rank-${process.pid}-${serverPort || port}-${Date.now()}.json`);
+  const removeRankFile = !extraEnv.RANK_FILE;
   const srv = spawn(process.execPath, [path.join(__dirname, '..', '..', 'server.js')], {
-    env: { ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed, ...extraEnv },
+    // GAS_DEFAULT clássico: testes determinísticos (o 'auto' de produção sorteia
+    // modo por partida; os modos novos têm testes dedicados que setam a flag)
+    env: { ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed,
+      GAS_DEFAULT: 'classica', RANK_FILE: rankFile, ...extraEnv },
     stdio: 'ignore',
   });
   await new Promise(r => setTimeout(r, 800));
@@ -36,6 +43,7 @@ async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} 
     const G = window.__game, MP = window.__MP;
     // morte no solo agenda location.reload — no QA o respawn é neutralizado
     window.__MP_active = true;
+    window.__QA_originalRespawn = window.__MP_respawn;
     window.__MP_respawn = () => {};
     // IA fora do caminho: __BR_active desliga Enemies/Night/Boss no tick
     // (o hitscan continua acertando os bonecos parados) e os animais morrem
@@ -63,6 +71,8 @@ async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} 
         P.health = P.maxHealth;
         P.armor = 0;
         P.healPool = 0;
+        P.lastDamageCause = null;
+        P.lastDamageT = -Infinity;
         P.invulnUntil = 0;
         P.slideT = -1;
         MP.setTimeScale(1);
@@ -85,7 +95,13 @@ async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} 
     play: (fn, ...args) => page.evaluate(fn, ...args),
     async close() {
       if (browser) await browser.close();
-      if (srv) srv.kill();
+      if (srv && srv.exitCode === null) {
+        await new Promise(resolve => {
+          srv.once('exit', resolve);
+          srv.kill();
+        });
+      }
+      if (removeRankFile) fs.rmSync(rankFile, { force: true });
     },
   };
 }

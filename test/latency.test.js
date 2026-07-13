@@ -39,7 +39,7 @@ describe('Latência (proxy +120ms por sentido)', { skip: !CHROME && 'Chrome não
     });
     assert.ok(pageId, 'não achei o jogador da página no roster');
     await h.play(() => { const P = window.QA.MP.player; P.invulnUntil = 0; P.health = 100; P.armor = 0; });
-    for (let i = 0; i < 4; i++) bot.emit('shotHit', { targetId: pageId, dmg: 20, weapon: 'LAGGUN', fromPos: [0, 5, 0] });
+    for (let i = 0; i < 4; i++) bot.emit('shotHit', { targetId: pageId, dmg: 20, weapon: 'FUZIL', fromPos: [0, 5, 0] });
     const r = await h.play(async () => {
       const P = window.QA.MP.player;
       const t0 = performance.now();

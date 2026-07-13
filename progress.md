@@ -43,9 +43,79 @@ Original prompt: eu adicionei uns projetos em 3d. local uns carros, quero substi
 - Assets finais: Gumball 1.147.872 bytes / 31.991 vértices únicos; RX-7 79.564 / 4.038; caminhão 354.612 / 14.303. Total: 1.582.048 bytes e 50.332 vértices únicos compartilhados.
 - `br-rank.json` permaneceu fora do escopo; a verificação final redirecionou ranking para `/tmp`.
 
-## Pendências
+## Correções da 3ª rodada de QA (bugs #40–42 + lacunas da auditoria)
 
-- Nenhuma pendência funcional conhecida para esta solicitação.
+Os bugs #40–42 mapeados acima foram corrigidos e cobertos por testes
+(`test/skeletons.test.js`, `test/br-golem.test.js`, `test/animals-combat.test.js`).
+Na sequência, as lacunas da auditoria de combate foram fechadas:
+
+- **Protocolo dedicado de explosivos (`explosionHit`)**: granada/bazuca não viajam
+  mais por `shotHit` — o servidor valida o PONTO DE IMPACTO (não a arma equipada
+  nem a posição do atirador). Granada com FACA equipada funciona; a cobertura da
+  vítima parte do impacto; kill segue creditada ao atirador. Tipos fora de
+  GRANADA/BAZUCA (ex.: `MÍSSEIS`) são rejeitados — o evento de destruição da
+  cidade continua exclusivo do servidor (`byCity`, causa `city`, sem crédito de
+  kill). Arquivos: `server.js`, `br-game.js`, `js/grenades.js`, `js/rockets.js`;
+  testes: `test/br-explosion-protocol.test.js` (7 casos).
+- **Criaturas da noite**: mordida do zumbi/fantasma agora exige linha de visada
+  (parede, árvore, pedra, andar de cima/baixo) e o movimento tem guarda de NaN
+  quando o jogador está exatamente acima/abaixo. `js/night.js` + `game.js`
+  (injeção de `obstaclesNear`); testes: `test/night-combat.test.js`.
+- **Loot de bots em morte ambiental**: `dropLootOnce` idempotente — bots mortos
+  por gás, cidade ou AFK também soltam loot (antes só morte por tiro).
+  `scripts/bots.js`; testes em `test/bots-behavior.test.js`.
+- **Tiro humano que ERRA replicado**: `__BR_shotMiss` → `shotFired` (throttle de
+  220ms), cobrindo hitscan e projéteis balísticos que morrem em parede/expiram.
+  `game.js`, `br-game.js`; teste em `test/br-cover.test.js`.
+- **Onda de choque no carro respeita cobertura** (`blastClear` também no impulso).
+  `js/grenades.js`; teste em `test/explosives.test.js`. Para o teste unitário,
+  `cannon-es@0.20.0` entrou como devDependency (no browser vem do importmap/CDN).
+- **Testes desatualizados pelo anti-cheat novo**: arma inexistente (`HACK`) agora é
+  descartada inteira (ganhou teste próprio); flag `ship` forjado fora da rota é
+  rejeitado e vira INATIVIDADE (ganhou teste próprio); o teste da zona usa um
+  jogador parado no gás sem flag forjado. Vazamento de estado entre testes de
+  `br-pve-weapons` corrigido (esqueleto vivo na frente da câmera).
+
+## Correções da rodada de playtest (2026-07-13, reports do Renato)
+
+- **Loot lento / "baú sem nada"**: `rollChest` dava só munição em 38% dos baús
+  (inútil pra quem nasce de faca). Agora ≥88% entregam ARMA (`server.js`;
+  teste de taxa em `test/plan.test.js`).
+- **Baú do heliponto vazio**: a caixa no telhado da TORRE NEXUS era decoração
+  do modo solo. No BR virou baú de verdade (key `torre`) com recompensa fixa
+  do servidor: BAZUCA + colete + kit (`server.js`, `br-game.js`; testes em
+  `server.test.js` e `br-cover.test.js`).
+- **Atirar do helicóptero**: o gate de tiro bloqueava `state.flying`. Liberado;
+  a origem do disparo é o HELI (não a câmera de perseguição, que o servidor
+  rejeitaria por ficar ~10m atrás da posição autoritativa) e o HUD de munição
+  continua visível a bordo (`game.js`, `js/heli.js`; teste em
+  `gameplay.test.js`). Granada segue bloqueada em voo.
+- **Carros flutuando/enterrados**: fora da cidade o heightfield físico (grade
+  de 4m) diverge do terreno visual; o modelo agora ancora no `heightAt` — na
+  cidade mantém as rodas (asfalto acima do terreno). Resolveu também o flake
+  do caminhão no `car-models.test.js` (`js/car.js`).
+- **Física do carro**: teto de velocidade por veículo (buggy 72 / caminhão 84 /
+  esportivo 118 km/h) e direção sensível à velocidade (esterço cheio parado,
+  ~40% no talo) — sem isso o esportivo saturava o esterço e "não virava"
+  (`js/car.js`).
+- **Grama sob veículos**: clareiras de grama em todas as vagas de carro + o
+  buggy do spawn (`js/grass.js`, `game.js`). ⚠️ Lição: a criação da Grass NÃO
+  pode mudar de posição no init — ela consome o `rand` seedado e qualquer
+  reordenação muda o layout do mundo inteiro pra mesma seed (3 testes de
+  mundo quebraram). Solução: array de clareiras por referência +
+  `Grass.refreshAll()` no FIM do init.
+- **Modelo do carro re-ancora quando parado**: o chassi continua assentando
+  depois do alinhamento inicial; parado e fora da cidade o modelo re-ancora
+  no terreno visual continuamente (só aritmética, sem Box3) — `js/car.js`.
+
+## Pendências (arquiteturais, mapeadas — sem correção nesta rodada)
+
+- **Bots não conhecem paredes/árvores/LOS** (`scripts/bots.js`): reconstroem só
+  terreno/baús; podem mirar através de cobertura. Exige colisores/nav
+  determinísticos no processo dos bots ou autoridade de mundo no servidor.
+- **Integridade client-authoritative** (`server.js`): o servidor ainda aceita o
+  dano informado pelo atirador e killer/causa informados pela vítima. Mitigado
+  por validações de alcance/orçamento/flood, mas sem histórico autoritativo.
 
 ---
 

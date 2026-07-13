@@ -68,6 +68,15 @@ describe('Loot dos baús (unidade)', () => {
     for (const t of ['ammo', 'weapon', 'med', 'armor']) assert.ok(types.has(t), `nunca saiu ${t}`);
     for (const r of ['incomum', 'raro', 'épico', 'lendário']) assert.ok(rarities.has(r), `nunca saiu arma ${r}`);
   });
+
+  it('dados 500 baús, então pelo menos 80% entregam ARMA (jogador de faca não pode ficar travado)', () => {
+    const rng = mulberry32(4242);
+    let comArma = 0;
+    for (let i = 0; i < 500; i++) {
+      if (rollChest(rng).some(it => it.type === 'weapon')) comArma++;
+    }
+    assert.ok(comArma >= 400, `só ${comArma}/500 baús tinham arma`);
+  });
 });
 
 describe('Ranking global (unidade)', () => {

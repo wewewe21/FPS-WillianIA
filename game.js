@@ -29,11 +29,13 @@ import { createPickups } from './js/pickups.js';
 import { createEnv } from './js/env.js';
 import { createWater } from './js/water.js';
 import { createGrass } from './js/grass.js';
+import { createVolcano } from './js/volcano.js';
 import { createEnemies } from './js/enemies.js';
 import { createBoss } from './js/boss.js';
 import { createAmb } from './js/amb.js';
 import { createAnimals } from './js/animals.js';
 import { createNight } from './js/night.js';
+import { createSkeletons } from './js/skeletons.js';
 import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
 
@@ -66,7 +68,7 @@ if (window.io) {
 
 
 const { simplex, heightAt, buildHeightGrid, groundAt, slopeAt, terrainNormal, biomeAt,
-  platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY } = createTerrain({ lerp, clamp });
+  platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY, VOLCANO } = createTerrain({ lerp, clamp });
 
 const SFX = createSFX({ SETTINGS, clamp, rand });
 
@@ -198,6 +200,7 @@ const COL_ROCK    = new THREE.Color(0x8d8f96);
 const COL_DIRT    = new THREE.Color(0x9a7e54);
 const COL_FOREST  = new THREE.Color(0x3e7a31);
 const COL_SNOW    = new THREE.Color(0xe8eef4);
+const COL_BASALT  = new THREE.Color(0x241d1a); // rocha vulcânica escura
 
 let terrainMesh;
 {
@@ -221,6 +224,10 @@ let terrainMesh;
     if (slope > 0.7) c.lerp(COL_ROCK, THREE.MathUtils.smoothstep(slope, 0.7, 1.05));   // rocha
     if (h > 17) c.lerp(COL_ROCK, THREE.MathUtils.smoothstep(h, 17, 26));               // topos rochosos
     if (h > 21) c.lerp(COL_SNOW, THREE.MathUtils.smoothstep(h, 21, 28));               // picos nevados
+    // vulcão: basalto escuro cobre neve/rocha clara (casa com o modelo 3D)
+    const dVol = Math.hypot(x - VOLCANO.x, z - VOLCANO.z);
+    if (dVol < VOLCANO.r * 1.15)
+      c.lerp(COL_BASALT, 0.9 * (1 - THREE.MathUtils.smoothstep(dVol, VOLCANO.r * 0.8, VOLCANO.r * 1.15)));
     const dCity = Math.hypot(x - CITY.x, z - CITY.z);
     if (dCity < 62) c.lerp(COL_ROCK, 0.55).multiplyScalar(0.55);                       // asfalto urbano
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
@@ -240,7 +247,12 @@ const Water = createWater({ CFG, WATER_LEVEL, scene, sunDir });
    GRAMA REATIVA — InstancedMesh em chunks que acompanham o player.
    Vento no vertex shader + dobra quando player/carro passam.
    ================================================================ */
-const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY });
+/* Clareiras de grama sob as vagas de veículos: o array é preenchido DEPOIS
+   (Structures ainda não existe aqui) e a grama refaz os chunks já criados.
+   A criação da Grass NÃO pode mudar de lugar: ela consome o rand seedado e
+   qualquer reordenação muda o layout do mundo inteiro pra mesma seed. */
+const grassClearings = [];
+const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings: grassClearings });
 
 /* ================================================================
    VEGETAÇÃO — árvores (2 LODs), pedras e flores, tudo InstancedMesh
@@ -291,6 +303,12 @@ scene.add(treeHiMesh, treeLoMesh);
 
 const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry });
 
+// clareiras de grama: uma por vaga de veículo + o buggy do spawn (7.5, -6).
+// O refill (Grass.refreshAll) roda no FIM do init: fillChunk consome o rand
+// seedado e aqui ainda deslocaria o stream das árvores/vegetação.
+grassClearings.push({ x: 7.5, z: -6, r: 4.5 },
+  ...Structures.carSpots.map(s => ({ x: s.x, z: s.z, r: s.type === 'truck' ? 5.5 : 4.5 })));
+
 /* paredes das construções também são sólidas pra física dos veículos —
    sem isso carro/caminhão atravessavam prédios, fortes e muros */
 for (const b of Structures.walls) {
@@ -322,16 +340,22 @@ const treeSpots = []; // posições das árvores (LOD + minimapa)
     let nearBuild = false;
     for (const st of Structures.sites) if (Math.hypot(x - st.x, z - st.z) < st.r + 4) { nearBuild = true; break; }
     if (nearBuild) continue;
-    const s = rand(0.75, 1.5);
+    const sRand = rand(0.75, 1.5);
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const s = isExcluded ? 0.0001 : sRand;
     // variação de cor: verdes, outono dourado e tons profundos por região
     const cv = simplex.noise(x * 0.004 - 90, z * 0.004 + 60);
     const tint = cv > 0.45 ? 0xffaa58 : cv > 0.3 ? 0xffd98a : cv < -0.45 ? 0x7ddf9a : 0xffffff;
-    treeSpots.push({ x, y, z, s, rot: rand(TAU), tint });
-    addObstacle(x, z, 0.45 * s);
-    const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * s, 1.8, 0.32 * s)) });
-    body.position.set(x, y + 1.8, z);
-    body.updateAABB(); // idem paredes: AABB ficava na origem
-    world.addBody(body);
+    const rot = rand(TAU);
+    treeSpots.push({ x, y: isExcluded ? -100 : y, z, s, rot, tint });
+    if (!isExcluded) {
+      addObstacle(x, z, 0.45 * s);
+      const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * s, 1.8, 0.32 * s)) });
+      body.position.set(x, y + 1.8, z);
+      body.updateAABB(); // idem paredes: AABB ficava na origem
+      world.addBody(body);
+    }
   }
 }
 
@@ -511,14 +535,19 @@ const Scenery = createScenery();
   while (placed < CFG.ROCK_COUNT && tries++ < CFG.ROCK_COUNT * 20) {
     const x = rand(-lim, lim), z = rand(-lim, lim);
     if (Math.hypot(x, z) < 18) continue;
-    const s = Math.pow(Math.random(), 2.2) * 2.6 + 0.35;
+    const sRand = Math.pow(Math.random(), 2.2) * 2.6 + 0.35;
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const s = isExcluded ? 0.0001 : sRand;
     const y = heightAt(x, z) - s * 0.3;
-    _dummy.position.set(x, y, z);
-    _dummy.rotation.set(rand(-0.3, 0.3), rand(TAU), rand(-0.3, 0.3));
-    _dummy.scale.set(s * rand(0.8, 1.3), s, s * rand(0.8, 1.3));
+    const rX = rand(-0.3, 0.3), rY = rand(TAU), rZ = rand(-0.3, 0.3);
+    const scX = rand(0.8, 1.3), scZ = rand(0.8, 1.3);
+    _dummy.position.set(x, isExcluded ? -100 : y, z);
+    _dummy.rotation.set(rX, rY, rZ);
+    _dummy.scale.set(s * scX, s, s * scZ);
     _dummy.updateMatrix();
     rocks.setMatrixAt(placed++, _dummy.matrix);
-    if (s > 1.1) {
+    if (!isExcluded && s > 1.1) {
       addObstacle(x, z, s * 0.8);
       const body = new CANNON.Body({ mass: 0, shape: new CANNON.Sphere(s * 0.75) });
       body.position.set(x, y + s * 0.2, z);
@@ -548,9 +577,14 @@ const Scenery = createScenery();
     if (y < 0.9) continue;
     if (biomeAt(x, z) < -0.12) continue; // sem flores no deserto
     if (simplex.noise(x * 0.01 - 200, z * 0.01 + 140) < 0.18) continue; // em manchas
-    _dummy.position.set(x, y, z);
-    _dummy.rotation.set(0, rand(TAU), 0);
-    _dummy.scale.setScalar(rand(0.7, 1.5));
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const rot = rand(TAU);
+    const scaleRand = rand(0.7, 1.5);
+    const scale = isExcluded ? 0.0001 : scaleRand;
+    _dummy.position.set(x, isExcluded ? -100 : y, z);
+    _dummy.rotation.set(0, rot, 0);
+    _dummy.scale.setScalar(scale);
     _dummy.updateMatrix();
     flowers.setMatrixAt(placed, _dummy.matrix);
     flowers.setColorAt(placed, _c.setHex(palette[(Math.random() * palette.length) | 0]));
@@ -589,12 +623,19 @@ const Scenery = createScenery();
     const x = rand(-limC, limC), z = rand(-limC, limC);
     if (biomeAt(x, z) > -0.25 || slopeAt(x, z) > 0.4) continue;
     if (heightAt(x, z) < WATER_LEVEL + 0.5) continue; // cacto não nasce no lago
-    _dummy.position.set(x, heightAt(x, z), z);
-    _dummy.rotation.set(0, rand(TAU), rand(-0.06, 0.06));
-    _dummy.scale.setScalar(rand(0.7, 1.5));
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const rY = rand(TAU), rZ = rand(-0.06, 0.06);
+    const scaleRand = rand(0.7, 1.5);
+    const scale = isExcluded ? 0.0001 : scaleRand;
+    _dummy.position.set(x, isExcluded ? -100 : heightAt(x, z), z);
+    _dummy.rotation.set(0, rY, rZ);
+    _dummy.scale.setScalar(scale);
     _dummy.updateMatrix();
     cacti.setMatrixAt(nCac++, _dummy.matrix);
-    addObstacle(x, z, 0.35);
+    if (!isExcluded) {
+      addObstacle(x, z, 0.35);
+    }
   }
   cacti.count = nCac;
   scene.add(cacti);
@@ -1227,6 +1268,7 @@ function rayBlockedAt(origin, dir, maxDist) {
 
 const _rayDir = new THREE.Vector3(), _rayOrig = new THREE.Vector3(), _hitPos = new THREE.Vector3();
 const _hitAgg = new THREE.Vector3();
+const _missEnd = new THREE.Vector3();
 function fire(t) {
   // faca (melee): golpe curto, sem munição/flash/som de tiro
   if (gun.melee) {
@@ -1258,6 +1300,8 @@ function fire(t) {
     recoil.kickRot += 0.2;
     camera.getWorldDirection(_rayDir);
     muzzle.getWorldPosition(_v3);
+    // voando, o tiro sai do HELICÓPTERO, não da câmera de perseguição (10m atrás)
+    if (state.flying) { _v3.copy(Heli.group.position); _v3.y += 1.6; }
     Rockets.fire(_v3, _rayDir);
     return;
   }
@@ -1278,8 +1322,15 @@ function fire(t) {
   const spread = lerp(gun.spreadHip, gun.spreadAds, adsT) + spd * 0.0006 + (player.onGround ? 0 : 0.012);
   camera.getWorldPosition(_rayOrig);
   muzzle.getWorldPosition(_v3);
+  // voando, origem do tiro é o HELICÓPTERO — a câmera de perseguição fica ~10m
+  // atrás e o servidor rejeitaria a origem longe da posição autoritativa
+  if (state.flying) {
+    _v3.copy(Heli.group.position); _v3.y += 1.6;
+    _rayOrig.copy(_v3);
+  }
 
   let hitAny = false, killAny = false, headAny = false, totalDmg = 0;
+  let remoteHit = false, missEndSet = false;
   for (let p = 0; p < gun.pellets; p++) {
     camera.getWorldDirection(_rayDir);
     _v1.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(spread * Math.sqrt(Math.random()));
@@ -1321,7 +1372,7 @@ function fire(t) {
     }
     // alvos extras: animais, zumbis, fantasmas
     for (const a of extraTargets) {
-      if (!a.alive) continue;
+      if (!a.alive || a.enabled === false) continue;
       for (const s of a.hitSpheres()) {
         _v2.copy(s.c).sub(_rayOrig);
         const proj = _v2.dot(_rayDir);
@@ -1365,7 +1416,7 @@ function fire(t) {
       let died;
       if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
       else if (bestExtra) died = bestExtra.damage(dmg, _hitPos, _rayDir, head);
-      else if (bestRemote) died = bestRemote.damage(dmg, _hitPos, _rayDir, head);
+      else if (bestRemote) { died = bestRemote.damage(dmg, _hitPos, _rayDir, head); remoteHit = true; }
       else died = bestEnemy.damage(dmg, _hitPos, _rayDir, bestPart === 'head');
       hitAny = true; totalDmg += dmg;
       headAny = headAny || head;
@@ -1375,7 +1426,11 @@ function fire(t) {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, 240);
       FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
     }
+    if (!missEndSet) { missEndSet = true; _missEnd.copy(_hitPos); }
   }
+  // BR: quem não foi atingido não via NADA deste disparo — o shotHit só é
+  // replicado quando acerta. Um shotFired por gatilho mostra muzzle/tracer.
+  if (!remoteHit && missEndSet && window.__BR_shotMiss) window.__BR_shotMiss(_v3, _missEnd);
   if (hitAny) {
     DmgNums.spawn(_hitAgg, Math.round(totalDmg), headAny);
     showHitmarker(killAny);
@@ -1408,8 +1463,9 @@ function shootUpdate(dt, t) {
     centerMsg('Mira: ' + s.name, 1100);
     SFX.switchW();
   }
-  if (state.driving || state.flying || state.paused || player.dead || window.__BR_freeze || state.cinematic) { mouse.clicked = false; return; }
-  if (justPressed.has('KeyG')) Grenades.throwNade(t);
+  // no helicóptero PODE atirar (porta aberta); dirigindo não — as mãos estão no volante
+  if (state.driving || state.paused || player.dead || window.__BR_freeze || state.cinematic) { mouse.clicked = false; return; }
+  if (justPressed.has('KeyG') && !state.flying) Grenades.throwNade(t);
   const interval = 60 / gun.rpm;
   const want = gun.auto ? mouse.shooting : mouse.clicked;
   if (want && !gun.reloading && switchAnim > 0.8 && t - gun.lastShot >= interval) {
@@ -1433,7 +1489,7 @@ function updateHealthHUD() {
 function updateArmorHUD() {
   ui.armorFill.style.width = (player.armor / player.armorMax * 100) + '%';
 }
-function playerDamage(dmg, fromPos) {
+function playerDamage(dmg, fromPos, cause) {
   // no BR online, pausar NÃO pode dar imunidade (senão vira exploit em tiroteio)
   if (player.dead || (state.paused && !window.__BR_active)) return;
   if (state.gameTime < (player.invulnUntil || 0)) return; // proteção de spawn
@@ -1445,6 +1501,13 @@ function playerDamage(dmg, fromPos) {
   }
   player.health -= dmg;
   player.lastDamageT = state.gameTime;
+  const causeType = cause && typeof cause.type === 'string' ? cause.type : 'environment';
+  player.lastDamageCause = {
+    type: causeType,
+    attackerId: cause && cause.attackerId ? String(cause.attackerId) : null,
+    weapon: cause && cause.weapon ? String(cause.weapon) : null,
+    t: Date.now(),
+  };
   damageFlash(1);
   addTrauma(0.32);
   SFX.hurt();
@@ -1468,7 +1531,9 @@ function playerDamage(dmg, fromPos) {
   }
 }
 
-const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys });
+const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat });
+
+const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY });
 
 const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos });
 
@@ -1569,7 +1634,7 @@ const extraTargets = [];
 const Bosses = [];
 const MFlags = { colosso: false, alien: false, night: false }; // marcos de missão
 
-const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainNormal, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets });
+const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainNormal, rayBlockedAt, Structures, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets });
 
 
 
@@ -1579,7 +1644,7 @@ const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainN
 let timeScale = 1; // câmera lenta cinematográfica na morte do boss
 const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale });
 /* Rockets criado APOS o Boss (dependencia declarada) — só é usado em runtime */
-const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss });
+const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses, extraTargets });
 
 const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler });
 
@@ -1592,17 +1657,19 @@ const Amb = createAmb({ rand, TAU, _v1, _v2, heightAt, biomeAt, addObstacle, SFX
 /* ================================================================
    ANIMAIS — cervos (carne) e lobos (selvagens, mordem)
    ================================================================ */
-const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups });
+const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear, SFX });
 
 /* ================================================================
    CRIATURAS DA NOITE — zumbis e fantasmas (somem ao amanhecer)
    ================================================================ */
-const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags });
+const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, obstaclesNear, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags });
+
+const Skeletons = createSkeletons({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear });
 
 /* ================================================================
    BOSS 2 — O VISITANTE (alien na cratera do deserto) -> arma PLASMA
    ================================================================ */
-const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Chars });
+const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Structures, Chars });
 
 /* ================================================================
    MISSÕES — cadeia com recompensas
@@ -1788,6 +1855,7 @@ function tick(forceDt) {
     FX.update(dt);
     Amb.update(dt, menuT);
     Water.update(menuT);
+    Volcano.update(dt, menuT);
     if (sky.material.uniforms.time) sky.material.uniforms.time.value = menuT;
     camera.updateMatrixWorld();
     csm.update();
@@ -1806,16 +1874,20 @@ function tick(forceDt) {
   Car.update(dt, t);
   Heli.update(dt, t);
   if (!window.__BR_active) Enemies.update(dt, t); // BR: sem inimigos comuns
+  if (!window.__BR_active || (window.__BR_debug && window.__BR_debug.S.phase === 'PLAY')) Skeletons.update(dt, t);
   Animals.update(dt, t);
   if (!window.__BR_active || window.__BR_zumbis) Night.update(dt, t); // BR: zumbis só se a sala ligar
   Grenades.update(dt, t);
   Rockets.update(dt, t);
   Pickups.update(dt, t);
-  if (!window.__BR_active) { Boss.update(dt, t); Alien.update(dt, t); Missions.update(); }
+  if (!window.__BR_active) { Boss.update(dt, t); Missions.update(); }
+  // Visitante volta ao BR quando a sala permite (playtest: "o alien sumiu")
+  if (!window.__BR_active || window.__BR_alien) Alien.update(dt, t);
   Interact.update(dt, t);
   FX.update(dt);
   Amb.update(dt, t);
   Water.update(t);
+  Volcano.update(dt, t);
 
   /* áudio de clima (chuva) */
   SFX.musicUpdate();
@@ -1918,12 +1990,16 @@ window.addEventListener('resize', () => {
   csm.updateFrustums();
 });
 
+/* clareiras de grama sob os veículos: refill no FIM do init — fillChunk
+   consome o rand seedado e antes daqui deslocaria o layout do mundo */
+Grass.refreshAll();
+
 /* hooks de depuração (inofensivos em produção) */
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
-  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass,
-  inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags,
+  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
+  inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   WeaponModels, FpBody,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
