@@ -53,6 +53,7 @@ describe('CityDestructionProtocol (unidade)', () => {
 
 /* =============== SERVIDOR (integração socket) =============== */
 const path = require('node:path');
+const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { io } = require('socket.io-client');
 
@@ -61,16 +62,22 @@ let nextPort = 26000 + (process.pid % 400) * 10;
 
 function spawnServer(env = {}) {
   const port = nextPort++;
+  const rankFile = env.RANK_FILE || path.join(os.tmpdir(),
+    `fps-city-rank-${process.pid}-${port}-${Date.now()}.json`);
   const proc = spawn(process.execPath, [SERVER], {
     env: { ...process.env, PORT: String(port), HOST_CODE: 'QA123', COUNTDOWN_S: '1',
       NEXT_IN_S: '60', WORLD_SEED: '424242',
-      CITY_DESTRUCTION_DELAY_MS: '1200', CITY_DESTRUCTION_IMPACT_DELAY_MS: '900', ...env },
+      CITY_DESTRUCTION_DELAY_MS: '1200', CITY_DESTRUCTION_IMPACT_DELAY_MS: '900',
+      RANK_FILE: rankFile, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   return new Promise((res, rej) => {
     const to = setTimeout(() => rej(new Error('servidor não subiu')), 5000);
     proc.stdout.on('data', d => {
-      if (String(d).includes('Servidor BR no ar')) { clearTimeout(to); res({ port, proc, stop: () => proc.kill() }); }
+      if (String(d).includes('Servidor BR no ar')) {
+        clearTimeout(to);
+        res({ port, proc, stop: () => proc.kill() });
+      }
     });
     proc.on('exit', c => rej(new Error('morreu cedo: ' + c)));
   });

@@ -238,15 +238,18 @@ export function createCar(deps) {
          modelo afundava ~0,5m. Referência = RODAS físicas (não o terreno:
          na rua da cidade o asfalto fica acima do heightAt e o modelo
          afundava no slab). Roda uma vez, com o chassi em repouso. */
-      if (v.modelAlignPending && v.chassisBody.velocity.lengthSquared() < 0.04) {
-        v.modelAlignPending = false;
-        v.group.updateMatrixWorld(true);
-        let wy = 0;
-        for (const w of v.vehicle.wheelInfos) wy += w.worldTransform.position.y;
-        const chao = wy / 4 - v.cfg.wheelR; // fundo dos pneus = chão real da física
-        const box = new THREE.Box3().setFromObject(v.modelRoot);
-        v.modelRoot.position.y += (chao + 0.04 - box.min.y);
-        v.modelRoot.updateMatrixWorld(true);
+      if (v.modelAlignPending) {
+        v.alignTicks = (v.alignTicks || 0) + 1;
+        if (v.chassisBody.velocity.lengthSquared() < 0.04 || v.alignTicks > 180) {
+          v.modelAlignPending = false;
+          v.group.updateMatrixWorld(true);
+          let wy = 0;
+          for (const w of v.vehicle.wheelInfos) wy += w.worldTransform.position.y;
+          const chao = wy / 4 - v.cfg.wheelR; // fundo dos pneus = chão real da física
+          const box = new THREE.Box3().setFromObject(v.modelRoot);
+          v.modelRoot.position.y += (chao + 0.04 - box.min.y);
+          v.modelRoot.updateMatrixWorld(true);
+        }
       }
     }
     // poeira + áudio do veículo atual

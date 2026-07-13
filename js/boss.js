@@ -82,6 +82,12 @@ export function createBoss(deps) {
     stompT: -1, stompHit: false, deadT: -1, respawnT: 0,
     flinch: 0,
   };
+  const _attackFrom = new THREE.Vector3(), _attackTo = new THREE.Vector3();
+  function clearToPlayer(from, fromLift = 0.2) {
+    _attackFrom.copy(from); _attackFrom.y += fromLift;
+    _attackTo.copy(player.pos); _attackTo.y += 1;
+    return !Structures.segBlocked(_attackFrom, _attackTo);
+  }
 
   /* orbes de plasma (pool) */
   const orbs = [];
@@ -89,12 +95,13 @@ export function createBoss(deps) {
   for (let i = 0; i < 8; i++) {
     const m = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 9), orbMat);
     m.visible = false; scene.add(m);
-    orbs.push({ mesh: m, vel: new THREE.Vector3(), live: false });
+    orbs.push({ mesh: m, vel: new THREE.Vector3(), live: false, life: 0 });
   }
   function fireOrb() {
     const o = orbs.find(o => !o.live);
     if (!o) return;
     o.live = true;
+    o.life = 4.5;
     const fs = Math.sin(B.yaw), fc = Math.cos(B.yaw);
     o.mesh.position.set(group.position.x + fs * 1.2 - fc * 1.5, group.position.y + 2.9, group.position.z + fc * 1.2 + fs * 1.5);
     _v2.copy(player.pos); _v2.y += 1.2;
@@ -103,13 +110,15 @@ export function createBoss(deps) {
     o.mesh.visible = true;
     SFX.bossShot();
   }
-  function orbExplode(o) {
+  function orbExplode(o, damagePlayer = true) {
     o.live = false;
     o.mesh.visible = false;
     FX.burst(o.mesh.position, _v1.set(0, 1, 0), 'spark');
     FX.burst(o.mesh.position, _v1.set(0, 1, 0), 'dirt');
     const d = o.mesh.position.distanceTo(player.pos);
-    if (d < 4.5) playerDamage(Math.round(20 * (1 - d / 5)) + 6, o.mesh.position);
+    if (damagePlayer && d < 4.5 && clearToPlayer(o.mesh.position, 0)) {
+      playerDamage(Math.round(20 * (1 - d / 5)) + 6, o.mesh.position, { type: 'boss' });
+    }
     addTrauma(clamp(0.55 - d * 0.025, 0, 0.55));
   }
 
@@ -189,9 +198,16 @@ export function createBoss(deps) {
     // orbes sempre voam, mesmo com o boss morto
     for (const o of orbs) {
       if (!o.live) continue;
+      o.life -= dt;
       o.vel.y -= 3 * dt;
-      o.mesh.position.addScaledVector(o.vel, dt);
+      _v2.copy(o.mesh.position).addScaledVector(o.vel, dt);
+      if (Structures.segBlocked(o.mesh.position, _v2)) {
+        orbExplode(o, false);
+        continue;
+      }
+      o.mesh.position.copy(_v2);
       o.mesh.scale.setScalar(1 + Math.sin(t * 30) * 0.12);
+      if (o.life <= 0) { o.live = false; o.mesh.visible = false; continue; }
       if (o.mesh.position.y < heightAt(o.mesh.position.x, o.mesh.position.z) + 0.3 ||
           o.mesh.position.distanceTo(player.pos) < 1.3) orbExplode(o);
     }
@@ -252,8 +268,8 @@ export function createBoss(deps) {
           FX.spawnParticle(_v1, _v2, 0x9a8a6a, rand(0.3, 0.5), 0.7, 8);
         }
         const d = group.position.distanceTo(player.pos);
-        if (d < 11) {
-          playerDamage(Math.round(32 * (1 - d / 13)), group.position);
+        if (d < 11 && clearToPlayer(group.position, 1)) {
+          playerDamage(Math.round(32 * (1 - d / 13)), group.position, { type: 'boss' });
           _v2.copy(player.pos).sub(group.position).normalize();
           player.vel.x += _v2.x * 13; player.vel.z += _v2.z * 13; player.vel.y = 7;
           player.onGround = false;

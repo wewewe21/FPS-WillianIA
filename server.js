@@ -43,6 +43,11 @@ const clean = s => String(s == null ? '' : s).replace(/[<>&"']/g, '').trim();
 // versão leve: preserva aspas (nomes de arma, chat) — o cliente escapa antes de renderizar
 const cleanSoft = s => String(s == null ? '' : s).replace(/[<>&]/g, '').trim();
 const cleanNick = n => clean(n).slice(0, 14) || 'Recruta';
+const WEAPON_CODES = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA'];
+function weaponCode(value) {
+  const raw = cleanSoft(value).toUpperCase().slice(0, 48);
+  return WEAPON_CODES.find(code => raw === code || raw.startsWith(code + ' ')) || null;
+}
 function mulberry32(seed) {
   let s = seed >>> 0;
   return () => {
@@ -141,6 +146,9 @@ function resetRoundState() {
   match.openedChests.clear();
   match.drops.clear();
   match.dropSeq = 0;
+  match.bossHp = 0;
+  match.bossMaxHp = 0;
+  match.bossDead = !match.flags.golem;
   match.carOwners = {};
 }
 
@@ -224,7 +232,7 @@ function rollChest(rng, luck = 0) {
 function roster(withPos) {
   return [...players.entries()].map(([id, p]) => ({
     id, nick: p.nick, colors: p.colors, kills: p.kills,
-    alive: p.alive, spectator: p.spectator,
+    alive: p.alive, spectator: p.spectator, bot: !!p.bot,
     ...(withPos ? { pos: p.pos } : {}), // pos só no init — broadcast viraria wallhack
   }));
 }
@@ -325,7 +333,7 @@ function endMatch(winnerId) {
     resetRoundState();
     match.phase = 'LOBBY';
     for (const p of players.values()) { p.spectator = false; p.alive = false; p.placement = 0; }
-    io.emit('nextMatch', {}); // clientes recarregam e voltam pro lobby com a seed nova
+    io.emit('nextMatch', { worldSeed: match.seed }); // browser recarrega; bots persistentes reconstroem o mapa
   }, NEXT_IN_S * 1000);
 }
 
@@ -368,6 +376,7 @@ setInterval(() => {
         victimId: id, victimNick: p.nick,
         killerId: null, killerNick: null, killerKills: 0,
         weapon: 'MÍSSEIS', byZone: false, byCity: true,
+        cause: 'city',
         placement: p.placement,
       });
       console.log(`[CIDADE] ${p.nick} morreu no ataque de mísseis`);
@@ -433,7 +442,8 @@ setInterval(() => {
       io.emit('playerKilled', {
         victimId: id, victimNick: p.nick,
         killerId: null, killerNick: null, killerKills: 0,
-        weapon: 'ZONA', byZone: true, placement: p.placement,
+        weapon: inGas ? 'ZONA' : (floating ? 'QUEDA' : 'INATIVIDADE'),
+        byZone: inGas, cause: inGas ? 'gas' : 'environment', placement: p.placement,
       });
       console.log(`[ZONA] servidor eliminou ${p.nick} (gás=${inGas} voando=${floating} afk=${afk})`);
       broadcastRoster();
@@ -450,6 +460,7 @@ io.on('connection', socket => {
     nick: 'Recruta', colors: null, kills: 0,
     alive: false, spectator: isMidMatch, placement: 0,
     pos: [0, 0, 0], lastChat: 0, hitWindow: [], lastState: Date.now(), zoneHp: ZONE_HP, canDrop: true,
+    bot: false, heldWeapon: 'FACA', ship: false, fall: false, chute: false,
   });
 
   socket.emit('init', {
@@ -475,6 +486,7 @@ io.on('connection', socket => {
   socket.on('hello', d => {
     const p = players.get(socket.id); if (!p) return;
     p.nick = cleanNick(d && d.nick);
+    p.bot = !!(d && d.bot);
     if (d && Array.isArray(d.colors)) p.colors = d.colors.slice(0, 4).map(c => clean(c).slice(0, 9));
     broadcastRoster();
     // o lobby emite hello a cada tecla digitada no nick — só anuncia UMA vez
@@ -594,12 +606,16 @@ io.on('connection', socket => {
     }
 
     p.pos = pos;
+    p.ship = !!d.ship;
+    p.fall = !!d.fall || !!d.chute;
+    p.chute = !!d.chute;
+    p.heldWeapon = weaponCode(d.heldWeapon) || p.heldWeapon;
     p.lastState = now;
     socket.volatile.broadcast.emit('playerUpdate', {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
       ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
-      heli: !!d.heli,
-      nick: p.nick, colors: p.colors,
+      heli: !!d.heli, fall: p.fall,
+      nick: p.nick, colors: p.colors, bot: !!p.bot, heldWeapon: p.heldWeapon,
     });
   });
 
@@ -610,6 +626,19 @@ io.on('connection', socket => {
     if (match.phase !== 'PLAYING' || !p.alive) return;
     const victim = players.get(d.targetId);
     if (!victim.alive) return;
+    const weapon = weaponCode(d.weapon);
+    if (!weapon) return;
+    const maxRange = weapon === 'FACA' ? 4 : weapon === 'ESCOPETA' ? 120 : 320;
+    // A nave/queda é uma fase invulnerável e tiros além do alcance útil não existem.
+    if (p.ship || p.fall || victim.ship || victim.fall) return;
+    if (Math.hypot(p.pos[0] - victim.pos[0], p.pos[1] - victim.pos[1], p.pos[2] - victim.pos[2]) > maxRange) return;
+    let fromPos = [p.pos[0], p.pos[1] + 1.5, p.pos[2]];
+    if (Array.isArray(d.fromPos)) {
+      const f = d.fromPos.slice(0, 3).map(Number);
+      if (f.length !== 3 || !f.every(Number.isFinite) ||
+          Math.hypot(f[0] - p.pos[0], f[1] - p.pos[1], f[2] - p.pos[2]) > 5) return;
+      fromPos = f;
+    }
     // anti-flood: no máx 12 acertos reportados por segundo por atirador
     const now = Date.now();
     p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
@@ -622,17 +651,69 @@ io.on('connection', socket => {
     p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
     if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return;
     p.dmgWindow.push({ t: now, d: dmgReq });
-    let fromPos = [0, 0, 0];
-    if (Array.isArray(d.fromPos)) {
-      const f = d.fromPos.slice(0, 3).map(Number);
-      if (f.length === 3 && f.every(Number.isFinite)) fromPos = f;
-    }
+    socket.broadcast.emit('playerFired', {
+      shooterId: socket.id, targetId: d.targetId, weapon,
+      fromPos, toPos: victim.pos.slice(0, 3),
+    });
     io.to(d.targetId).emit('youWereHit', {
       dmg: dmgReq,
       fromPos,
       shooterId: socket.id, shooterNick: p.nick,
-      weapon: cleanSoft(d.weapon).slice(0, 24) || '???',
+      weapon,
     });
+  });
+
+  /* dano explosivo (granada/bazuca) tem protocolo próprio: a origem é o
+     PONTO DE IMPACTO, não o atirador — senão granada com FACA equipada
+     era rejeitada pelo alcance de 4 m e a vítima checava cobertura contra
+     a posição errada. MÍSSEIS do evento da cidade são do SERVIDOR e não
+     passam por aqui: tipo fora da lista é descartado. */
+  socket.on('explosionHit', d => {
+    const p = players.get(socket.id);
+    if (!p || !d || !players.has(d.targetId)) return;
+    if (match.phase !== 'PLAYING' || !p.alive) return;
+    const victim = players.get(d.targetId);
+    if (!victim.alive) return;
+    const kind = d.kind === 'GRANADA' || d.kind === 'BAZUCA' ? d.kind : null;
+    if (!kind) return;
+    if (p.ship || p.fall || victim.ship || victim.fall) return;
+    const impact = Array.isArray(d.impactPos) ? d.impactPos.slice(0, 3).map(Number) : [];
+    if (impact.length !== 3 || !impact.every(Number.isFinite)) return;
+    // granada não voa o mapa inteiro; foguete tem o alcance de tiro normal
+    const maxReach = kind === 'BAZUCA' ? 340 : 80;
+    if (Math.hypot(impact[0] - p.pos[0], impact[1] - p.pos[1], impact[2] - p.pos[2]) > maxReach) return;
+    // além do raio real do splash (7,5 m + folga de lag) não existe dano
+    if (Math.hypot(impact[0] - victim.pos[0], impact[1] - victim.pos[1], impact[2] - victim.pos[2]) > 12) return;
+    const now = Date.now();
+    p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
+    if (p.hitWindow.length >= 12) return;
+    p.hitWindow.push(now);
+    // teto = dano máximo real no epicentro (110 * 1 + 20); orçamento é o mesmo dos tiros
+    const dmgReq = Math.min(Math.max(+d.dmg || 0, 0), 130);
+    if (dmgReq <= 0) return;
+    p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
+    if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return;
+    p.dmgWindow.push({ t: now, d: dmgReq });
+    io.to(d.targetId).emit('youWereHit', {
+      dmg: dmgReq, fromPos: impact,
+      shooterId: socket.id, shooterNick: p.nick,
+      weapon: kind,
+    });
+  });
+
+  socket.on('shotFired', d => {
+    const p = players.get(socket.id);
+    if (!p || !d || match.phase !== 'PLAYING' || !p.alive || p.ship || p.fall) return;
+    const weapon = weaponCode(d.weapon);
+    if (!weapon || !Array.isArray(d.fromPos) || !Array.isArray(d.toPos)) return;
+    const fromPos = d.fromPos.slice(0, 3).map(Number);
+    const toPos = d.toPos.slice(0, 3).map(Number);
+    if (fromPos.length !== 3 || toPos.length !== 3 ||
+        !fromPos.every(Number.isFinite) || !toPos.every(Number.isFinite)) return;
+    const maxRange = weapon === 'FACA' ? 4 : weapon === 'ESCOPETA' ? 120 : 320;
+    if (Math.hypot(fromPos[0] - p.pos[0], fromPos[1] - p.pos[1], fromPos[2] - p.pos[2]) > 5) return;
+    if (Math.hypot(toPos[0] - fromPos[0], toPos[1] - fromPos[1], toPos[2] - fromPos[2]) > maxRange) return;
+    socket.broadcast.emit('playerFired', { shooterId: socket.id, targetId: null, weapon, fromPos, toPos });
   });
 
   socket.on('died', (d, cb) => {
@@ -641,15 +722,24 @@ io.on('connection', socket => {
     victim.alive = false;
     victim.placement = match.aliveCount; // morreu agora = posição atual
     match.lastDead = socket.id; // se todos caírem juntos, o último a morrer vence
-    let killer = d && d.killerId ? players.get(d.killerId) : null;
+    const allowedCauses = new Set([
+      'player', 'gas', 'animal', 'skeleton', 'zombie', 'ghost', 'golem',
+      'alien', 'boss', 'enemy', 'explosion', 'lava', 'environment', 'city',
+    ]);
+    const cause = d && d.cause && allowedCauses.has(d.cause.type) ? d.cause.type : null;
+    const environmentalCause = cause && cause !== 'player';
+    let killer = !environmentalCause && d && d.killerId ? players.get(d.killerId) : null;
     if (killer && killer.spectator) killer = null; // espectador não mata ninguém
-    if (killer && d.killerId !== socket.id) killer.kills++;
+    if (killer && d.killerId === socket.id) killer = null; // suicídio não vira eliminação própria no feed
+    if (killer) killer.kills++;
+    const byZone = cause ? cause === 'gas' : !!(d && d.byZone);
     io.emit('playerKilled', {
       victimId: socket.id, victimNick: victim.nick,
       killerId: killer ? d.killerId : null, killerNick: killer ? killer.nick : null,
       killerKills: killer ? killer.kills : 0,
-      weapon: cleanSoft(d && d.weapon).slice(0, 24) || (d && d.byZone ? 'ZONA' : '???'),
-      byZone: !!(d && d.byZone),
+      weapon: cleanSoft(d && d.weapon).slice(0, 24) || (byZone ? 'ZONA' : '???'),
+      byZone,
+      cause: cause || (byZone ? 'gas' : (killer ? 'player' : 'environment')),
       placement: victim.placement,
     });
     freeCarsOf(socket.id); // motorista morto libera o carro

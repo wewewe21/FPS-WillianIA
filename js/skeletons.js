@@ -13,16 +13,57 @@ export function createSkeletons(deps) {
     player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear } = deps;
 
   const COUNT = 7, HP = 90, SPEED = 3.1, MELEE_DMG = 12, MELEE_RANGE = 1.8, MELEE_CD = 1.1;
+  const MIN_SPAWN_SEPARATION = 24;
   const list = [];
-  const api = { list, update, modelReady: false };
+  const _attackFrom = new THREE.Vector3(), _attackTo = new THREE.Vector3();
+  let enabled = true;
+  const api = { list, update, setEnabled, modelReady: false };
+
+  function setEnabled(value) {
+    enabled = !!value;
+    for (const sk of list) {
+      sk.enabled = enabled;
+      sk.group.visible = enabled && sk.alive;
+    }
+  }
+
+  function meleeBlocked(sk) {
+    const g = sk.group;
+    _attackFrom.set(g.position.x, g.position.y + 1, g.position.z);
+    _attackTo.set(player.pos.x, player.pos.y + 0.9, player.pos.z);
+    if (Math.abs(_attackTo.y - _attackFrom.y) > 1.8) return true;
+    if (Structures && typeof Structures.segBlocked === 'function' && Structures.segBlocked(_attackFrom, _attackTo)) return true;
+    if (typeof obstaclesNear !== 'function') return false;
+    const dx = _attackTo.x - _attackFrom.x, dz = _attackTo.z - _attackFrom.z;
+    const len2 = dx * dx + dz * dz;
+    if (len2 < 1e-8) return false;
+    for (const o of obstaclesNear((_attackFrom.x + _attackTo.x) * 0.5, (_attackFrom.z + _attackTo.z) * 0.5)) {
+      const k = Math.max(0, Math.min(1,
+        ((o.x - _attackFrom.x) * dx + (o.z - _attackFrom.z) * dz) / len2));
+      const nx = _attackFrom.x + dx * k, nz = _attackFrom.z + dz * k;
+      if ((nx - o.x) ** 2 + (nz - o.z) ** 2 < o.r * o.r) return true;
+    }
+    return false;
+  }
 
   // ponto de chão firme (fora de lago) — pra spawn e respawn
   function drySpot(cx, cz, rMin, rMax) {
+    const valid = (x, z) => heightAt(x, z) > WATER_LEVEL + 0.5 && list.every(sk =>
+      !sk.alive || Math.hypot(x - sk.group.position.x, z - sk.group.position.z) >= MIN_SPAWN_SEPARATION);
     for (let i = 0; i < 24; i++) {
       const a = rand(TAU), r = rand(rMin, rMax);
       const x = THREE.MathUtils.clamp(cx + Math.cos(a) * r, -520, 520);
       const z = THREE.MathUtils.clamp(cz + Math.sin(a) * r, -520, 520);
-      if (heightAt(x, z) > WATER_LEVEL + 0.5) return { x, z };
+      if (valid(x, z)) return { x, z };
+    }
+    // RNG pode repetir a mesma amostra; varredura determinística mantém a separação.
+    for (const r of [rMin, (rMin + rMax) / 2, rMax]) {
+      for (let i = 0; i < 48; i++) {
+        const a = i / 48 * TAU;
+        const x = THREE.MathUtils.clamp(cx + Math.cos(a) * r, -520, 520);
+        const z = THREE.MathUtils.clamp(cz + Math.sin(a) * r, -520, 520);
+        if (valid(x, z)) return { x, z };
+      }
     }
     return { x: cx + rMin, z: cz };
   }
@@ -32,7 +73,7 @@ export function createSkeletons(deps) {
     g.visible = false;
     scene.add(g);
     const sk = {
-      group: g, alive: false, hp: 0, yaw: 0, phase: rand(TAU),
+      group: g, alive: false, enabled, hp: 0, yaw: 0, phase: rand(TAU),
       side: list.length % 2 ? 1 : -1, // lado fixo do contorno (metade pra cada)
       hitT: 0, respawnT: 0, groanT: rand(6), bones: null,
       sph: [{ c: new THREE.Vector3(), r: 0.45, part: 'body' }, { c: new THREE.Vector3(), r: 0.28, part: 'head' }],
@@ -43,7 +84,7 @@ export function createSkeletons(deps) {
         return this.sph;
       },
       damage(dmg) {
-        if (!this.alive) return false;
+        if (!this.alive || !this.enabled) return false;
         this.hp -= dmg;
         if (this.hp <= 0) {
           this.alive = false;
@@ -93,12 +134,13 @@ export function createSkeletons(deps) {
       sk.group.position.set(p.x, heightAt(p.x, p.z), p.z);
       sk.hp = HP;
       sk.alive = true;
-      sk.group.visible = true;
+      sk.group.visible = enabled && sk.alive;
     }
     api.modelReady = true;
   }, undefined, e => console.warn('[esqueletos] modelo não carregou', e));
 
   function update(dt, t) {
+    if (!enabled) return;
     for (const sk of list) {
       const g = sk.group;
       if (!sk.alive) {
@@ -116,6 +158,7 @@ export function createSkeletons(deps) {
       // caça eterna: anda na direção do player...
       const dx = player.pos.x - g.position.x, dz = player.pos.z - g.position.z;
       const dP = Math.hypot(dx, dz);
+      const moveStartX = g.position.x, moveStartZ = g.position.z;
       if (dP > 1.5 && !player.dead) {
         g.position.x += dx / dP * SPEED * dt;
         g.position.z += dz / dP * SPEED * dt;
@@ -133,6 +176,8 @@ export function createSkeletons(deps) {
       }
       Structures.collide(g.position, 0.35, 1.8); // paredes/ruínas também seguram
       g.position.y = heightAt(g.position.x, g.position.z);
+      const movedX = g.position.x - moveStartX, movedZ = g.position.z - moveStartZ;
+      if (movedX * movedX + movedZ * movedZ > 1e-8) sk.yaw = Math.atan2(movedX, movedZ);
       g.rotation.y = sk.yaw;
       // marcha procedural: coxas alternam, braços apontam pro player, queixo bate
       // (eixo z = frente/trás neste rig — validado por foto nos três eixos)
@@ -149,9 +194,9 @@ export function createSkeletons(deps) {
       g.rotation.z = sw * 0.05; // gingado
       // porrada de osso
       sk.hitT = Math.max(0, sk.hitT - dt);
-      if (dP < MELEE_RANGE && sk.hitT <= 0 && !player.dead) {
+      if (dP < MELEE_RANGE && sk.hitT <= 0 && !player.dead && !meleeBlocked(sk)) {
         sk.hitT = MELEE_CD;
-        playerDamage(MELEE_DMG, g.position);
+        playerDamage(MELEE_DMG, g.position, { type: 'skeleton' });
       }
       sk.groanT -= dt;
       if (sk.groanT <= 0 && dP < 28) {

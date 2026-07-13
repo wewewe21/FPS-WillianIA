@@ -304,33 +304,65 @@ describe('Colisões', { skip: !CHROME && 'Chrome não encontrado' }, () => {
     assert.ok(!r.aberto, 'segBlocked bloqueou campo aberto');
   });
 
-  it('dada uma explosão do outro lado da parede, então o splash NÃO vaza pro alvo', async t => {
-    const r = await play((fw) => {
-      const QA = window.QA, G = QA.G;
-      const b = eval(fw);
-      if (!b) return null;
-      const cz = (b.z0 + b.z1) / 2;
+  it('dada uma explosão do outro lado da parede, então o splash NÃO vaza pro alvo', async () => {
+    const r = await play(() => {
+      const QA = window.QA, G = QA.G, THREE = QA.MP.THREE;
       const e = G.Enemies.list.find(x => x.alive);
       if (!e) return null;
-      e.group.position.set(b.x1 + 2.5, QA.MP.heightAt(b.x1 + 2.5, cz), cz);
-      e.health = 100;
-      QA.reset(b.x0 - 8, cz);
-      // granada explode 2m antes da parede — alvo BEM dentro do raio de 7.5m
-      const p = new QA.MP.THREE.Vector3(b.x0 - 2, QA.MP.heightAt(b.x0 - 2, cz) + 0.6, cz);
-      G.Grenades.explode(p);
-      const atras = e.health;
-      // controle: mesma distância SEM parede no meio — tem que ferir
-      e.health = 100;
-      e.group.position.set(p.x + 5, QA.MP.heightAt(p.x + 5, cz + 20), cz + 20);
-      const p2 = new QA.MP.THREE.Vector3(e.group.position.x - 5, e.group.position.y + 0.6, e.group.position.z);
-      G.Grenades.explode(p2);
-      const aberto = e.health;
-      e.group.position.set(-450, QA.MP.heightAt(-450, -450), -450);
-      return { atras, aberto };
-    }, findWall);
-    if (!r) { t.skip('pré-condição não encontrada nesta seed'); return; }
+      // Parede fina sintética: explosão e alvo ficam explicitamente a 5 m,
+      // dentro do raio de 7,5 m. O teste anterior usava um prédio > 8 m e
+      // acabava deixando o alvo fora do raio, criando um falso positivo.
+      const p = new THREE.Vector3(70, 60, 70);
+      const wall = { x0: 72.2, x1: 72.7, y0: 56, y1: 65, z0: 66, z1: 74 };
+      G.Structures.walls.push(wall);
+      try {
+        e.group.position.set(75, 60, 70);
+        e.health = 100;
+        G.Grenades.explode(p);
+        const atras = e.health;
+
+        G.Structures.walls.splice(G.Structures.walls.indexOf(wall), 1);
+        e.health = 100;
+        G.Grenades.explode(p);
+        const aberto = e.health;
+        return { atras, aberto, distancia: e.group.position.distanceTo(p) };
+      } finally {
+        const wi = G.Structures.walls.indexOf(wall);
+        if (wi >= 0) G.Structures.walls.splice(wi, 1);
+        e.group.position.set(-450, QA.MP.heightAt(-450, -450), -450);
+      }
+    });
+    assert.ok(r && r.distancia < 7.5, 'pré-condição falhou: alvo fora do raio');
     assert.ok(r.aberto < 100, 'controle falhou: explosão em campo aberto não feriu');
     assert.equal(r.atras, 100, `splash vazou pela parede (hp ficou ${r.atras})`);
+  });
+
+  it('granada física rebate na parede em vez de atravessá-la', async () => {
+    const result = await play(() => {
+      const QA = window.QA, G = QA.G, MP = QA.MP;
+      const wall = { x0: 72.2, x1: 72.7, y0: 20, y1: 70, z0: 66, z1: 74 };
+      G.Structures.walls.push(wall);
+      const oldSplash = window.__BR_splash;
+      let explosion = null;
+      window.__BR_splash = p => { explosion = p.toArray(); };
+      try {
+        G.inventory.nades = 1;
+        G.state.driving = false; G.state.paused = false;
+        MP.player.dead = false;
+        MP.camera.position.set(70, 60, 70);
+        MP.camera.lookAt(100, 60, 70);
+        G.Grenades.throwNade(0);
+        for (let i = 0; i < 55; i++) G.Grenades.update(0.05, i * 0.05);
+        return { explosion, wallX: wall.x0 };
+      } finally {
+        window.__BR_splash = oldSplash;
+        const wi = G.Structures.walls.indexOf(wall);
+        if (wi >= 0) G.Structures.walls.splice(wi, 1);
+      }
+    });
+    assert.ok(result.explosion, 'granada não chegou a explodir');
+    assert.ok(result.explosion[0] < result.wallX,
+      `granada atravessou a parede e explodiu em x=${result.explosion[0].toFixed(2)}`);
   });
 
   it('dado um telhado de prédio da cidade, então dá pra POUSAR nele (pisável)', async t => {

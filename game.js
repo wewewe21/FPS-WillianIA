@@ -325,16 +325,22 @@ const treeSpots = []; // posições das árvores (LOD + minimapa)
     let nearBuild = false;
     for (const st of Structures.sites) if (Math.hypot(x - st.x, z - st.z) < st.r + 4) { nearBuild = true; break; }
     if (nearBuild) continue;
-    const s = rand(0.75, 1.5);
+    const sRand = rand(0.75, 1.5);
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const s = isExcluded ? 0.0001 : sRand;
     // variação de cor: verdes, outono dourado e tons profundos por região
     const cv = simplex.noise(x * 0.004 - 90, z * 0.004 + 60);
     const tint = cv > 0.45 ? 0xffaa58 : cv > 0.3 ? 0xffd98a : cv < -0.45 ? 0x7ddf9a : 0xffffff;
-    treeSpots.push({ x, y, z, s, rot: rand(TAU), tint });
-    addObstacle(x, z, 0.45 * s);
-    const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * s, 1.8, 0.32 * s)) });
-    body.position.set(x, y + 1.8, z);
-    body.updateAABB(); // idem paredes: AABB ficava na origem
-    world.addBody(body);
+    const rot = rand(TAU);
+    treeSpots.push({ x, y: isExcluded ? -100 : y, z, s, rot, tint });
+    if (!isExcluded) {
+      addObstacle(x, z, 0.45 * s);
+      const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * s, 1.8, 0.32 * s)) });
+      body.position.set(x, y + 1.8, z);
+      body.updateAABB(); // idem paredes: AABB ficava na origem
+      world.addBody(body);
+    }
   }
 }
 
@@ -378,14 +384,19 @@ function rebucketTrees(px, pz) {
   while (placed < CFG.ROCK_COUNT && tries++ < CFG.ROCK_COUNT * 20) {
     const x = rand(-lim, lim), z = rand(-lim, lim);
     if (Math.hypot(x, z) < 18) continue;
-    const s = Math.pow(Math.random(), 2.2) * 2.6 + 0.35;
+    const sRand = Math.pow(Math.random(), 2.2) * 2.6 + 0.35;
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const s = isExcluded ? 0.0001 : sRand;
     const y = heightAt(x, z) - s * 0.3;
-    _dummy.position.set(x, y, z);
-    _dummy.rotation.set(rand(-0.3, 0.3), rand(TAU), rand(-0.3, 0.3));
-    _dummy.scale.set(s * rand(0.8, 1.3), s, s * rand(0.8, 1.3));
+    const rX = rand(-0.3, 0.3), rY = rand(TAU), rZ = rand(-0.3, 0.3);
+    const scX = rand(0.8, 1.3), scZ = rand(0.8, 1.3);
+    _dummy.position.set(x, isExcluded ? -100 : y, z);
+    _dummy.rotation.set(rX, rY, rZ);
+    _dummy.scale.set(s * scX, s, s * scZ);
     _dummy.updateMatrix();
     rocks.setMatrixAt(placed++, _dummy.matrix);
-    if (s > 1.1) {
+    if (!isExcluded && s > 1.1) {
       addObstacle(x, z, s * 0.8);
       const body = new CANNON.Body({ mass: 0, shape: new CANNON.Sphere(s * 0.75) });
       body.position.set(x, y + s * 0.2, z);
@@ -415,9 +426,14 @@ function rebucketTrees(px, pz) {
     if (y < 0.9) continue;
     if (biomeAt(x, z) < -0.12) continue; // sem flores no deserto
     if (simplex.noise(x * 0.01 - 200, z * 0.01 + 140) < 0.18) continue; // em manchas
-    _dummy.position.set(x, y, z);
-    _dummy.rotation.set(0, rand(TAU), 0);
-    _dummy.scale.setScalar(rand(0.7, 1.5));
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const rot = rand(TAU);
+    const scaleRand = rand(0.7, 1.5);
+    const scale = isExcluded ? 0.0001 : scaleRand;
+    _dummy.position.set(x, isExcluded ? -100 : y, z);
+    _dummy.rotation.set(0, rot, 0);
+    _dummy.scale.setScalar(scale);
     _dummy.updateMatrix();
     flowers.setMatrixAt(placed, _dummy.matrix);
     flowers.setColorAt(placed, _c.setHex(palette[(Math.random() * palette.length) | 0]));
@@ -456,12 +472,19 @@ function rebucketTrees(px, pz) {
     const x = rand(-limC, limC), z = rand(-limC, limC);
     if (biomeAt(x, z) > -0.25 || slopeAt(x, z) > 0.4) continue;
     if (heightAt(x, z) < WATER_LEVEL + 0.5) continue; // cacto não nasce no lago
-    _dummy.position.set(x, heightAt(x, z), z);
-    _dummy.rotation.set(0, rand(TAU), rand(-0.06, 0.06));
-    _dummy.scale.setScalar(rand(0.7, 1.5));
+    const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+    const rY = rand(TAU), rZ = rand(-0.06, 0.06);
+    const scaleRand = rand(0.7, 1.5);
+    const scale = isExcluded ? 0.0001 : scaleRand;
+    _dummy.position.set(x, isExcluded ? -100 : heightAt(x, z), z);
+    _dummy.rotation.set(0, rY, rZ);
+    _dummy.scale.setScalar(scale);
     _dummy.updateMatrix();
     cacti.setMatrixAt(nCac++, _dummy.matrix);
-    addObstacle(x, z, 0.35);
+    if (!isExcluded) {
+      addObstacle(x, z, 0.35);
+    }
   }
   cacti.count = nCac;
   scene.add(cacti);
@@ -1083,6 +1106,7 @@ function rayBlockedAt(origin, dir, maxDist) {
 
 const _rayDir = new THREE.Vector3(), _rayOrig = new THREE.Vector3(), _hitPos = new THREE.Vector3();
 const _hitAgg = new THREE.Vector3();
+const _missEnd = new THREE.Vector3();
 function fire(t) {
   // faca (melee): golpe curto, sem munição/flash/som de tiro
   if (gun.melee) {
@@ -1136,6 +1160,7 @@ function fire(t) {
   muzzle.getWorldPosition(_v3);
 
   let hitAny = false, killAny = false, headAny = false, totalDmg = 0;
+  let remoteHit = false, missEndSet = false;
   for (let p = 0; p < gun.pellets; p++) {
     camera.getWorldDirection(_rayDir);
     _v1.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).normalize().multiplyScalar(spread * Math.sqrt(Math.random()));
@@ -1177,7 +1202,7 @@ function fire(t) {
     }
     // alvos extras: animais, zumbis, fantasmas
     for (const a of extraTargets) {
-      if (!a.alive) continue;
+      if (!a.alive || a.enabled === false) continue;
       for (const s of a.hitSpheres()) {
         _v2.copy(s.c).sub(_rayOrig);
         const proj = _v2.dot(_rayDir);
@@ -1221,7 +1246,7 @@ function fire(t) {
       let died;
       if (bestBoss) died = bestBossObj.damage(dmg, _hitPos, _rayDir, bestPart);
       else if (bestExtra) died = bestExtra.damage(dmg, _hitPos, _rayDir, head);
-      else if (bestRemote) died = bestRemote.damage(dmg, _hitPos, _rayDir, head);
+      else if (bestRemote) { died = bestRemote.damage(dmg, _hitPos, _rayDir, head); remoteHit = true; }
       else died = bestEnemy.damage(dmg, _hitPos, _rayDir, bestPart === 'head');
       hitAny = true; totalDmg += dmg;
       headAny = headAny || head;
@@ -1231,7 +1256,11 @@ function fire(t) {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, 240);
       FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
     }
+    if (!missEndSet) { missEndSet = true; _missEnd.copy(_hitPos); }
   }
+  // BR: quem não foi atingido não via NADA deste disparo — o shotHit só é
+  // replicado quando acerta. Um shotFired por gatilho mostra muzzle/tracer.
+  if (!remoteHit && missEndSet && window.__BR_shotMiss) window.__BR_shotMiss(_v3, _missEnd);
   if (hitAny) {
     DmgNums.spawn(_hitAgg, Math.round(totalDmg), headAny);
     showHitmarker(killAny);
@@ -1289,7 +1318,7 @@ function updateHealthHUD() {
 function updateArmorHUD() {
   ui.armorFill.style.width = (player.armor / player.armorMax * 100) + '%';
 }
-function playerDamage(dmg, fromPos) {
+function playerDamage(dmg, fromPos, cause) {
   // no BR online, pausar NÃO pode dar imunidade (senão vira exploit em tiroteio)
   if (player.dead || (state.paused && !window.__BR_active)) return;
   if (state.gameTime < (player.invulnUntil || 0)) return; // proteção de spawn
@@ -1301,6 +1330,13 @@ function playerDamage(dmg, fromPos) {
   }
   player.health -= dmg;
   player.lastDamageT = state.gameTime;
+  const causeType = cause && typeof cause.type === 'string' ? cause.type : 'environment';
+  player.lastDamageCause = {
+    type: causeType,
+    attackerId: cause && cause.attackerId ? String(cause.attackerId) : null,
+    weapon: cause && cause.weapon ? String(cause.weapon) : null,
+    t: Date.now(),
+  };
   damageFlash(1);
   addTrauma(0.32);
   SFX.hurt();
@@ -1426,7 +1462,7 @@ const extraTargets = [];
 const Bosses = [];
 const MFlags = { colosso: false, alien: false, night: false }; // marcos de missão
 
-const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainNormal, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets });
+const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainNormal, rayBlockedAt, Structures, SFX, FX, scene, camera, updateInvHUD, state, player, playerDamage, addTrauma, recoil, inventory, Car, Enemies, Bosses, extraTargets });
 
 
 
@@ -1436,7 +1472,7 @@ const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainN
 let timeScale = 1; // câmera lenta cinematográfica na morte do boss
 const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale });
 /* Rockets criado APOS o Boss (dependencia declarada) — só é usado em runtime */
-const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss });
+const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses, extraTargets });
 
 const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler });
 
@@ -1449,19 +1485,19 @@ const Amb = createAmb({ rand, TAU, _v1, _v2, heightAt, biomeAt, addObstacle, SFX
 /* ================================================================
    ANIMAIS — cervos (carne) e lobos (selvagens, mordem)
    ================================================================ */
-const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups });
+const Animals = createAnimals({ clamp, rand, TAU, heightAt, slopeAt, WATER_LEVEL, CITY, scene, csmMat, addScore, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear, SFX });
 
 /* ================================================================
    CRIATURAS DA NOITE — zumbis e fantasmas (somem ao amanhecer)
    ================================================================ */
-const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags });
+const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, obstaclesNear, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags });
 
 const Skeletons = createSkeletons({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed, player, playerDamage, extraTargets, Pickups, Structures, obstaclesNear });
 
 /* ================================================================
    BOSS 2 — O VISITANTE (alien na cratera do deserto) -> arma PLASMA
    ================================================================ */
-const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale });
+const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Structures });
 
 /* ================================================================
    MISSÕES — cadeia com recompensas
@@ -1666,7 +1702,7 @@ function tick(forceDt) {
   Car.update(dt, t);
   Heli.update(dt, t);
   if (!window.__BR_active) Enemies.update(dt, t); // BR: sem inimigos comuns
-  if (!window.__BR_active) Skeletons.update(dt, t); // BR: esqueletos também ficam de fora
+  if (!window.__BR_active || (window.__BR_debug && window.__BR_debug.S.phase === 'PLAY')) Skeletons.update(dt, t);
   Animals.update(dt, t);
   if (!window.__BR_active || window.__BR_zumbis) Night.update(dt, t); // BR: zumbis só se a sala ligar
   Grenades.update(dt, t);
@@ -1787,7 +1823,7 @@ const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
-  inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags,
+  inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
   get fps() { return fpsVal; },

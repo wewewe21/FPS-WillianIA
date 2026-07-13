@@ -14,3 +14,6 @@ docker-compose.override*.yml
 /vulcao_em_erupcao_-_erupting_volcano.glb
 /castle.glb
 /skelly.glb
+
+# artefatos gerados pelos testes exploratórios
+tests/screenshots/

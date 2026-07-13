@@ -43,6 +43,45 @@ Original prompt: eu adicionei uns projetos em 3d. local uns carros, quero substi
 - Assets finais: Gumball 1.147.872 bytes / 31.991 vértices únicos; RX-7 79.564 / 4.038; caminhão 354.612 / 14.303. Total: 1.582.048 bytes e 50.332 vértices únicos compartilhados.
 - `br-rank.json` permaneceu fora do escopo; a verificação final redirecionou ranking para `/tmp`.
 
-## Pendências
+## Correções da 3ª rodada de QA (bugs #40–42 + lacunas da auditoria)
 
-- Nenhuma pendência funcional conhecida para esta solicitação.
+Os bugs #40–42 mapeados acima foram corrigidos e cobertos por testes
+(`test/skeletons.test.js`, `test/br-golem.test.js`, `test/animals-combat.test.js`).
+Na sequência, as lacunas da auditoria de combate foram fechadas:
+
+- **Protocolo dedicado de explosivos (`explosionHit`)**: granada/bazuca não viajam
+  mais por `shotHit` — o servidor valida o PONTO DE IMPACTO (não a arma equipada
+  nem a posição do atirador). Granada com FACA equipada funciona; a cobertura da
+  vítima parte do impacto; kill segue creditada ao atirador. Tipos fora de
+  GRANADA/BAZUCA (ex.: `MÍSSEIS`) são rejeitados — o evento de destruição da
+  cidade continua exclusivo do servidor (`byCity`, causa `city`, sem crédito de
+  kill). Arquivos: `server.js`, `br-game.js`, `js/grenades.js`, `js/rockets.js`;
+  testes: `test/br-explosion-protocol.test.js` (7 casos).
+- **Criaturas da noite**: mordida do zumbi/fantasma agora exige linha de visada
+  (parede, árvore, pedra, andar de cima/baixo) e o movimento tem guarda de NaN
+  quando o jogador está exatamente acima/abaixo. `js/night.js` + `game.js`
+  (injeção de `obstaclesNear`); testes: `test/night-combat.test.js`.
+- **Loot de bots em morte ambiental**: `dropLootOnce` idempotente — bots mortos
+  por gás, cidade ou AFK também soltam loot (antes só morte por tiro).
+  `scripts/bots.js`; testes em `test/bots-behavior.test.js`.
+- **Tiro humano que ERRA replicado**: `__BR_shotMiss` → `shotFired` (throttle de
+  220ms), cobrindo hitscan e projéteis balísticos que morrem em parede/expiram.
+  `game.js`, `br-game.js`; teste em `test/br-cover.test.js`.
+- **Onda de choque no carro respeita cobertura** (`blastClear` também no impulso).
+  `js/grenades.js`; teste em `test/explosives.test.js`. Para o teste unitário,
+  `cannon-es@0.20.0` entrou como devDependency (no browser vem do importmap/CDN).
+- **Testes desatualizados pelo anti-cheat novo**: arma inexistente (`HACK`) agora é
+  descartada inteira (ganhou teste próprio); flag `ship` forjado fora da rota é
+  rejeitado e vira INATIVIDADE (ganhou teste próprio); o teste da zona usa um
+  jogador parado no gás sem flag forjado. Vazamento de estado entre testes de
+  `br-pve-weapons` corrigido (esqueleto vivo na frente da câmera).
+
+## Pendências (arquiteturais, mapeadas — sem correção nesta rodada)
+
+- **Bots não conhecem paredes/árvores/LOS** (`scripts/bots.js`): reconstroem só
+  terreno/baús; podem mirar através de cobertura. Exige colisores/nav
+  determinísticos no processo dos bots ou autoridade de mundo no servidor.
+- **Integridade client-authoritative** (`server.js`): o servidor ainda aceita o
+  dano informado pelo atirador e killer/causa informados pela vítima. Mitigado
+  por validações de alcance/orçamento/flood, mas sem histórico autoritativo.
+

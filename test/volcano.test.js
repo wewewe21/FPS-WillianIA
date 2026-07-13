@@ -127,9 +127,11 @@ describe('Vulcão — servidor serve e cacheia o modelo', () => {
   const PORT = 3174;
   before(async () => {
     const { spawn } = require('node:child_process');
+    const os = require('node:os');
     const path = require('node:path');
     srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')],
-      { env: { ...process.env, PORT: String(PORT) }, stdio: 'ignore' });
+      { env: { ...process.env, PORT: String(PORT),
+        RANK_FILE: path.join(os.tmpdir(), `fps-volcano-rank-${process.pid}.json`) }, stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 700));
   });
   after(() => { if (srv) srv.kill(); });

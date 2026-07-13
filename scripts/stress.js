@@ -9,14 +9,35 @@
 'use strict';
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { io } = require('socket.io-client');
+
+const rankTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fps-stress-rank-'));
+const rankFile = path.join(rankTmpDir, 'br-rank.json');
+const cleanupRank = () => fs.rmSync(rankTmpDir, { recursive: true, force: true });
+process.once('exit', cleanupRank);
+
+// O próprio stress importa utilitários do servidor; isola também essa carga,
+// além do processo filho que executa a partida.
+const inheritedRankFile = process.env.RANK_FILE;
+process.env.RANK_FILE = rankFile;
 const { zoneAt } = require(path.join(__dirname, '..', 'server.js'));
+if (inheritedRankFile === undefined) delete process.env.RANK_FILE;
+else process.env.RANK_FILE = inheritedRankFile;
+
+const stopProcess = child => new Promise(resolve => {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return resolve();
+  const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) { /* já terminou */ } }, 2000);
+  child.once('exit', () => { clearTimeout(timer); resolve(); });
+  try { child.kill(); } catch (e) { clearTimeout(timer); resolve(); }
+});
 
 const N = Math.max(2, parseInt(process.argv[2], 10) || 30);
 const WITH_CLIENT = process.argv.includes('--client');
 const PORT = 3197;
 const URL = `http://localhost:${PORT}`;
+let activeServer = null;
 
 const shipPos = (t, plan) => {
   const sp = plan.ship;
@@ -28,9 +49,9 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
 
 (async () => {
   console.log(`== STRESS: ${N} bots${WITH_CLIENT ? ' + 1 cliente real' : ''} ==`);
-  const srv = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
+  const srv = activeServer = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
     env: { ...process.env, PORT: String(PORT), HOST_CODE: 'STRESS', COUNTDOWN_S: '2',
-      FLY_TIME: '8', BR_FAST: '1', NEXT_IN_S: '60', WORLD_SEED: '99' },
+      FLY_TIME: '8', BR_FAST: '1', NEXT_IN_S: '60', WORLD_SEED: '99', RANK_FILE: rankFile },
     stdio: 'ignore',
   });
   await new Promise(r => setTimeout(r, 900));
@@ -208,7 +229,9 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
 
   for (const b of bots) b.s.close();
   mon.close();
-  srv.kill();
+  await stopProcess(srv);
+  activeServer = null;
+  cleanupRank();
 
   if (problems.length) {
     console.log('--- PROBLEMAS ---');
@@ -217,4 +240,10 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
   }
   console.log('STRESS OK — nenhum problema detectado');
   process.exit(0);
-})().catch(e => { console.error('ERRO FATAL:', e); process.exit(1); });
+})().catch(async e => {
+  await stopProcess(activeServer);
+  activeServer = null;
+  cleanupRank();
+  console.error('ERRO FATAL:', e);
+  process.exit(1);
+});

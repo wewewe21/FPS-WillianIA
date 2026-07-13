@@ -14,6 +14,16 @@
     const LIM = MP.CFG.WORLD_SIZE / 2;
     const A = G.arsenal;
     const KNIFE = 5; // índice da faca no arsenal
+    const WEAPON_CODES = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA'];
+    const weaponCode = value => {
+      const raw = String(value || '').toUpperCase();
+      return WEAPON_CODES.find(code => raw === code || raw.startsWith(code + ' ')) || 'FACA';
+    };
+    const localWeaponCode = () => WEAPON_CODES[A.indexOf(G.gun)] || weaponCode(G.gun && G.gun.name);
+    // Quem entra durante PLAYING recebe apenas `init`, não `matchStart`.
+    // Aplicar as flags aqui mantém o mesmo PvE para late join e participantes.
+    window.__BR_zumbis = !!(S.flags && S.flags.zumbis);
+    window.__BR_alien = !S.flags || S.flags.alien !== false;
 
     /* encaminha estado do evento da cidade (o script pode bootar depois) */
     function sendCity(c) {
@@ -73,6 +83,20 @@
       box(mBody, 0.4, 0.38, 0.38, 0, 1.66, 0);            // cabeça
       box(mVisor, 0.3, 0.09, 0.06, 0, 1.7, -0.21);        // visor
       box(mDetail, 0.44, 0.08, 0.42, 0, 1.87, 0);         // "capacete"
+      // arma remota simples: o estado de rede escolhe quando ela aparece.
+      const weapon = new THREE.Group();
+      weapon.position.set(0, -0.18, -0.18);
+      box(mDetail, 0.18, 0.17, 0.56, 0, 0, -0.2, weapon);
+      box(mCloth, 0.07, 0.07, 0.4, 0, 0.01, -0.65, weapon);
+      const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 4), mVisor.clone());
+      muzzle.material.color.setHex(0xffb347);
+      muzzle.material.emissive.setHex(0xff7a18);
+      muzzle.material.emissiveIntensity = 4;
+      muzzle.position.set(0, 0.01, -0.9);
+      muzzle.visible = false;
+      weapon.add(muzzle);
+      weapon.visible = false;
+      armR.add(weapon);
       // paraquedas (escondido por padrão)
       const chute = new THREE.Group();
       const canopy = new THREE.Mesh(new THREE.SphereGeometry(1.7, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2),
@@ -86,7 +110,7 @@
       }
       chute.visible = false;
       g.add(chute);
-      return { g, legL, legR, armL, armR, chute, mats: [mBody, mCloth, mDetail] };
+      return { g, legL, legR, armL, armR, chute, weapon, muzzle, mats: [mBody, mCloth, mDetail] };
     }
 
     function makeRemote(id, nk, colors, pos) {
@@ -98,7 +122,9 @@
       const rp = {
         id, nick: nk || '???', alive: true, isBoss: false,
         group, body, targetPos: group.position.clone(), yaw: 0, targetYaw: 0,
-        chute: false, ship: false, car: -1, heli: false, hitT: 0, deadT: 0, lastPos: group.position.clone(), speed: 0, walkPh: 0,
+        chute: false, ship: false, fall: false, car: -1, heli: false, bot: false,
+        heldWeapon: 'FACA', fireT: 0, hitT: 0, deadT: 0,
+        lastPos: group.position.clone(), speed: 0, walkPh: 0,
         sphCache: [
           { c: new THREE.Vector3(), r: 0.28, part: 'head' },
           { c: new THREE.Vector3(), r: 0.42, part: 'body' },
@@ -111,9 +137,16 @@
           this.sphCache[2].c.set(p.x, p.y + 0.42, p.z);
           return this.sphCache;
         },
-        damage(dmg, hitPos) {
+        damage(dmg, hitPos, explosive) {
           if (hitPos && hitPos.y < this.group.position.y + 0.78) dmg *= 0.8; // perna dói menos
-          queueHit(this.id, Math.round(dmg));
+          // explosivo NÃO viaja pelo shotHit: lá a arma equipada e a posição
+          // do atirador seriam validadas (granada com FACA = rejeitada a 4 m)
+          if (explosive && explosive.impact) {
+            socket.emit('explosionHit', {
+              targetId: this.id, dmg: Math.round(dmg), kind: explosive.kind,
+              impactPos: [explosive.impact.x, explosive.impact.y, explosive.impact.z],
+            });
+          } else queueHit(this.id, Math.round(dmg));
           this.hitT = 0.3;
           return false; // morte confirmada pelo dono/servidor
         },
@@ -152,7 +185,7 @@
         hitFlush = false;
         for (const [tid, total] of pendingHits) {
           socket.emit('shotHit', {
-            targetId: tid, dmg: Math.min(total, 95), weapon: G.gun ? G.gun.name : '???',
+            targetId: tid, dmg: Math.min(total, 95), weapon: localWeaponCode(),
             fromPos: [MP.player.pos.x, MP.player.pos.y + 1.5, MP.player.pos.z],
           });
         }
@@ -168,14 +201,18 @@
 
     /* dano de área (granada/bazuca) nos jogadores remotos e no boss —
        sem isto explosivo era inútil no BR (só feria bots do modo solo) */
-    window.__BR_splash = function (p, radius, maxDmg) {
+    window.__BR_splash = function (p, radius, maxDmg, kind = 'GRANADA') {
       for (const rp of window.__MP_remotePlayers) {
         if (!rp.alive) continue;
         const d = rp.group.position.distanceTo(p);
         if (d < radius) {
+          _bv.copy(p); _bv.y += 0.2;
+          _bp.copy(rp.group.position); _bp.y += 1; _bp.sub(_bv);
+          const len = _bp.length();
+          if (len > 0.01 && MP.rayBlockedAt(_bv, _bp.multiplyScalar(1 / len), len) < len - 0.15) continue;
           const dmg = Math.round(maxDmg * (1 - d / radius) + 20);
           MP.DmgNums.spawn(rp.group.position, dmg, false);
-          rp.damage(dmg, rp.group.position);
+          rp.damage(dmg, rp.group.position, { kind, impact: p });
         }
       }
     };
@@ -183,6 +220,30 @@
       bullets.push({
         p: origin.clone(), v: dir.clone().multiplyScalar(gun.projSpeed),
         drop: gun.projDrop || 6, life: 1.7, dmg: gun.dmg, laser: !!gun.laser,
+        from: origin.clone(), weapon: localWeaponCode(), // p/ replicar o erro
+      });
+    };
+
+    /* tiro que ERROU também precisa aparecer pros outros (muzzle/tracer) —
+       o servidor só replicava playerFired quando havia shotHit. Throttle:
+       replicação é efeito visual, 4-5/s por jogador é suficiente. */
+    const MISS_RANGE = { ESCOPETA: 110 }; // demais: 310 (teto do servidor é 320)
+    let missReplAt = 0;
+    window.__BR_shotMiss = function (from, to, weaponName) {
+      const nowMs = Date.now();
+      if (nowMs - missReplAt < 220) return;
+      const weapon = weaponName || localWeaponCode();
+      if (!weapon || weapon === 'FACA') return; // faca não tem tracer
+      missReplAt = nowMs;
+      _bv.copy(to).sub(from);
+      const len = _bv.length();
+      if (len < 0.01) return;
+      const max = MISS_RANGE[weapon] || 310;
+      if (len > max) _bv.multiplyScalar(max / len);
+      socket.emit('shotFired', {
+        weapon,
+        fromPos: [from.x, from.y, from.z],
+        toPos: [from.x + _bv.x, from.y + _bv.y, from.z + _bv.z],
       });
     };
     function segSphere(p0, seg, segLen, c, r) { // distância ao longo do segmento ou -1
@@ -193,6 +254,22 @@
       if (d2 > r * r) return -1;
       return Math.max(0, proj - Math.sqrt(r * r - d2));
     }
+    function combatTargets() {
+      const result = [], seen = new Set();
+      for (const target of window.__MP_remotePlayers || []) {
+        if (!target || seen.has(target)) continue;
+        seen.add(target);
+        result.push({ target, remote: true, boss: !!target.isBoss });
+      }
+      const localGroups = [G.extraTargets || [], G.Bosses || [], (G.Enemies && G.Enemies.list) || []];
+      for (const group of localGroups) for (const target of group) {
+        if (!target || target.enabled === false || seen.has(target) ||
+            typeof target.hitSpheres !== 'function' || typeof target.damage !== 'function') continue;
+        seen.add(target);
+        result.push({ target, remote: false, boss: (G.Bosses || []).includes(target) });
+      }
+      return result;
+    }
     function stepBullets(dt) {
       for (let i = bullets.length - 1; i >= 0; i--) {
         const b = bullets[i];
@@ -200,14 +277,16 @@
         b.v.y -= b.drop * dt;
         const segLen = b.v.length() * dt;
         _bp.copy(b.v).normalize();
-        // alvos: jogadores remotos + boss
-        let bestD = Infinity, bestRp = null, bestPart = null;
-        for (const rp of window.__MP_remotePlayers) {
-          if (!rp.alive) continue;
-          if (rp.group.position.distanceToSquared(b.p) > 320 * 320) continue;
-          for (const s of rp.hitSpheres()) {
+        // alvos: jogadores remotos, boss sincronizado e IAs PvE locais ativas
+        let bestD = Infinity, bestMeta = null, bestPart = null;
+        for (const meta of combatTargets()) {
+          const target = meta.target;
+          if (!target.alive) continue;
+          const pos = target.group && target.group.position;
+          if (pos && pos.distanceToSquared(b.p) > 320 * 320) continue;
+          for (const s of target.hitSpheres()) {
             const d = segSphere(b.p, _bp, segLen, s.c, s.r);
-            if (d >= 0 && d < bestD) { bestD = d; bestRp = rp; bestPart = s.part; }
+            if (d >= 0 && d < bestD) { bestD = d; bestMeta = meta; bestPart = s.part; }
           }
         }
         const blockD = MP.rayBlockedAt(b.p, _bp, Math.min(segLen, bestD));
@@ -216,47 +295,57 @@
           _bv.copy(b.p).addScaledVector(_bp, blockD);
           MP.FX.spawnTracer(b.p, _bv, col);
           MP.FX.burst(_bv, _bp.clone().negate(), 'dirt');
+          window.__BR_shotMiss(b.from, _bv, b.weapon);
           bullets.splice(i, 1);
           continue;
         }
-        if (bestRp && bestD <= segLen) { // acertou alguém
+        if (bestMeta && bestD <= segLen) { // acertou alguém
           _bv.copy(b.p).addScaledVector(_bp, bestD);
           MP.FX.spawnTracer(b.p, _bv, col);
           const head = bestPart === 'head' || bestPart === 'core';
-          let dmg = b.dmg * (head ? 1.75 : 1);
-          MP.FX.burst(_bv, _bp.clone().negate(), bestRp.isBoss ? 'spark' : 'blood');
+          const dmg = b.dmg * (head ? 1.75 : 1);
+          MP.FX.burst(_bv, _bp.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
           MP.DmgNums.spawn(_bv, Math.round(dmg), head);
           MP.showHitmarker(false);
           if (head) MP.SFX.headshot(); else MP.SFX.hit();
-          bestRp.damage(dmg, _bv);
+          if (bestMeta.remote) bestMeta.target.damage(dmg, _bv);
+          else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, _bp, bestPart);
+          else bestMeta.target.damage(dmg, _bv, _bp, head);
           bullets.splice(i, 1);
           continue;
         }
         _bv.copy(b.p).addScaledVector(_bp, segLen);
         MP.FX.spawnTracer(b.p, _bv, col);
         b.p.copy(_bv);
-        if (b.life <= 0 || b.p.y < -60) bullets.splice(i, 1);
+        if (b.life <= 0 || b.p.y < -60) {
+          window.__BR_shotMiss(b.from, b.p, b.weapon);
+          bullets.splice(i, 1);
+        }
       }
     }
 
     /* =============== faca (melee) =============== */
     window.__BR_melee = function (origin, dir, dmg) {
-      let bestD = Infinity, bestRp = null;
-      for (const rp of window.__MP_remotePlayers) {
-        if (!rp.alive) continue;
-        if (rp.group.position.distanceToSquared(origin) > 5.2 * 5.2) continue;
-        for (const s of rp.hitSpheres()) {
+      let bestD = Infinity, bestMeta = null, bestPart = null;
+      for (const meta of combatTargets()) {
+        const target = meta.target;
+        if (!target.alive) continue;
+        const pos = target.group && target.group.position;
+        if (pos && pos.distanceToSquared(origin) > 5.2 * 5.2) continue;
+        for (const s of target.hitSpheres()) {
           const d = segSphere(origin, dir, 2.6, s.c, s.r + 0.25);
-          if (d >= 0 && d < bestD) { bestD = d; bestRp = rp; }
+          if (d >= 0 && d < bestD) { bestD = d; bestMeta = meta; bestPart = s.part; }
         }
       }
-      if (bestRp) {
+      if (bestMeta) {
         _bv.copy(origin).addScaledVector(dir, bestD);
-        MP.FX.burst(_bv, dir.clone().negate(), bestRp.isBoss ? 'spark' : 'blood');
+        MP.FX.burst(_bv, dir.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
         MP.DmgNums.spawn(_bv, Math.round(dmg), false);
         MP.showHitmarker(false);
         MP.SFX.hit();
-        bestRp.damage(dmg, _bv);
+        if (bestMeta.remote) bestMeta.target.damage(dmg, _bv);
+        else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, dir, bestPart);
+        else bestMeta.target.damage(dmg, _bv, dir, bestPart === 'head' || bestPart === 'core');
       }
     };
 
@@ -635,7 +724,52 @@
     let boss = null;
     let bossHp = INIT.bossHp || 0, bossMaxHp = INIT.bossMaxHp || 1;
     let bossDeadFlag = !!INIT.bossDead; // resetado a cada matchStart
-    let bossDeadAnim = 0, lastAoE = 0;
+    let bossDeadAnim = 0, lastAoE = 0, lastRanged = -Infinity, golemShots = 0;
+    const golemOrbs = [];
+    const golemOrbGeo = new THREE.SphereGeometry(0.28, 10, 7);
+    const golemOrbMat = new THREE.MeshStandardMaterial({
+      color: 0xff8a3d, emissive: 0xff5a18, emissiveIntensity: 2.8, roughness: 0.35,
+    });
+    function removeGolemOrb(i, impact) {
+      const orb = golemOrbs[i];
+      if (impact) MP.FX.burst(impact, _yAxis, 'spark');
+      MP.scene.remove(orb.mesh);
+      golemOrbs.splice(i, 1);
+    }
+    function fireGolemOrb() {
+      const p = boss.group.position;
+      const mesh = new THREE.Mesh(golemOrbGeo, golemOrbMat);
+      mesh.position.set(p.x + boss.fw.x * 1.4, p.y + 3.7, p.z + boss.fw.z * 1.4);
+      const aim = MP.player.pos.clone();
+      aim.y += 1.05;
+      const velocity = aim.sub(mesh.position).normalize().multiplyScalar(19);
+      MP.scene.add(mesh);
+      golemOrbs.push({ mesh, velocity, life: 4 });
+      golemShots++;
+      if (MP.SFX.bossShot) MP.SFX.bossShot();
+    }
+    function stepGolemOrbs(dt) {
+      for (let i = golemOrbs.length - 1; i >= 0; i--) {
+        const orb = golemOrbs[i];
+        orb.life -= dt;
+        const segLen = orb.velocity.length() * dt;
+        _bp.copy(orb.velocity).normalize();
+        const blockD = MP.rayBlockedAt(orb.mesh.position, _bp, segLen);
+        if (blockD < segLen) {
+          _bv.copy(orb.mesh.position).addScaledVector(_bp, blockD);
+          removeGolemOrb(i, _bv);
+          continue;
+        }
+        orb.mesh.position.addScaledVector(orb.velocity, dt);
+        _bv.copy(MP.player.pos); _bv.y += 1;
+        if (S.phase === 'PLAY' && !MP.player.dead && orb.mesh.position.distanceToSquared(_bv) < 1.25 * 1.25) {
+          MP.playerDamage(18, orb.mesh.position, { type: 'golem' });
+          removeGolemOrb(i, orb.mesh.position);
+          continue;
+        }
+        if (orb.life <= 0 || orb.mesh.position.y < -60) removeGolemOrb(i);
+      }
+    }
     function buildBoss() {
       if (bossDeadFlag) return;
       const mRock = new THREE.MeshStandardMaterial({ color: 0x4a4f58, roughness: 0.85 });
@@ -664,8 +798,9 @@
       box(mCore.clone(), 0.7, 0.16, 0.1, 0, 5, -0.62); // olhos
       MP.scene.add(g);
       boss = {
-        id: '__boss', nick: 'GOLEM', alive: !INIT.bossDead, isBoss: true,
-        group: g, legL, legR, armL, armR, core, slamT: 0,
+        id: '__boss', nick: 'GOLEM', alive: !bossDeadFlag, isBoss: true,
+        group: g, legL, legR, armL, armR, core, slamT: 0, aimT: 0,
+        aimFw: { x: 0, z: -1 },
         sphCache: [
           { c: new THREE.Vector3(), r: 0.75, part: 'head' },
           { c: new THREE.Vector3(), r: 0.55, part: 'core' },
@@ -675,7 +810,7 @@
         hitSpheres() {
           const p = this.group.position, fw = this.fw || { x: 0, z: -1 };
           this.sphCache[0].c.set(p.x, p.y + 4.9, p.z);
-          this.sphCache[1].c.set(p.x + fw.x * 0.9, p.y + 3.1, p.z + fw.z * 0.9);
+          this.sphCache[1].c.set(p.x + fw.x * 0.85, p.y + 3.1, p.z + fw.z * 0.85);
           this.sphCache[2].c.set(p.x, p.y + 3.1, p.z);
           this.sphCache[3].c.set(p.x, p.y + 1.1, p.z);
           return this.sphCache;
@@ -688,8 +823,23 @@
       };
       window.__MP_remotePlayers.push(boss);
     }
+    function faceBoss(fwx, fwz) {
+      boss.fw = { x: fwx, z: fwz };
+      // O modelo olha para -Z; compensar a rotação alinha corpo, core e muzzle.
+      boss.group.rotation.y = Math.atan2(-fwx, -fwz);
+    }
+    function aimBossAt(x, z, hold) {
+      const dx = x - boss.group.position.x, dz = z - boss.group.position.z;
+      const len = Math.hypot(dx, dz);
+      if (len < 0.01) return;
+      boss.aimFw.x = dx / len;
+      boss.aimFw.z = dz / len;
+      boss.aimT = hold;
+      faceBoss(boss.aimFw.x, boss.aimFw.z);
+    }
     function bossStep(dt) {
       if (!boss) return;
+      stepGolemOrbs(dt);
       const F = G.Structures.FORT_POS;
       if (!boss.alive) { // afundando
         if (bossDeadAnim < 1) {
@@ -703,12 +853,17 @@
       }
       const t = S.matchT();
       const a = t * 0.055;
-      const bx = F.x + Math.cos(a) * 26, bz = F.z + Math.sin(a) * 26;
+      // 30 m mantém o corpo (r≈1,5 m) fora das quatro torres nos diagonais.
+      const bx = F.x + Math.cos(a) * 30, bz = F.z + Math.sin(a) * 30;
       const by = MP.heightAt(bx, bz);
       boss.group.position.set(bx, by, bz);
-      const fwx = -Math.sin(a), fwz = Math.cos(a); // tangente do círculo
-      boss.fw = { x: fwx, z: fwz };
-      boss.group.rotation.y = Math.atan2(fwx, fwz);
+      let fwx = -Math.sin(a), fwz = Math.cos(a); // tangente do círculo
+      if (boss.aimT > 0) {
+        boss.aimT = Math.max(0, boss.aimT - dt);
+        fwx = boss.aimFw.x;
+        fwz = boss.aimFw.z;
+      }
+      faceBoss(fwx, fwz);
       const ph = t * 2.2;
       boss.legL.rotation.x = Math.sin(ph) * 0.45;
       boss.legR.rotation.x = -Math.sin(ph) * 0.45;
@@ -718,11 +873,34 @@
       boss.core.material.emissiveIntensity = 2.4 + Math.sin(t * 5) * 0.8;
       // ataque de área
       const P = MP.player.pos;
-      const d = Math.hypot(P.x - bx, P.z - bz);
-      if (S.phase === 'PLAY' && !MP.player.dead && d < 8 && t - lastAoE > 2.2) {
+      let dxPlayer = P.x - bx, dzPlayer = P.z - bz;
+      let d = Math.hypot(dxPlayer, dzPlayer);
+      if (S.phase === 'PLAY' && !MP.player.dead && Math.abs(P.y - by) < 4.8 && d < 2) {
+        if (d < 0.01) {
+          dxPlayer = bx - F.x;
+          dzPlayer = bz - F.z;
+          d = Math.hypot(dxPlayer, dzPlayer) || 1;
+        }
+        P.x = bx + dxPlayer / d * 2;
+        P.z = bz + dzPlayer / d * 2;
+        d = 2;
+      }
+      _bv.set(bx, by + 1.2, bz);
+      _bp.set(P.x, P.y + 1, P.z).sub(_bv);
+      const slamLineLen = _bp.length();
+      const slamVertical = Math.abs(P.y - by);
+      const slamClear = slamLineLen < 0.01 ||
+        MP.rayBlockedAt(_bv, _bp.multiplyScalar(1 / slamLineLen), slamLineLen) >= slamLineLen - 0.15;
+      if (S.phase === 'PLAY' && !MP.player.dead && d < 8 && slamVertical < 3 && slamClear && t - lastAoE > 2.2) {
         lastAoE = t;
         boss.slamT = 0.5;
-        MP.playerDamage(16, boss.group.position);
+        aimBossAt(P.x, P.z, 0.5);
+        MP.playerDamage(16, boss.group.position, { type: 'golem' });
+      }
+      if (S.phase === 'PLAY' && !MP.player.dead && d >= 8 && d < 68 && t - lastRanged > 1.8) {
+        lastRanged = t;
+        aimBossAt(P.x, P.z, 0.55);
+        fireGolemOrb();
       }
       // barra de vida
       const near = d < 75;
@@ -783,7 +961,12 @@
       MP.setTimeScale(1);
       // morreu dirigindo/voando: sai do veículo, senão a câmera fica presa no carro no espectador
       try { if (G.state.driving || G.state.flying) G.tryToggleCar(); } catch (e) {}
-      const killer = S.lastHit && Date.now() - S.lastHit.t < 9000 ? S.lastHit : null;
+      const cause = MP.player.lastDamageCause || { type: 'environment' };
+      // A causa é gravada apenas quando o dano realmente entra. Tiros que chegam
+      // durante a animação de morte não podem substituir o autor do golpe letal.
+      const killer = cause.type === 'player' && cause.attackerId && Date.now() - cause.t < 9000
+        ? { shooterId: cause.attackerId, weapon: cause.weapon }
+        : null;
       // solta o loot no chão pros outros: armas + munição + colete + kit
       const items = [];
       for (let i = 0; i < 5; i++) if (!A[i].locked)
@@ -793,7 +976,12 @@
       if (G.inventory.medkits > 0) items.push({ type: 'med' });
       socket.emit('deathDrop', { pos: [MP.player.pos.x, MP.player.pos.y, MP.player.pos.z], items });
       socket.timeout(3000).emit('died',
-        { killerId: killer ? killer.shooterId : null, weapon: killer ? killer.weapon : null, byZone: !killer },
+        {
+          killerId: killer ? killer.shooterId : null,
+          weapon: killer ? killer.weapon : null,
+          byZone: cause.type === 'gas',
+          cause: { type: cause.type },
+        },
         (err, res) => { if (!err && res && res.placement) S.myPlacement = res.placement; showRecap(); });
       setTimeout(showRecap, 1500); // garantia caso o ack não venha
     };
@@ -848,10 +1036,8 @@
       LOBBY.hide();
       if (!MP.state.started) G.forceStart();
       disableSoloAI();
-      if (S.flags && !S.flags.animais) { // regra da sala: sem bichos
-        try { for (const a of G.Animals.list) { a.alive = false; if (a.group) a.group.visible = false; } }
-        catch (e) { /* módulo ausente: segue */ }
-      }
+      try { G.Animals.setEnabled(!S.flags || S.flags.animais !== false); }
+      catch (e) { /* módulo ausente: segue */ }
       if (S.plan && S.plan.gas !== 'off') buildZoneWall(); // sala pode desligar o gás
       buildCrates();
       buildBoss();
@@ -921,24 +1107,57 @@
       let rp = remotes.get(d.id);
       if (!rp) rp = makeRemote(d.id, d.nick, d.colors, d.pos);
       rp.nick = d.nick || rp.nick;
-      rp.targetPos.set(d.pos[0], d.pos[1], d.pos[2]);
+      const groundedBot = d.bot && !d.ship && !d.fall && !d.chute && !d.heli && !(d.car >= 0);
+      rp.targetPos.set(d.pos[0], groundedBot ? MP.heightAt(d.pos[0], d.pos[2]) : d.pos[1], d.pos[2]);
       rp.targetYaw = d.rotY || 0;
       rp.ship = !!d.ship;
       rp.chute = !!d.chute;
+      rp.fall = !!d.fall;
       rp.car = typeof d.car === 'number' ? d.car : -1;
       rp.heli = !!d.heli;
+      rp.bot = !!d.bot;
+      rp.heldWeapon = d.heldWeapon ? weaponCode(d.heldWeapon) : rp.heldWeapon;
+      rp.body.weapon.visible = rp.heldWeapon !== 'FACA' && !rp.ship && !rp.fall;
+    });
+    socket.on('playerFired', d => {
+      const rp = remotes.get(d.shooterId);
+      if (!rp) return;
+      rp.fireT = 0.16;
+      rp.heldWeapon = d.weapon ? weaponCode(d.weapon) : rp.heldWeapon;
+      if (rp.heldWeapon !== 'FACA' && Array.isArray(d.fromPos) && Array.isArray(d.toPos)) {
+        const from = new THREE.Vector3(d.fromPos[0], d.fromPos[1], d.fromPos[2]);
+        const to = new THREE.Vector3(d.toPos[0], d.toPos[1] + 1, d.toPos[2]);
+        _bp.copy(to).sub(from);
+        const len = _bp.length();
+        if (len > 1e-4) {
+          _bp.multiplyScalar(1 / len);
+          const blockD = MP.rayBlockedAt(from, _bp, len);
+          if (blockD < len) to.copy(from).addScaledVector(_bp, blockD);
+        }
+        MP.FX.spawnTracer(from, to, 0xffe9a8);
+      }
     });
     socket.on('playerLeft', d => removeRemote(d.id));
     socket.on('youWereHit', d => {
-      S.lastHit = { shooterId: d.shooterId, shooterNick: d.shooterNick, weapon: d.weapon, t: Date.now() };
       const f = d.fromPos;
-      MP.playerDamage(d.dmg, { x: f[0], y: f[1], z: f[2] });
+      _bv.set(f[0], f[1], f[2]);
+      _bp.copy(MP.player.pos); _bp.y += 1;
+      _bp.sub(_bv);
+      const len = _bp.length();
+      if (len > 1e-4) {
+        _bp.multiplyScalar(1 / len);
+        if (MP.rayBlockedAt(_bv, _bp, len) < len - 0.15) return;
+      }
+      MP.playerDamage(d.dmg, { x: f[0], y: f[1], z: f[2] },
+        { type: 'player', attackerId: d.shooterId, weapon: d.weapon });
     });
     socket.on('playerKilled', d => {
       const feed = d.byCity
         ? `☄ <b>${esc(d.victimNick)}</b> morreu no ataque de mísseis à cidade`
         : d.byZone
           ? `☣ <b>${esc(d.victimNick)}</b> morreu pro gás`
+          : d.cause && d.cause !== 'player'
+            ? `☠ <b>${esc(d.victimNick)}</b> caiu em combate <i style="opacity:.6">${esc(d.cause)}</i>`
           : `<b>${esc(d.killerNick || '???')}</b> ▸ ${esc(d.victimNick)} <i style="opacity:.6">${esc(d.weapon)}</i>`;
       MP.addKillFeed(feed);
       if (d.victimId === INIT.id) {
@@ -1112,7 +1331,8 @@
       }
       socket.volatile.emit('state', {
         pos: [p.x, p.y, p.z], rotY, car, heli,
-        ship: S.phase === 'SHIP', chute: S.phase === 'FALL' && S.chuteOpen,
+        ship: S.phase === 'SHIP', fall: S.phase === 'FALL', chute: S.phase === 'FALL' && S.chuteOpen,
+        heldWeapon: localWeaponCode(),
       });
     }, 100);
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -1137,7 +1357,7 @@
       if (forceDeath && !MP.player.dead) {
         MP.player.invulnUntil = 0;
         window.__BR_freeze = false;
-        MP.playerDamage(99999, null);
+        MP.playerDamage(99999, null, { type: myDeathInfo && myDeathInfo.cause || 'environment' });
         if (MP.player.dead) forceDeath = false;
       }
 
@@ -1174,6 +1394,13 @@
         rp.body.armL.rotation.x = -sw * 0.8;
         rp.body.armR.rotation.x = sw * 0.8;
         rp.body.chute.visible = rp.chute;
+        rp.fireT = Math.max(0, rp.fireT - dt);
+        if (rp.heldWeapon === 'FACA' && rp.fireT > 0) {
+          const strike = 1 - rp.fireT / 0.16;
+          rp.body.armR.rotation.x = -0.9 - Math.sin(strike * Math.PI) * 0.9;
+        }
+        rp.body.weapon.visible = rp.heldWeapon !== 'FACA' && !rp.ship && !rp.fall;
+        rp.body.muzzle.visible = rp.heldWeapon !== 'FACA' && rp.fireT > 0;
         if (rp.hitT > 0) {
           rp.hitT -= dt;
           for (const m of rp.body.mats) { m.emissive.setHex(0xff2222); m.emissiveIntensity = Math.max(0, rp.hitT * 3); }
@@ -1255,7 +1482,7 @@
           const fora = S.phase === 'PLAY' && !MP.player.dead && dentroDoGas && !MP.state.cinematic;
           UI.gasTint.style.opacity = fora ? '1' : '0'; // tela avermelha DENTRO do gás
           if (fora)
-            MP.playerDamage(zc.dps * 0.5, null); // se alguém me feriu há pouco, a kill ainda é dele
+            MP.playerDamage(zc.dps * 0.5, null, { type: 'gas' });
         }
       } else if (S.plan && S.plan.gas === 'off') {
         zc.label = '☮ sem gás nesta partida';
@@ -1309,6 +1536,7 @@
       jump: jumpFromShip, spect: enterSpectator, openCrate: tryOpenCrate,
       get boss() { return boss; }, get bossHp() { return bossHp; },
       get bullets() { return bullets.length; },
+      get golemShots() { return golemShots; }, get golemOrbs() { return golemOrbs.length; },
     };
 
     if (INIT.phase === 'PLAYING') {

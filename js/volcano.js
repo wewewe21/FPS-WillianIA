@@ -52,7 +52,7 @@ export function createVolcano(deps) {
     const dv = Math.hypot(p.x - VOLCANO.lavaX, p.z - VOLCANO.lavaZ);
     if (!player.dead && dv < VOLCANO.lavaR && p.y < VOLCANO.lavaY) {
       dmgAcc += 26 * dt;
-      if (dmgAcc >= 9) { playerDamage(dmgAcc); dmgAcc = 0; }
+      if (dmgAcc >= 9) { playerDamage(dmgAcc, null, { type: 'lava' }); dmgAcc = 0; }
     } else dmgAcc = 0; // saiu da lava: nada de dano atrasado
   }
 

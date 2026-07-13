@@ -14,6 +14,7 @@ import sys
 import time
 import socket
 import subprocess
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +60,23 @@ def wait_port(port, timeout=15):
                 return True
         time.sleep(0.2)
     return False
+
+
+def stop_process(proc):
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=5)
 
 
 def boot_player(pw, nick):
@@ -146,13 +164,15 @@ def enter_ground(page, x, z):
 
 def main():
     SHOTS.mkdir(parents=True, exist_ok=True)
+    rank_tmp = tempfile.TemporaryDirectory(prefix='fps-city-e2e-rank-')
     env = dict(os.environ, PORT=str(PORT), WORLD_SEED='424242', COUNTDOWN_S='1',
                NEXT_IN_S='600', CITY_DESTRUCTION_DELAY_MS=str(DELAY_MS),
-               CITY_DESTRUCTION_IMPACT_DELAY_MS=str(IMPACT_MS))
-    srv = subprocess.Popen(['node', str(ROOT / 'server.js')], env=env,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    bot = None
+               CITY_DESTRUCTION_IMPACT_DELAY_MS=str(IMPACT_MS),
+               RANK_FILE=str(Path(rank_tmp.name) / 'br-rank.json'))
+    srv = bot = None
     try:
+        srv = subprocess.Popen(['node', str(ROOT / 'server.js')], env=env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert wait_port(PORT), f'servidor não subiu na porta {PORT}'
         with sync_playwright() as p:
             print('\n== LOBBY ==')
@@ -385,9 +405,9 @@ def main():
             b1.close()
             b2.close()
     finally:
-        if bot:
-            bot.kill()
-        srv.kill()
+        stop_process(bot)
+        stop_process(srv)
+        rank_tmp.cleanup()
 
     print(f'\n===== E2E: {len(passed)} ok, {len(failed)} falhas =====')
     if failed:
