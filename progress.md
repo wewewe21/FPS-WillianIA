@@ -134,3 +134,14 @@ monstros, armas e cenário; conferir as melhorias pendentes; publicar no GitHub.
 - Playtest visual: output/fp/ (armas nas mãos, recarga, ADS, corpo em 3ª pessoa)
   e output/world/ (Guardião, Visitante, floresta nova, mercado, refúgio) — todos
   capturados sem erros de console.
+
+## Verificação final
+
+- `npm run lint`: 0 erros.
+- Suíte completa: **149 testes, 149 passaram, 0 falhas** (Windows + Chrome
+  headless/SwiftShader), incluindo os 7 novos de assets 3D.
+- Consertos que a suíte puxou: spawn do Visitante (nascia enterrado usando a
+  altura do disco), bounding box ciente de pose no charmodels, teste de loot
+  atualizado pro arsenal de 8 armas, teste de engajamento da IA determinístico,
+  e RNG próprio pros POIs/árvores (o rand() global em bloco assíncrono quebrava
+  o mundo compartilhado entre clientes).
