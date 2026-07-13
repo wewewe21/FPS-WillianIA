@@ -76,6 +76,38 @@ Na sequência, as lacunas da auditoria de combate foram fechadas:
   jogador parado no gás sem flag forjado. Vazamento de estado entre testes de
   `br-pve-weapons` corrigido (esqueleto vivo na frente da câmera).
 
+## Correções da rodada de playtest (2026-07-13, reports do Renato)
+
+- **Loot lento / "baú sem nada"**: `rollChest` dava só munição em 38% dos baús
+  (inútil pra quem nasce de faca). Agora ≥88% entregam ARMA (`server.js`;
+  teste de taxa em `test/plan.test.js`).
+- **Baú do heliponto vazio**: a caixa no telhado da TORRE NEXUS era decoração
+  do modo solo. No BR virou baú de verdade (key `torre`) com recompensa fixa
+  do servidor: BAZUCA + colete + kit (`server.js`, `br-game.js`; testes em
+  `server.test.js` e `br-cover.test.js`).
+- **Atirar do helicóptero**: o gate de tiro bloqueava `state.flying`. Liberado;
+  a origem do disparo é o HELI (não a câmera de perseguição, que o servidor
+  rejeitaria por ficar ~10m atrás da posição autoritativa) e o HUD de munição
+  continua visível a bordo (`game.js`, `js/heli.js`; teste em
+  `gameplay.test.js`). Granada segue bloqueada em voo.
+- **Carros flutuando/enterrados**: fora da cidade o heightfield físico (grade
+  de 4m) diverge do terreno visual; o modelo agora ancora no `heightAt` — na
+  cidade mantém as rodas (asfalto acima do terreno). Resolveu também o flake
+  do caminhão no `car-models.test.js` (`js/car.js`).
+- **Física do carro**: teto de velocidade por veículo (buggy 72 / caminhão 84 /
+  esportivo 118 km/h) e direção sensível à velocidade (esterço cheio parado,
+  ~40% no talo) — sem isso o esportivo saturava o esterço e "não virava"
+  (`js/car.js`).
+- **Grama sob veículos**: clareiras de grama em todas as vagas de carro + o
+  buggy do spawn (`js/grass.js`, `game.js`). ⚠️ Lição: a criação da Grass NÃO
+  pode mudar de posição no init — ela consome o `rand` seedado e qualquer
+  reordenação muda o layout do mundo inteiro pra mesma seed (3 testes de
+  mundo quebraram). Solução: array de clareiras por referência +
+  `Grass.refreshAll()` no FIM do init.
+- **Modelo do carro re-ancora quando parado**: o chassi continua assentando
+  depois do alinhamento inicial; parado e fora da cidade o modelo re-ancora
+  no terreno visual continuamente (só aritmética, sem Box3) — `js/car.js`.
+
 ## Pendências (arquiteturais, mapeadas — sem correção nesta rodada)
 
 - **Bots não conhecem paredes/árvores/LOS** (`scripts/bots.js`): reconstroem só

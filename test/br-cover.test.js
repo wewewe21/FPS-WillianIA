@@ -51,6 +51,16 @@ describe('BR — cobertura também bloqueia dano de rede', { skip: !CHROME && 'C
     assert.equal(health, 100, `parede não bloqueou o dano de rede (vida=${health})`);
   });
 
+  it('o heliponto tem baú DE VERDADE no BR (key torre, na altura do telhado)', async () => {
+    const crate = await h.play(() => {
+      const c = window.__BR_debug.crates.find(c => c.key === 'torre');
+      return c ? { y: c.g.position.y, opened: c.opened } : null;
+    });
+    assert.ok(crate, 'baú do heliponto não existe no BR');
+    assert.ok(crate.y > 20, `baú da torre no chão (y=${crate.y}) — deveria estar no telhado`);
+    assert.equal(crate.opened, false);
+  });
+
   it('tiro humano que ERRA vira playerFired visível pros outros', async () => {
     const fired = [];
     host.on('playerFired', d => fired.push(d));

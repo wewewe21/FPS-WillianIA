@@ -605,9 +605,10 @@
         new THREE.MeshStandardMaterial({ color: base, roughness: 0.7 }),
         new THREE.MeshStandardMaterial({ color: 0x0e2a26, emissive: band, emissiveIntensity: 1.8, roughness: 0.4 }),
       ];
-      function addCrate(key, x, z) {
-        const y = MP.heightAt(x, z);
-        if (y < MP.WATER_LEVEL + 1.2) return false;
+      function addCrate(key, x, z, yFixo) {
+        // yFixo: baú em laje/telhado (ex.: heliponto) — não usa o terreno
+        const y = yFixo != null ? yFixo : MP.heightAt(x, z);
+        if (yFixo == null && y < MP.WATER_LEVEL + 1.2) return false;
         const [mBox, mBand] = mkMat(0x5b4630, 0x2dd6c4);
         const g = new THREE.Group();
         const base = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.55, 0.65), mBox);
@@ -636,6 +637,10 @@
         addCrate('s' + si++, s.x + 2.2, s.z + 1.4);
         if (rng() < 0.4) addCrate('s' + si++, s.x - 2.4, s.z - 1.8);
       }
+      // heliponto: a caixa da bazuca do modo solo vira baú DE VERDADE no BR
+      // (recompensa fixa do servidor por escalar a torre — key 'torre')
+      const bz = G.Structures.bazookaSpot;
+      if (bz) addCrate('torre', bz.x - 2, bz.z - 2, bz.y); // ao lado da caixa decorativa
       for (const key of INIT.openedChests || []) markOpened(key);
     }
     function markOpened(key) {

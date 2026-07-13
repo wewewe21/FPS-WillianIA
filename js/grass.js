@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 
 export function createGrass(deps) {
-  const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO } = deps;
+  const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings = [] } = deps;
   const N = CFG.GRASS_CHUNKS;                       // grade NxN
   const SIZE = CFG.GRASS_CHUNK_SIZE;
   const PER_CHUNK = Math.floor(CFG.GRASS_TOTAL / (N * N));
@@ -164,6 +164,11 @@ export function createGrass(deps) {
       if (CITY && Math.hypot(wx + lx - CITY.x, wz + lz - CITY.z) < 92) s = 0.0001;
       // cone do vulcão é rocha nua: grama não brota na encosta
       if (VOLCANO && Math.hypot(wx + lx - VOLCANO.x, wz + lz - VOLCANO.z) < VOLCANO.r * 0.95) s = 0.0001;
+      // clareiras (vagas de veículos): grama embaixo do carro fazia ele
+      // parecer enterrado/flutuando — chão limpo onde carro estaciona
+      for (const c of clearings) {
+        if (Math.hypot(wx + lx - c.x, wz + lz - c.z) < (c.r || 4.5)) { s = 0.0001; break; }
+      }
       dummy.scale.set(rand(0.8, 1.25), s, 1);
       dummy.updateMatrix();
       chunk.mesh.setMatrixAt(i, dummy.matrix);
@@ -235,5 +240,12 @@ export function createGrass(deps) {
     }
   }
 
-  return { update, material, PATCH_RADIUS };
+  /* refaz todos os chunks já preenchidos — usado quando as clareiras são
+     registradas depois da grade inicial (vagas de veículos nascem com as
+     Structures, que vêm depois da grama na ordem do rand seedado) */
+  function refreshAll() {
+    for (const ch of chunks) fillChunk(ch, ch.cx, ch.cz);
+  }
+
+  return { update, material, PATCH_RADIUS, refreshAll };
 }

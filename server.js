@@ -217,10 +217,12 @@ const WEAPON_TIERS = [ // idx do arsenal no jogo: 1=escopeta 0=fuzil 2=DMR 3=baz
 function rollChest(rng, luck = 0) {
   const items = [];
   const r = rng() + luck;
-  if (r < 0.38) items.push({ type: 'ammo', amount: 40 + Math.floor(rng() * 50) });
-  else if (r < 0.62) items.push({ type: 'weapon', ...WEAPON_TIERS[0] });
-  else if (r < 0.82) items.push({ type: 'weapon', ...WEAPON_TIERS[1] });
-  else if (r < 0.94) items.push({ type: 'weapon', ...WEAPON_TIERS[2] });
+  // todo mundo nasce só de faca: baú sem arma parece "baú vazio" — munição
+  // solta caiu de 38% pra 12% e o resto sempre entrega uma arma
+  if (r < 0.12) items.push({ type: 'ammo', amount: 40 + Math.floor(rng() * 50) });
+  else if (r < 0.48) items.push({ type: 'weapon', ...WEAPON_TIERS[0] });
+  else if (r < 0.76) items.push({ type: 'weapon', ...WEAPON_TIERS[1] });
+  else if (r < 0.92) items.push({ type: 'weapon', ...WEAPON_TIERS[2] });
   else items.push({ type: 'weapon', ...WEAPON_TIERS[3] });
   if (rng() < 0.55) items.push({ type: 'med' });
   if (rng() < 0.3) items.push({ type: 'armor', amount: 50 });
@@ -765,9 +767,12 @@ io.on('connection', socket => {
     // baú lendário só existe depois do GOLEM cair — e só se o GOLEM existe na sala
     if (key === 'boss' && (!match.bossDead || !match.flags.golem)) { match.openedChests.delete(key); return cb({ ok: false }); }
     const rng = mulberry32((match.seed ^ [...key].reduce((a, c) => a * 31 + c.charCodeAt(0) | 0, 7)) >>> 0);
+    // 'torre' = baú do heliponto: recompensa fixa por escalar a TORRE NEXUS
     const items = key === 'boss'
       ? [{ type: 'weapon', rarity: 'lendário', weapon: 4, ammo: 160 }, { type: 'armor', amount: 100 }, { type: 'med' }, { type: 'med' }]
-      : rollChest(rng);
+      : key === 'torre'
+        ? [{ type: 'weapon', rarity: 'lendário', weapon: 3, ammo: 6 }, { type: 'armor', amount: 50 }, { type: 'med' }]
+        : rollChest(rng);
     socket.broadcast.emit('chestOpened', { key });
     cb({ ok: true, items });
   });

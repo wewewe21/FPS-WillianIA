@@ -243,7 +243,12 @@ const Water = createWater({ CFG, WATER_LEVEL, scene, sunDir });
    GRAMA REATIVA — InstancedMesh em chunks que acompanham o player.
    Vento no vertex shader + dobra quando player/carro passam.
    ================================================================ */
-const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO });
+/* Clareiras de grama sob as vagas de veículos: o array é preenchido DEPOIS
+   (Structures ainda não existe aqui) e a grama refaz os chunks já criados.
+   A criação da Grass NÃO pode mudar de lugar: ela consome o rand seedado e
+   qualquer reordenação muda o layout do mundo inteiro pra mesma seed. */
+const grassClearings = [];
+const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings: grassClearings });
 
 /* ================================================================
    VEGETAÇÃO — árvores (2 LODs), pedras e flores, tudo InstancedMesh
@@ -293,6 +298,12 @@ treeLoMesh.frustumCulled = false;
 scene.add(treeHiMesh, treeLoMesh);
 
 const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry });
+
+// clareiras de grama: uma por vaga de veículo + o buggy do spawn (7.5, -6).
+// O refill (Grass.refreshAll) roda no FIM do init: fillChunk consome o rand
+// seedado e aqui ainda deslocaria o stream das árvores/vegetação.
+grassClearings.push({ x: 7.5, z: -6, r: 4.5 },
+  ...Structures.carSpots.map(s => ({ x: s.x, z: s.z, r: s.type === 'truck' ? 5.5 : 4.5 })));
 
 /* paredes das construções também são sólidas pra física dos veículos —
    sem isso carro/caminhão atravessavam prédios, fortes e muros */
@@ -1138,6 +1149,8 @@ function fire(t) {
     recoil.kickRot += 0.2;
     camera.getWorldDirection(_rayDir);
     muzzle.getWorldPosition(_v3);
+    // voando, o tiro sai do HELICÓPTERO, não da câmera de perseguição (10m atrás)
+    if (state.flying) { _v3.copy(Heli.group.position); _v3.y += 1.6; }
     Rockets.fire(_v3, _rayDir);
     return;
   }
@@ -1158,6 +1171,12 @@ function fire(t) {
   const spread = lerp(gun.spreadHip, gun.spreadAds, adsT) + spd * 0.0006 + (player.onGround ? 0 : 0.012);
   camera.getWorldPosition(_rayOrig);
   muzzle.getWorldPosition(_v3);
+  // voando, origem do tiro é o HELICÓPTERO — a câmera de perseguição fica ~10m
+  // atrás e o servidor rejeitaria a origem longe da posição autoritativa
+  if (state.flying) {
+    _v3.copy(Heli.group.position); _v3.y += 1.6;
+    _rayOrig.copy(_v3);
+  }
 
   let hitAny = false, killAny = false, headAny = false, totalDmg = 0;
   let remoteHit = false, missEndSet = false;
@@ -1293,8 +1312,9 @@ function shootUpdate(dt, t) {
     centerMsg('Mira: ' + s.name, 1100);
     SFX.switchW();
   }
-  if (state.driving || state.flying || state.paused || player.dead || window.__BR_freeze || state.cinematic) { mouse.clicked = false; return; }
-  if (justPressed.has('KeyG')) Grenades.throwNade(t);
+  // no helicóptero PODE atirar (porta aberta); dirigindo não — as mãos estão no volante
+  if (state.driving || state.paused || player.dead || window.__BR_freeze || state.cinematic) { mouse.clicked = false; return; }
+  if (justPressed.has('KeyG') && !state.flying) Grenades.throwNade(t);
   const interval = 60 / gun.rpm;
   const want = gun.auto ? mouse.shooting : mouse.clicked;
   if (want && !gun.reloading && switchAnim > 0.8 && t - gun.lastShot >= interval) {
@@ -1362,7 +1382,7 @@ function playerDamage(dmg, fromPos, cause) {
 
 const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat });
 
-const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys });
+const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY });
 
 const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos });
 
@@ -1817,6 +1837,10 @@ window.addEventListener('resize', () => {
   composer.setSize(window.innerWidth, window.innerHeight);
   csm.updateFrustums();
 });
+
+/* clareiras de grama sob os veículos: refill no FIM do init — fillChunk
+   consome o rand seedado e antes daqui deslocaria o layout do mundo */
+Grass.refreshAll();
 
 /* hooks de depuração (inofensivos em produção) */
 const __errors = [];

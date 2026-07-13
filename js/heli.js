@@ -46,7 +46,7 @@ export function createHeli(deps) {
     if (window.__BR_heliTaken) { centerMsg('Helicóptero ocupado!', 1400); return false; }
     state.flying = true;
     ui.speedo.style.display = 'block';
-    ui.ammoWrap.style.display = 'none';
+    // munição continua visível: dá pra atirar da porta do helicóptero
     mouse.shooting = false; mouse.aiming = false;
     SFX.carDoor();
     chaseCamPos.copy(camera.position);

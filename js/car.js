@@ -3,7 +3,7 @@ import * as CANNON from 'cannon-es';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export function createCar(deps) {
-  const { damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys } = deps;
+  const { damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY = null } = deps;
   const DRIVE_SIGN = 1; // sinal do engineForce p/ andar pra frente (validado em teste)
   const _cv1 = new CANNON.Vec3();
   const modelLoader = new GLTFLoader();
@@ -176,17 +176,17 @@ export function createCar(deps) {
   }
   const CFG_BUGGY = { name: 'BUGGY', mass: 280, half: [1.8, 0.38, 0.85],
     wheels: [[1.28, -0.1, 0.8], [1.28, -0.1, -0.8], [-1.28, -0.1, 0.8], [-1.28, -0.1, -0.8]],
-    wheelR: 0.5, wheelW: 0.34, force: 1650, steer: 0.55, brake: 32, engine: 'normal',
+    wheelR: 0.5, wheelW: 0.34, force: 1650, steer: 0.55, brake: 32, maxKmh: 72, engine: 'normal',
     modelUrl: '/assets/models/gumball-car.optimized.glb', modelYaw: Math.PI / 2,
     build: () => buildPlaceholder([1.8, 0.38, 0.85], 0xe8562a) };
   const CFG_TRUCK = { name: 'CAMINHÃO MILITAR', mass: 680, half: [2.7, 0.55, 1.05],
     wheels: [[1.9, -0.18, 1], [1.9, -0.18, -1], [-1.7, -0.18, 1], [-1.7, -0.18, -1]],
-    wheelR: 0.6, wheelW: 0.45, force: 3600, steer: 0.45, brake: 55, grip: 1.6, engine: 'truck',
+    wheelR: 0.6, wheelW: 0.45, force: 3600, steer: 0.45, brake: 55, maxKmh: 84, grip: 1.6, engine: 'truck',
     modelUrl: '/assets/models/truck-drifter.optimized.glb', modelYaw: 0,
     build: () => buildPlaceholder([2.7, 0.55, 1.05], 0x46523a) };
   const mkSport = c => ({ name: 'ESPORTIVO GT', mass: 420, half: [1.9, 0.32, 0.88],
     wheels: [[1.35, -0.02, 0.82], [1.35, -0.02, -0.82], [-1.3, -0.02, 0.82], [-1.3, -0.02, -0.82]],
-    wheelR: 0.42, wheelW: 0.3, force: 5200, steer: 0.5, brake: 60, grip: 2.2, awd: true, engine: 'sport',
+    wheelR: 0.42, wheelW: 0.3, force: 5200, steer: 0.5, brake: 60, maxKmh: 118, grip: 2.2, awd: true, engine: 'sport',
     modelUrl: '/assets/models/mazda-rx7.v2.glb', modelYaw: Math.PI,
     bodyTint: c, bodyMaterial: '02_-_Default', // pinta a carroceria, preserva o resto
     build: () => buildPlaceholder([1.9, 0.32, 0.88], c) });
@@ -204,13 +204,17 @@ export function createCar(deps) {
       if (driven) {
         const fwdIn = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
         const steerIn = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0); // +steer vira à esquerda
-        v.steerCur = damp(v.steerCur, steerIn * v.cfg.steer, 6, dt);
-        v.vehicle.setSteeringValue(v.steerCur, 0);
-        v.vehicle.setSteeringValue(v.steerCur, 1);
         v.chassisBody.quaternion.vmult(new CANNON.Vec3(1, 0, 0), _cv1);
         const fwdSpeed = v.chassisBody.velocity.dot(_cv1);
+        const kmh = Math.abs(fwdSpeed) * 3.6;
+        // direção sensível à velocidade: esterço cheio parado, ~40% no talo —
+        // sem isto o carro rodopiava em alta e "não virava" (esterço saturado)
+        const steerK = 1 / (1 + kmh / 75);
+        v.steerCur = damp(v.steerCur, steerIn * v.cfg.steer * steerK, 6, dt);
+        v.vehicle.setSteeringValue(v.steerCur, 0);
+        v.vehicle.setSteeringValue(v.steerCur, 1);
         let force = 0, brake = 0;
-        if (fwdIn > 0) force = v.cfg.force;
+        if (fwdIn > 0 && kmh < (v.cfg.maxKmh || 100)) force = v.cfg.force;
         else if (fwdIn < 0) {
           if (fwdSpeed > 2) brake = v.cfg.brake;       // freia antes de dar ré
           else force = -v.cfg.force * 0.55;
@@ -245,10 +249,31 @@ export function createCar(deps) {
           v.group.updateMatrixWorld(true);
           let wy = 0;
           for (const w of v.vehicle.wheelInfos) wy += w.worldTransform.position.y;
-          const chao = wy / 4 - v.cfg.wheelR; // fundo dos pneus = chão real da física
+          let chao = wy / 4 - v.cfg.wheelR; // fundo dos pneus = chão real da física
+          /* FORA da cidade, a grade de 4m do heightfield físico diverge do
+             terreno visual — carro parecia flutuar ou enterrar. Âncora no
+             heightAt. NA cidade mantém as rodas: o asfalto fica ACIMA do
+             terreno e o heightAt afundaria o modelo no slab. */
+          const px = v.chassisBody.position.x, pz = v.chassisBody.position.z;
+          v.naCidade = !!(CITY && Math.hypot(px - CITY.x, pz - CITY.z) < 92);
+          if (!v.naCidade) chao = heightAt(px, pz);
           const box = new THREE.Box3().setFromObject(v.modelRoot);
           v.modelRoot.position.y += (chao + 0.04 - box.min.y);
           v.modelRoot.updateMatrixWorld(true);
+          // fundo do modelo relativo ao chassi: permite re-ancorar sem Box3
+          v.modelBottomRel = (chao + 0.04) - v.chassisBody.position.y;
+        }
+      }
+      /* o chassi continua assentando DEPOIS do alinhamento (heightfield tem
+         grade de 4m); parado e fora da cidade, re-ancora o modelo no terreno
+         visual — barato: só aritmética, sem Box3 */
+      if (!driven && !v.naCidade && v.modelBottomRel != null && !v.modelAlignPending &&
+          v.chassisBody.velocity.lengthSquared() < 0.04) {
+        const alvo = heightAt(v.chassisBody.position.x, v.chassisBody.position.z) + 0.04;
+        const delta = alvo - (v.chassisBody.position.y + v.modelBottomRel);
+        if (Math.abs(delta) > 0.02) {
+          v.modelRoot.position.y += delta;
+          v.modelBottomRel += delta;
         }
       }
     }
