@@ -21,15 +21,24 @@ describe('Ataques autônomos — direção e cobertura', { skip: !CHROME && 'Chr
       enemy.burstLeft = 2;
       enemy.nextShot = 0;
       enemy.nextBurst = 99;
-      for (let i = 0; i < 12; i++) G.Enemies.update(1 / 60, i / 60);
+      for (let i = 0; i < 40; i++) G.Enemies.update(1 / 60, i / 60);
       enemy.group.updateMatrixWorld(true);
+      const target = MP.player.pos.clone(); target.y += 1.1;
+      if (enemy.hasModel) {
+        // GUARDIÃO GLB: os braços procedurais ficam escondidos — o que o
+        // jogador vê é o CORPO virado pro alvo (+Z local) + animação Shoot
+        const fwd = new MP.THREE.Vector3(0, 0, 1).applyQuaternion(enemy.group.quaternion);
+        fwd.y = 0; fwd.normalize();
+        const dir = target.clone().sub(enemy.group.position);
+        dir.y = 0; dir.normalize();
+        return fwd.dot(dir);
+      }
       const gun = enemy.parts.armR.children.find(o => o.isGroup);
       const gunPos = new MP.THREE.Vector3();
       const gunQ = new MP.THREE.Quaternion();
       gun.getWorldPosition(gunPos);
       gun.getWorldQuaternion(gunQ);
       const gunForward = new MP.THREE.Vector3(0, 0, 1).applyQuaternion(gunQ).normalize();
-      const target = MP.player.pos.clone(); target.y += 1.1;
       const targetDir = target.sub(gunPos).normalize();
       return gunForward.dot(targetDir);
     });

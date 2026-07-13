@@ -15,5 +15,12 @@ docker-compose.override*.yml
 /castle.glb
 /skelly.glb
 
+# fontes pesadas de personagem/arma — no repo vão só os .optimized.glb
+assets/models/Personagens/low_poly_alien_character_rigged.glb
+assets/models/Armas/bazooka_rocket_launcher_low_poly.glb
+
 # artefatos gerados pelos testes exploratórios
 tests/screenshots/
+
+# evidências geradas localmente pelos harness de captura
+output/

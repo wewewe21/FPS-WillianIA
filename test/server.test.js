@@ -330,6 +330,23 @@ describe('Combate', () => {
     assert.equal(hits.length, 0, 'tiro atravessou 500m do mapa');
   });
 
+  it('dadas as armas novas dos assets (SNIPER/RAJADA), então o dano passa na validação', async t => {
+    const { clients } = await playing(t, 2);
+    const [a, b] = clients;
+    a.s.emit('state', { pos: [0, 2, 0], rotY: 0, heldWeapon: 'SNIPER "AGULHA"' });
+    b.s.emit('state', { pos: [200, 2, 0], rotY: 0 });
+    await sleep(250);
+    const hits = collect(b.s, 'youWereHit');
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 46, weapon: 'SNIPER "AGULHA"', fromPos: [0, 3.5, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 1, 'sniper nova foi rejeitada pelo servidor');
+    assert.equal(hits[0].weapon, 'SNIPER');
+    // rajada usa o código ESCOPETA: alcance de 120m vale pra ela
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 30, weapon: 'ESCOPETA "RAJADA"', fromPos: [0, 3.5, 0] });
+    await sleep(350);
+    assert.equal(hits.length, 1, 'rajada a 200m deveria ser rejeitada (código ESCOPETA = 120m)');
+  });
+
   it('dada faca fora do alcance corpo a corpo, então o servidor rejeita o dano', async t => {
     const { clients } = await playing(t, 2);
     const [a, b] = clients;

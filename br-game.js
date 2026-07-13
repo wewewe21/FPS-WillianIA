@@ -14,7 +14,9 @@
     const LIM = MP.CFG.WORLD_SIZE / 2;
     const A = G.arsenal;
     const KNIFE = 5; // índice da faca no arsenal
-    const WEAPON_CODES = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA'];
+    // posicional com o arsenal (A): 6=SNIPER "AGULHA", 7=ESCOPETA "RAJADA"
+    // (a rajada usa o código ESCOPETA — mesmo alcance de 120m no servidor)
+    const WEAPON_CODES = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA', 'SNIPER', 'ESCOPETA'];
     const weaponCode = value => {
       const raw = String(value || '').toUpperCase();
       return WEAPON_CODES.find(code => raw === code || raw.startsWith(code + ' ')) || 'FACA';
@@ -440,6 +442,7 @@
       const gy = MP.groundAt(P.pos.x, P.pos.z, P.pos.y);
       if (!S.chuteOpen && P.pos.y - gy < 120) {
         S.chuteOpen = true;
+        window.__FP_pose = 'chute'; // mãos do rig seguram as alças
         UI.hint('🪂 paraquedas aberto — WASD pra planar', 2500);
       }
       if (P.pos.y <= gy + 0.4) { // pousou
@@ -448,6 +451,7 @@
         S.chuteOpen = false;
         S.phase = 'PLAY';
         window.__BR_freeze = false;
+        window.__FP_pose = null;
         UI.hint('');
         MP.centerMsg('Boa sorte. Ache um baú!', 2200);
       }
@@ -457,6 +461,7 @@
       S.phase = 'FALL';
       S.jumped = true;
       fallVy = -4;
+      window.__FP_pose = 'fall'; // braços abertos na queda livre
       UI.hint('🌀 caindo — [ESPAÇO] abre o paraquedas antes', 3000);
     }
 
@@ -924,6 +929,7 @@
     function enterSpectator() {
       S.phase = 'SPECT';
       window.__BR_freeze = true;
+      window.__FP_pose = null;
       const P = MP.player;
       P.dead = false;
       P.health = P.maxHealth;
@@ -974,7 +980,7 @@
         : null;
       // solta o loot no chão pros outros: armas + munição + colete + kit
       const items = [];
-      for (let i = 0; i < 5; i++) if (!A[i].locked)
+      for (let i = 0; i < A.length; i++) if (!A[i].melee && !A[i].locked)
         items.push({ type: 'weapon', weapon: i, ammo: A[i].mag + A[i].reserve, rarity: 'raro' });
       items.push({ type: 'ammo', amount: 60 });
       items.push({ type: 'armor', amount: 50 });
@@ -1024,10 +1030,11 @@
         A[i].locked = i !== KNIFE;
         if (!A[i].melee) { A[i].reserve = 0; A[i].mag = A[i].magSize; }
       }
-      // balística BR (projéteis com queda) — fuzil, DMR e plasma
+      // balística BR (projéteis com queda) — fuzil, DMR, plasma e sniper leve
       A[0].projSpeed = 200; A[0].projDrop = 6.5;
       A[2].projSpeed = 310; A[2].projDrop = 5;
       A[4].projSpeed = 120; A[4].projDrop = 1.5;
+      if (A[6]) { A[6].projSpeed = 290; A[6].projDrop = 5.5; }
       G.switchWeapon(KNIFE);
       const inv = G.inventory;
       inv.medkits = 0; inv.nades = 0; inv.meat = 0;
@@ -1278,7 +1285,7 @@
       if (e.code === 'Enter' && window.__BR_active && MP.state.started) { openChat(); return; }
       if (e.code === 'Space') {
         if (S.phase === 'SHIP') jumpFromShip();
-        else if (S.phase === 'FALL' && !S.chuteOpen) { S.chuteOpen = true; UI.hint('🪂 paraquedas aberto', 1800); }
+        else if (S.phase === 'FALL' && !S.chuteOpen) { S.chuteOpen = true; window.__FP_pose = 'chute'; UI.hint('🪂 paraquedas aberto', 1800); }
         else if (S.phase === 'SPECT') { spectIdx++; updateSpectBar(); }
       }
       if (e.code === 'KeyE' && S.phase === 'PLAY' && !MP.player.dead && !MP.state.paused) tryOpenCrate();
@@ -1286,6 +1293,8 @@
         if (e.code === 'Digit4') G.switchWeapon(3);
         if (e.code === 'Digit5') G.switchWeapon(4);
         if (e.code === 'Digit6') G.switchWeapon(KNIFE);
+        if (e.code === 'Digit7') G.switchWeapon(6); // SNIPER "AGULHA"
+        if (e.code === 'Digit8') G.switchWeapon(7); // ESCOPETA "RAJADA"
       }
     });
 
@@ -1342,10 +1351,22 @@
     }, 100);
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ');
 
-    /* watchdog do pulo automático: roda em setInterval porque o loop de frames
-       congela em aba oculta — sem isto o jogador ficava eternamente "na nave" */
+    /* watchdog de aba oculta: o loop de frames congela quando o navegador some
+       da tela — sem isto o jogador ficava eterno "na nave"/no ar, imortal fora
+       da zona, e a partida nunca terminava. Aqui, em setInterval (roda mesmo
+       em segundo plano): pulo automático, queda grosseira até o chão e o dano
+       do gás continuam acontecendo. */
+    let lastRaf = performance.now();
     setInterval(() => {
       if (S.phase === 'SHIP' && S.plan && S.matchT() >= S.plan.ship.flyTime) jumpFromShip();
+      const starved = performance.now() - lastRaf > 1500; // rAF morto = aba oculta
+      if (!starved || !window.__BR_active) return;
+      if (S.phase === 'FALL') fallStep(0.5);              // cai em passos de 0.5s
+      if (S.plan && S.phase === 'PLAY' && !MP.player.dead) {
+        updateZone();
+        const P = MP.player.pos;
+        if (Math.hypot(P.x - zc.x, P.z - zc.z) > zc.r) MP.playerDamage(zc.dps * 0.5, null);
+      }
     }, 500);
 
     /* =============== loop principal do BR =============== */
@@ -1356,6 +1377,7 @@
       const nowMs = performance.now();
       const dt = Math.min((nowMs - lastT) / 1000, 0.1);
       lastT = nowMs;
+      lastRaf = nowMs; // sinal de "aba visível" pro watchdog de segundo plano
       if (!window.__BR_active) return;
 
       /* morte decretada pelo servidor: aplica assim que o jogo deixar */

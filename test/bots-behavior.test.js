@@ -161,6 +161,16 @@ describe('Bots gerenciados', () => {
     assert.deepEqual(loadout, { weapon: 'DMR', ammo: 48 });
   });
 
+  it('drop das armas novas equipa o perfil certo (sniper leve / rajada como escopeta)', () => {
+    const applyLoot = helper('applyLoot');
+    const sniper = { weapon: 'FACA', ammo: Infinity };
+    applyLoot(sniper, [{ type: 'weapon', weapon: 6, ammo: 30 }]);
+    assert.deepEqual(sniper, { weapon: 'SNIPER', ammo: 30 });
+    const rajada = { weapon: 'FACA', ammo: Infinity };
+    applyLoot(rajada, [{ type: 'weapon', weapon: 7, ammo: 27 }]);
+    assert.deepEqual(rajada, { weapon: 'ESCOPETA', ammo: 27 });
+  });
+
   it('drop de arma sem munição mantém a faca como fallback de combate', () => {
     const applyLoot = helper('applyLoot');
     const loadout = { weapon: 'FACA', ammo: Infinity };

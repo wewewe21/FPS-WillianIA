@@ -13,13 +13,16 @@ const { zoneAt, mulberry32 } = require(path.join(__dirname, '..', 'server.js'));
 
 const NICKS = ['Zumbi', 'Falcao', 'Vaga-Lume', 'Trovao', 'Golem Jr', 'Coiote', 'Visitante', 'Sombra',
   'Pantera', 'Cacto', 'Urubu', 'Lagarto', 'Tempestade', 'Neve', 'Fumaca', 'Raio'];
-const WEAPONS = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA'];
+// posicional com o arsenal do jogo: 6=sniper leve, 7=escopeta de rajada
+// (a rajada usa o código/perfil ESCOPETA — o servidor valida por código)
+const WEAPONS = ['FUZIL', 'ESCOPETA', 'DMR', 'BAZUCA', 'PLASMA', 'FACA', 'SNIPER', 'ESCOPETA'];
 const WEAPON_PROFILES = {
   FUZIL: { range: 85, dmg: 14, bursts: 2, cooldown: 1.1 },
   ESCOPETA: { range: 24, dmg: 38, bursts: 1, cooldown: 1.35 },
   DMR: { range: 100, dmg: 42, bursts: 1, cooldown: 1.5 },
   BAZUCA: { range: 75, dmg: 55, bursts: 1, cooldown: 2.4 },
   PLASMA: { range: 75, dmg: 19, bursts: 2, cooldown: 1.0 },
+  SNIPER: { range: 110, dmg: 32, bursts: 1, cooldown: 1.2 }, // leve: rápida, dano menor
   FACA: { range: 2.8, dmg: 24, bursts: 1, cooldown: 1.0 },
 };
 
