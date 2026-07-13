@@ -76,7 +76,8 @@ describe('Ranking global (unidade)', () => {
     const alvo = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'rank-')), 'rank.json');
     const { execSync } = require('node:child_process');
     // processo limpo: RANK_FILE é lido no carregamento do módulo
-    const out = execSync(process.execPath +
+    // (execPath entre aspas: no Windows o node mora em "C:\Program Files\...")
+    const out = execSync(JSON.stringify(process.execPath) +
       ' -e "const s=require(\'./server.js\'); s.rankEntry(\'Env\').points=7; s.saveRankNow(); console.log(\'ok\')"',
       { cwd: path.join(__dirname, '..'), env: { ...process.env, RANK_FILE: alvo }, encoding: 'utf8' });
     assert.match(out, /ok/);
