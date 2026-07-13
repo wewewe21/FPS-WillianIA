@@ -11,6 +11,8 @@ export function createStructures(deps) {
   const sites = [];      // {x, z, r, type}
   const walls = [];      // AABBs sólidas {x0,x1,y0,y1,z0,z1}
   const geos = [];
+  const cityDetailGeos = [];
+  let emCidade = false;
   const smokeSpots = []; // topos de chaminé (fumaça ambiente)
   const flags = [];      // bandeiras que tremulam
   const flagGeo = new THREE.PlaneGeometry(1.15, 0.55);
@@ -22,7 +24,7 @@ export function createStructures(deps) {
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y, z);
     paintGeometry(g, _sc.setHex(color));
-    geos.push(g);
+    (emCidade ? cityDetailGeos : geos).push(g);
     if (solid) {
       // corpo físico NÃO é criado aqui: o game.js cria um por parede a partir
       // de walls[] (com updateAABB) — criar aqui duplicava ~400 corpos mortos
@@ -34,7 +36,7 @@ export function createStructures(deps) {
     g.rotateY(Math.PI / 4);
     g.translate(x, y, z);
     paintGeometry(g, _sc.setHex(color));
-    geos.push(g);
+    (emCidade ? cityDetailGeos : geos).push(g);
   }
 
   function tower(cx, cz) {
@@ -203,7 +205,6 @@ export function createStructures(deps) {
   const cityMat = csmMat(new THREE.MeshStandardMaterial({
     map: fMap, emissiveMap: fEmis, emissive: 0xffffff, emissiveIntensity: 0.25, roughness: 0.8, metalness: 0.1 }));
   const cityGeos = [];
-  let emCidade = false; // marca walls/platforms urbanos p/ Structures.city
   function cityBox(w, h, d, x, y, z, solid = true) { // caixa texturizada (UV ~ por andar)
     const g = new THREE.BoxGeometry(w, h, d);
     const uv = g.attributes.uv;
@@ -265,7 +266,7 @@ export function createStructures(deps) {
       rmp.rotateX(Math.atan2(fh, 6));
       rmp.translate(cx - 7, (ry0 + ry1) / 2 - 0.1, cz - 5.4);
       paintGeometry(rmp, _sc.setHex(0x7d828c));
-      geos.push(rmp);
+      cityDetailGeos.push(rmp);
       // inimigos de terno em andares alternados
       if (k % 2 === 0 && k < NF) {
         enemyCamps.push({ x: cx + 3, z: cz + rand(-4, 4), suit: true, floorY: fy });
@@ -281,7 +282,7 @@ export function createStructures(deps) {
     const padGeo = new THREE.CylinderGeometry(5.2, 5.2, 0.1, 24);
     padGeo.translate(cx, towerTopY + 0.06, cz);
     paintGeometry(padGeo, _sc.setHex(0x32363d));
-    geos.push(padGeo);
+    cityDetailGeos.push(padGeo);
     sbox(3.4, 0.06, 0.7, cx, towerTopY + 0.12, cz, 0xe8eef4, false); // H
     sbox(0.7, 0.06, 2.6, cx - 1.35, towerTopY + 0.12, cz, 0xe8eef4, false);
     sbox(0.7, 0.06, 2.6, cx + 1.35, towerTopY + 0.12, cz, 0xe8eef4, false);
@@ -330,6 +331,11 @@ export function createStructures(deps) {
   const cityMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityGeos), cityMat);
   cityMesh.castShadow = cityMesh.receiveShadow = true;
   scene.add(cityMesh);
+  const cityDetailMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityDetailGeos),
+    csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0.02 })));
+  cityDetailMesh.name = 'cidadeDetalhesJogaveis';
+  cityDetailMesh.castShadow = cityDetailMesh.receiveShadow = true;
+  scene.add(cityDetailMesh);
 
   /* ---- raio vs AABBs (slab test, sem alocação) ---- */
   function rayHit(o, d, maxDist) {
@@ -476,16 +482,25 @@ export function createStructures(deps) {
     _state: 'intact',
     _bodies: [],          // corpos CANNON das paredes urbanas (registrados pelo game.js)
     _world: null,
+    _visual: null,
     _savedWalls: [], _savedPlatforms: [],
     containsPoint(x, z) { return Math.hypot(x - CITY.x, z - CITY.z) <= this.radius; },
     getState() { return this._state; },
     setState(st) { if (st === 'destroyed') this.destroy(); else if (st === 'intact') this.restore(); },
     registerBody(b) { this._bodies.push(b); },
     bindPhysics(world) { this._world = world; },
+    attachVisual(root) {
+      this._visual = root;
+      cityMesh.visible = false;
+      root.visible = this._state === 'intact';
+      cityDetailMesh.visible = this._state === 'intact';
+    },
     destroy() {
       if (this._state === 'destroyed') return;
       this._state = 'destroyed';
       cityMesh.visible = false;
+      cityDetailMesh.visible = false;
+      if (this._visual) this._visual.visible = false;
       cityRuins.visible = true;
       // colisão: paredes/plataformas urbanas saem dos arrays COMPARTILHADOS
       this._savedWalls = walls.filter(w => w.city);
@@ -498,7 +513,9 @@ export function createStructures(deps) {
     restore() {
       if (this._state === 'intact') return;
       this._state = 'intact';
-      cityMesh.visible = true;
+      cityMesh.visible = !this._visual;
+      cityDetailMesh.visible = true;
+      if (this._visual) this._visual.visible = true;
       cityRuins.visible = false;
       for (let i = walls.length - 1; i >= 0; i--) if (walls[i].cityRuin) walls.splice(i, 1);
       for (const w of this._savedWalls) walls.push(w);

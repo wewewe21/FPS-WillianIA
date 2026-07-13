@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const os = require('node:os');
 
 const CHROME = [
   '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium',
@@ -16,8 +17,13 @@ const CHROME = [
 
 async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} }) {
   const puppeteer = require('puppeteer-core');
+  const ownsRankFile = !extraEnv.RANK_FILE;
+  const rankFile = extraEnv.RANK_FILE || path.join(os.tmpdir(), `fps-browser-rank-${process.pid}-${port}.json`);
   const srv = spawn(process.execPath, [path.join(__dirname, '..', '..', 'server.js')], {
-    env: { ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed, ...extraEnv },
+    env: {
+      ...process.env, PORT: String(serverPort || port), WORLD_SEED: worldSeed,
+      RANK_FILE: rankFile, SOCKET_PING_TIMEOUT_MS: '120000', ...extraEnv,
+    },
     stdio: 'ignore',
   });
   await new Promise(r => setTimeout(r, 800));
@@ -30,8 +36,27 @@ async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} 
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', e => { pageErrors.push(e.message); console.error('  [pageerror]', e.message); });
+  // O runner pode bloquear o event loop por segundos ao avançar centenas de
+  // ticks. Isso força reconnect/nextMatch, que em produção recarrega por
+  // segurança; no QA destruiria window.QA no meio da suíte.
+  await page.evaluateOnNewDocument(() => { window.__QA_DISABLE_RELOAD = true; });
   await page.goto(`http://localhost:${port}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction('!!window.__game && !!window.__MP', { timeout: 60000 });
+  /* __game/__MP aparecem antes de multiplayer-client terminar o boot. Se o
+     transporte reconectar nessa janela, o jogo recarrega de propósito para
+     não duplicar o avatar. Só injeta QA depois do BR pronto e de um intervalo
+     estável no mesmo documento. */
+  let stable = false;
+  for (let attempt = 0; attempt < 4 && !stable; attempt++) {
+    await page.waitForFunction(
+      '!!window.__game && !!window.__MP && !!window.__BR_debug && window.__MP.socket?.connected',
+      { timeout: 60000 },
+    );
+    const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+    await new Promise(resolve => setTimeout(resolve, 700));
+    try { stable = timeOrigin === await page.evaluate(() => performance.timeOrigin); }
+    catch { stable = false; }
+  }
+  if (!stable) throw new Error('página do jogo não estabilizou após reconexão');
   await page.evaluate(() => {
     const G = window.__game, MP = window.__MP;
     // morte no solo agenda location.reload — no QA o respawn é neutralizado
@@ -85,7 +110,16 @@ async function bootGame({ port, serverPort, worldSeed = '424242', extraEnv = {} 
     play: (fn, ...args) => page.evaluate(fn, ...args),
     async close() {
       if (browser) await browser.close();
-      if (srv) srv.kill();
+      if (srv && srv.exitCode === null) {
+        await new Promise(resolve => {
+          const timer = setTimeout(resolve, 1000);
+          srv.once('exit', () => { clearTimeout(timer); resolve(); });
+          srv.kill();
+        });
+      }
+      if (ownsRankFile) {
+        try { fs.rmSync(rankFile, { force: true }); } catch { /* temporário já removido */ }
+      }
     },
   };
 }

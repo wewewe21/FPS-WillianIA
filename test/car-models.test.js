@@ -69,10 +69,17 @@ describe('Modelos 3D dos veículos', { skip: !CHROME && 'Chrome não encontrado'
       assert.ok(v.importedMeshes > 0 && v.importedMeshes <= 16,
         `${v.url} usa ${v.importedMeshes} malhas importadas`);
       assert.deepEqual(v.floorNodes, [], `${v.url} manteve piso auxiliar`);
-      assert.ok(Math.abs(v.metrics.sizeX - v.collider.x * 0.98) < 0.06,
-        `${v.url} não acompanha o comprimento do collider`);
-      assert.ok(Math.abs(v.metrics.sizeZ - v.collider.z * 0.98) < 0.06,
-        `${v.url} não acompanha a largura do collider`);
+      assert.ok(v.metrics.sizeX <= v.collider.x * 0.98 + 0.06,
+        `${v.url} ultrapassa o comprimento do collider`);
+      assert.ok(v.metrics.sizeZ <= v.collider.z * 0.98 + 0.06,
+        `${v.url} ultrapassa a largura do collider`);
+      assert.ok(Math.min(
+        Math.abs(v.metrics.sizeX - v.collider.x * 0.98),
+        Math.abs(v.metrics.sizeZ - v.collider.z * 0.98),
+      ) < 0.06, `${v.url} não foi ajustado ao collider`);
+      assert.ok(Math.abs(v.metrics.rawAspect - v.metrics.finalAspect) < 1e-5,
+        `${v.url} foi deformado por escala não uniforme`);
+      assert.ok(v.metrics.uniformScale > 0, `${v.url} não expôs escala uniforme`);
       assert.ok(Math.abs(v.metrics.minY - v.groundOffset) < 0.04,
         `${v.url} não foi apoiado no chão`);
       if (v.url.endsWith('/mazda-rx7.v2.glb')) {

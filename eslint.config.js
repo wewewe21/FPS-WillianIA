@@ -39,7 +39,7 @@ module.exports = [
     },
   },
   {
-    files: ['multiplayer-client.js', 'br-game.js', 'city-destruction-client.js'],
+    files: ['multiplayer-client.js', 'br-game.js', 'arena-game.js', 'city-destruction-client.js'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'script',

@@ -152,6 +152,20 @@
     border-color: #ffd76a; transform: scale(1.04); box-shadow: 0 0 24px rgba(255,170,60,0.25); }
   .mbtn.sec { min-width: 200px; font-size: 12px; opacity: .8; border-color: rgba(255,255,255,0.25); background: rgba(20,28,40,0.4); }
   .mbtn.disabled { pointer-events: none; opacity: .45; cursor: default; }
+  .training-btn { border-color: rgba(92,224,255,.72); background: linear-gradient(90deg, rgba(30,138,166,.25), rgba(42,213,176,.08)); }
+  .training-exit { display: none; border-color: rgba(255,114,85,.7); background: rgba(120,30,20,.3); }
+  body.training-mode #btnNew, body.training-mode #btnTraining { display: none; }
+  body.training-mode #btnExitTraining { display: block; }
+  #trainingStats { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 42;
+    display: none; padding: 7px 14px; border: 1px solid rgba(126,232,255,.45); border-radius: 7px;
+    color: #dffaff; background: rgba(7,17,24,.72); font: 700 11px/1.2 system-ui,sans-serif; letter-spacing: 2px;
+    text-shadow: 0 1px 2px #000; backdrop-filter: blur(4px); pointer-events: none; }
+  #trainingHelp { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 42;
+    display: none; flex-direction: column; align-items: center; gap: 2px; padding: 8px 16px;
+    border: 1px solid rgba(255,215,106,.38); border-radius: 8px; background: rgba(7,14,20,.7);
+    color: rgba(230,245,255,.86); font: 600 10px/1.25 system-ui,sans-serif; letter-spacing: 1px; pointer-events: none; }
+  #trainingHelp b { color: #ffd76a; font-size: 12px; letter-spacing: 4px; }
+  #trainingHelp span { white-space: nowrap; }
 
   /* ===== configurações ===== */
   #settings { display: none; background: rgba(10,16,26,0.7); border: 1px solid rgba(255,255,255,0.15);

@@ -288,20 +288,22 @@ export function createFpBody(deps) {
     } else if (gun && gun.parts && gun.parts.handR) {
       gun.parts.handR.getWorldPosition(rp);
       gun.group.getWorldQuaternion(_q2);
-      dirR.set(...TUNE.fingersR).applyQuaternion(_q2);
+      const handPose = gun.handPose;
+      dirR.set(...(handPose ? handPose.r.fingers : TUNE.fingersR)).applyQuaternion(_q2);
       if (gun.melee) { // faca: mão esquerda relaxada ao lado do corpo
         lp.set(-0.28, -0.52, -0.02).applyQuaternion(_tq).add(camPos);
         dirL.set(-0.1, -0.65, -0.75).applyQuaternion(_tq);
       } else {
         gun.parts.handL.getWorldPosition(lp);
-        dirL.set(...TUNE.fingersL).applyQuaternion(_q2);
+        dirL.set(...(handPose ? handPose.l.fingers : TUNE.fingersL)).applyQuaternion(_q2);
       }
     } else return;
 
     solveArm(B.upR, B.foR, B.haR, armLen.r, rp, null, 1);
     solveArm(B.upL, B.foL, B.haL, armLen.l, lp, null, -1);
-    alignHand(B.haR, fingerAxis.r, dirR, TUNE.rollR);
-    alignHand(B.haL, fingerAxis.l, dirL, TUNE.rollL);
+    const handPose = gun && gun.handPose;
+    alignHand(B.haR, fingerAxis.r, dirR, handPose ? handPose.r.roll : TUNE.rollR);
+    alignHand(B.haL, fingerAxis.l, dirL, handPose ? handPose.l.roll : TUNE.rollL);
 
     /* dedos: preset da arma; na recarga a mão que viaja abre um pouco */
     const g = gripFor(gun);

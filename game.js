@@ -36,6 +36,11 @@ import { createAnimals } from './js/animals.js';
 import { createNight } from './js/night.js';
 import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
+import { createTraining } from './js/training.js';
+import { createCityModel } from './js/citymodel.js';
+import { createClouds } from './js/clouds.js';
+import { createDropship } from './js/dropship.js';
+import { createParachute } from './js/parachute.js';
 
 /* ================================================================
    MULTIPLAYER — bootstrap aditivo. Conecta ANTES da geração do mundo
@@ -82,7 +87,9 @@ renderer.toneMappingExposure = CFG.EXPOSURE; // ~0.6 (ACES)
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
-const FOG_COLOR = new THREE.Color(0xb9d1e4);
+// Azul atmosférico menos lavado: mantém profundidade sem transformar o
+// horizonte e a introdução da nave em uma tela branca.
+const FOG_COLOR = new THREE.Color(0x9fbacf);
 scene.fog = new THREE.Fog(FOG_COLOR, CFG.VIEW_DIST * 0.5, CFG.VIEW_DIST);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.08, CFG.VIEW_DIST + 600);
@@ -117,7 +124,7 @@ const sunDir = new THREE.Vector3().setFromSphericalCoords(1, THREE.MathUtils.deg
   // (soft-Reinhard: céu azul quase não muda, núcleo do sol capa em ~5.5 e ainda aciona o bloom)
   sky.material.fragmentShader = sky.material.fragmentShader.replace(
     'gl_FragColor = vec4( texColor, 1.0 );',
-    'gl_FragColor = vec4( texColor / ( 1.0 + 0.55 * texColor ), 1.0 );'
+    'gl_FragColor = vec4( texColor / ( 1.0 + 1.05 * texColor ), 1.0 );'
   );
 }
 
@@ -290,6 +297,7 @@ treeLoMesh.frustumCulled = false;
 scene.add(treeHiMesh, treeLoMesh);
 
 const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry });
+const CityModel = createCityModel({ scene, renderer, Structures, CITY, heightAt, slopeAt });
 
 /* paredes das construções também são sólidas pra física dos veículos —
    sem isso carro/caminhão atravessavam prédios, fortes e muros */
@@ -686,8 +694,10 @@ const muzzleLight = new THREE.PointLight(0xffc274, 0, 11, 2.2);
 muzzle.add(muzzleLight);
 gun.muzzleAnchor.add(muzzle);
 let muzzleT = 0;
-function muzzleFlash(scale = 1) {
+function muzzleFlash(scale = 1, color = 0xffd9a0) {
   muzzleT = 0.05;
+  muzzleMatFlash.color.setHex(color);
+  muzzleLight.color.setHex(color);
   muzzle.rotation.z = rand(TAU);
   muzzle.scale.setScalar(rand(0.8, 1.35) * scale);
 }
@@ -899,15 +909,17 @@ function playerUpdate(dt, t) {
   }
 
   // colisão com árvores/pedras (push-out por círculo)
-  for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
-    const dx = player.pos.x - o.x, dz = player.pos.z - o.z;
-    const d = Math.hypot(dx, dz), min = o.r + player.radius;
-    if (d < min && d > 1e-4) {
-      player.pos.x = o.x + dx / d * min;
-      player.pos.z = o.z + dz / d * min;
+  if (!window.__TRAINING_active) {
+    for (const o of obstaclesNear(player.pos.x, player.pos.z)) {
+      const dx = player.pos.x - o.x, dz = player.pos.z - o.z;
+      const d = Math.hypot(dx, dz), min = o.r + player.radius;
+      if (d < min && d > 1e-4) {
+        player.pos.x = o.x + dx / d * min;
+        player.pos.z = o.z + dz / d * min;
+      }
     }
+    Structures.collide(player.pos, player.radius, 1.7); // paredes das construções
   }
-  Structures.collide(player.pos, player.radius, 1.7); // paredes das construções
   // colisão com veículos (círculo aproximado do chassi — antes dava pra atravessar)
   if (!state.driving) for (const v of Car.vehicles) {
     const vp = v.group.position;
@@ -950,7 +962,9 @@ function playerUpdate(dt, t) {
     updateHealthHUD();
   }
 
-  adsT = damp(adsT, (mouse.aiming && !state.driving) ? 1 : 0, 13, dt);
+  // Machado nao tem ADS: manter a pose de quadril evita separar as duas maos
+  // e jogar o cabo contra a camera quando o botao direito e pressionado.
+  adsT = damp(adsT, (mouse.aiming && !state.driving && !gun.melee) ? 1 : 0, 13, dt);
   sprintT = damp(sprintT, sprinting ? 1 : 0, 8, dt);
 }
 
@@ -1097,15 +1111,34 @@ function applyFpsCamera(dt, t) {
     ui.healFx.style.opacity = '0';
   }
 
-  // ciclo pós-tiro (bomba da escopeta / ferrolho do DMR)
+  // ciclo pós-tiro (bomba / ferrolho / golpe corpo-a-corpo)
   gun.cycleT = Math.max(0, gun.cycleT - dt);
   if (gun.parts.pump && !gun.reloading) {
-    const ph = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / 0.55) * Math.PI) : 0;
+    const pumpDuration = gun.cycleDuration || 0.55;
+    const ph = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / pumpDuration) * Math.PI) : 0;
     gun.parts.pump.position.z = gun.parts.pump.userData.z0 + ph * 0.09;
   }
+  const boltDuration = gun.cycleDuration || 0.32;
+  const boltPhase = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / boltDuration) * Math.PI) : 0;
   if (gun.parts.bolt) {
-    const ph = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / 0.32) * Math.PI) : 0;
-    gun.parts.bolt.position.z = gun.parts.bolt.userData.z0 + (ph + boltK) * 0.05;
+    gun.parts.bolt.position.z = gun.parts.bolt.userData.z0 + (boltPhase + boltK) * 0.05;
+  }
+  if (gun.parts.boltVisual) {
+    const bv = gun.parts.boltVisual;
+    bv.position.z = bv.userData.z0 + (boltPhase + boltK) * bv.userData.travel;
+    bv.rotation.x = boltPhase * 0.42;
+  }
+  if (gun.boltAction && gun.boltSoundPending && gun.cycleT <= boltDuration * 0.62) {
+    gun.boltSoundPending = false;
+    SFX.bolt();
+  }
+  if (gun.melee && gun.cycleT > 0) {
+    const swing = Math.sin((1 - gun.cycleT / (gun.meleeDuration || 0.45)) * Math.PI);
+    weaponRoot.rotation.x += swing * 0.48;
+    weaponRoot.rotation.y -= swing * 0.2;
+    weaponRoot.rotation.z -= swing * 0.92;
+    weaponRoot.position.x -= swing * 0.15;
+    weaponRoot.position.y += swing * 0.08;
   }
 
   weaponKick.position.z = recoil.kickZ;
@@ -1228,26 +1261,32 @@ function rayBlockedAt(origin, dir, maxDist) {
 const _rayDir = new THREE.Vector3(), _rayOrig = new THREE.Vector3(), _hitPos = new THREE.Vector3();
 const _hitAgg = new THREE.Vector3();
 function fire(t) {
-  // faca (melee): golpe curto, sem munição/flash/som de tiro
+  // machado/melee: golpe curto, sem munição/flash/som de tiro
   if (gun.melee) {
-    gun.cycleT = 0.34;
+    gun.cycleT = gun.meleeDuration || 0.45;
     addTrauma(0.06);
     recoil.kickZ += 0.12; recoil.kickRot += 0.1;
     SFX.melee();
     camera.getWorldPosition(_rayOrig);
     camera.getWorldDirection(_rayDir);
-    if (window.__BR_melee) window.__BR_melee(_rayOrig, _rayDir, gun.dmg);
+    if (window.__TRAINING_melee) window.__TRAINING_melee(_rayOrig, _rayDir, gun.dmg);
+    else if (window.__BR_melee) window.__BR_melee(_rayOrig, _rayDir, gun.dmg);
     return;
   }
+  if (window.__TRAINING_active && window.__game && window.__game.Training)
+    window.__game.Training.recordShot();
   gun.mag--;
   updateAmmoHUD();
-  muzzleFlash(gun.pellets > 1 ? 1.5 : 1);
+  muzzleFlash(gun.pellets > 1 ? 1.5 : 1, gun.plasma ? 0x52ffe6 : 0xffd9a0);
   if (gun.laser) SFX.laser();
   else SFX.shot(gun.pellets > 1 ? 'shotgun' : gun.adsFov < 40 ? 'dmr' : 'rifle');
   addTrauma(0.08 + gun.kick * 1.1);
   lastShotInfo.pos.copy(player.pos);
   lastShotInfo.t = t;
-  if (!gun.auto) gun.cycleT = gun.pellets > 1 ? 0.55 : 0.32; // anima bomba/ferrolho
+  if (!gun.auto) {
+    gun.cycleT = gun.cycleDuration || (gun.pellets > 1 ? 0.55 : 0.32);
+    gun.boltSoundPending = !!gun.boltAction;
+  }
 
   // bazuca: dispara foguete físico em vez de hitscan
   if (gun.rocket) {
@@ -1258,7 +1297,7 @@ function fire(t) {
     recoil.kickRot += 0.2;
     camera.getWorldDirection(_rayDir);
     muzzle.getWorldPosition(_v3);
-    Rockets.fire(_v3, _rayDir);
+    Rockets.fire(_v3, _rayDir, gun.rocketSplash);
     return;
   }
 
@@ -1355,11 +1394,13 @@ function fire(t) {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, blockT);
       terrainNormal(_hitPos.x, _hitPos.z, _v1);
       FX.burst(_hitPos, _v1, p % 2 ? 'spark' : 'dirt');
-      FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
+      if (gun.plasma) FX.spawnPlasmaBolt(_v3, _hitPos);
+      else FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
     } else if (bestEnemy || bestBoss || bestExtra || bestRemote) {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, bestT);
       FX.burst(_hitPos, _rayDir.clone().negate(), bestBoss ? 'spark' : 'blood');
-      FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
+      if (gun.plasma) FX.spawnPlasmaBolt(_v3, _hitPos);
+      else FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
       const head = bestPart === 'head' || bestPart === 'core';
       let dmg = head ? gun.dmg * 2 : gun.dmg;
       let died;
@@ -1373,7 +1414,8 @@ function fire(t) {
       if (died) killAny = true; // pontuação é creditada no die() do alvo
     } else {
       _hitPos.copy(_rayOrig).addScaledVector(_rayDir, 240);
-      FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
+      if (gun.plasma) FX.spawnPlasmaBolt(_v3, _hitPos);
+      else FX.spawnTracer(_v3, _hitPos, gun.laser ? 0x52ffe6 : 0xffe9a8);
     }
   }
   if (hitAny) {
@@ -1402,7 +1444,10 @@ function shootUpdate(dt, t) {
     gun.sightIdx = ((gun.sightIdx || 0) + 1) % gun.parts.sights.length;
     for (const s of gun.parts.sights) if (s.mesh) s.mesh.visible = false;
     const s = gun.parts.sights[gun.sightIdx];
-    if (s.mesh) s.mesh.visible = true;
+    /* O GLB já traz sua própria óptica. As miras procedurais continuam
+       servindo como fallback, mas não podem reaparecer sobre o asset ao
+       apertar T; nesse caso T altera apenas ampliação/nome da mira. */
+    if (s.mesh && gun.modelStatus !== 'ready') s.mesh.visible = true;
     gun.adsFov = s.fov;
     gun.adsV.set(...s.ads);
     centerMsg('Mira: ' + s.name, 1100);
@@ -1412,7 +1457,7 @@ function shootUpdate(dt, t) {
   if (justPressed.has('KeyG')) Grenades.throwNade(t);
   const interval = 60 / gun.rpm;
   const want = gun.auto ? mouse.shooting : mouse.clicked;
-  if (want && !gun.reloading && switchAnim > 0.8 && t - gun.lastShot >= interval) {
+  if (want && !gun.reloading && gun.cycleT <= 0 && switchAnim > 0.8 && t - gun.lastShot >= interval) {
     if (gun.mag > 0) {
       gun.lastShot = t;
       fire(t);
@@ -1579,9 +1624,15 @@ const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainN
 let timeScale = 1; // câmera lenta cinematográfica na morte do boss
 const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale });
 /* Rockets criado APOS o Boss (dependencia declarada) — só é usado em runtime */
-const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss });
+const Rockets = createRockets({
+  rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades,
+  Boss, Bosses, extraTargets, platforms, DmgNums, showHitmarker, SFX,
+});
 
 const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler });
+const Clouds = createClouds({ scene, Env, worldSize: CFG.WORLD_SIZE });
+const DropShip = createDropship({ scene });
+const Parachute = createParachute({ scene, player });
 
 /* ================================================================
    VIDA AMBIENTE — borboletas, pássaros, pólen, fogueira, fumaça,
@@ -1602,7 +1653,7 @@ const Night = createNight({ rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat
 /* ================================================================
    BOSS 2 — O VISITANTE (alien na cratera do deserto) -> arma PLASMA
    ================================================================ */
-const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Chars });
+const Alien = createAlien({ rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale, Chars });
 
 /* ================================================================
    MISSÕES — cadeia com recompensas
@@ -1652,6 +1703,15 @@ const Missions = (() => {
    INTERAÇÃO — baús, bazuca, veículos (tecla E)
    ================================================================ */
 const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar });
+
+/* Campo de Tiro: sessão local e isolada, construída apenas quando escolhida. */
+const Training = createTraining({
+  scene, world, platforms, heightAt, player, state, camera, arsenal, inventory,
+  Enemies, Alien, Boss, Animals, Night, Car, Pickups, extraTargets, ui,
+  switchWeapon, updateHealthHUD, updateArmorHUD, updateAmmoHUD, updateInvHUD,
+  updateSlotsHUD, showBanner, centerMsg, showHitmarker, DmgNums, SFX, FX,
+  tryToggleCar, socket: __mpSocket,
+});
 
 /* ================== minimapa / radar (canvas 2D) ================== */
 const MiniMap = (() => {
@@ -1782,6 +1842,8 @@ function tick(forceDt) {
     }
     Grass.update(camera.position, carPosV.copy(Car.group.position), menuT);
     Env.update(dt, menuT);
+    Clouds.update(dt, menuT);
+    Parachute.update(dt, menuT);
     Car.update(dt, menuT);
     Heli.update(dt, menuT);
     Animals.update(dt, menuT);
@@ -1800,18 +1862,22 @@ function tick(forceDt) {
 
   /* simulação */
   Env.update(dt, t);
+  Clouds.update(dt, t);
+  Parachute.update(dt, t);
   if (!state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
   shootUpdate(dt, t);
   world.step(1 / 60, dt, 3);
   Car.update(dt, t);
   Heli.update(dt, t);
   if (!window.__BR_active) Enemies.update(dt, t); // BR: sem inimigos comuns
-  Animals.update(dt, t);
-  if (!window.__BR_active || window.__BR_zumbis) Night.update(dt, t); // BR: zumbis só se a sala ligar
+  if (!Training.active) Animals.update(dt, t);
+  if (!Training.active && (!window.__BR_active || window.__BR_zumbis)) Night.update(dt, t); // BR: zumbis só se a sala ligar
   Grenades.update(dt, t);
   Rockets.update(dt, t);
   Pickups.update(dt, t);
-  if (!window.__BR_active) { Boss.update(dt, t); Alien.update(dt, t); Missions.update(); }
+  if (Training.active) Alien.update(dt, t);
+  else if (!window.__BR_active) { Boss.update(dt, t); Alien.update(dt, t); Missions.update(); }
+  Training.update(dt, t);
   Interact.update(dt, t);
   FX.update(dt);
   Amb.update(dt, t);
@@ -1824,6 +1890,7 @@ function tick(forceDt) {
   if (!state.cinematic) {
     applyFpsCamera(dt, t);
     carCameraUpdate(dt);
+    if (typeof window.__BR_cameraOverride === 'function') window.__BR_cameraOverride(camera, dt, t);
   }
   if (window.__CityDestruction) window.__CityDestruction.tick(dt);
 
@@ -1877,11 +1944,31 @@ function startGame(trusted) {
     state.lockFailed = true;
   }
 }
+function startTraining(trusted) {
+  if (Training.active) return;
+  SFX.init(); SFX.resume(); SFX.musicStart(); SFX.setVolumes();
+  state.started = true;
+  Training.enter();
+  setPaused(false);
+  if (trusted) {
+    try { controls.lock(); } catch (err) { state.lockFailed = true; }
+  } else {
+    state.lockFailed = true;
+  }
+}
 /* ---- menu: botões + configurações ---- */
 $('btnNew').addEventListener('click', e => {
   e.stopPropagation();
   if (__mpSocket) return; // sala online: o lobby BR assume — nada de solo por cima
   startGame(e.isTrusted);
+});
+$('btnTraining').addEventListener('click', e => {
+  e.stopPropagation();
+  startTraining(e.isTrusted);
+});
+$('btnExitTraining').addEventListener('click', e => {
+  e.stopPropagation();
+  Training.exitToMenu();
 });
 if (__mpSocket) { // multiplayer no ar: o botão vira aviso até o lobby abrir
   $('btnNew').classList.add('disabled');
@@ -1922,9 +2009,9 @@ window.addEventListener('resize', () => {
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
-  state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass,
+  state, player, Car, Heli, Chars, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags,
-  WeaponModels, FpBody,
+  WeaponModels, FpBody, CityModel, Clouds, DropShip, Parachute,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
   get fps() { return fpsVal; },
@@ -1936,6 +2023,8 @@ window.__game = {
     player.pos.set(Car.group.position.x + 3, heightAt(Car.group.position.x + 3, Car.group.position.z), Car.group.position.z);
   },
 };
+window.__game.Training = Training;
+window.__game.startTraining = startTraining;
 
 /* Hooks pequenos para playtest automatizado e acessibilidade por estado textual. */
 window.advanceTime = ms => {
@@ -1949,7 +2038,8 @@ window.render_game_to_text = () => {
     .slice(0, 8).map(c => ({ key: c.key, x: +c.x.toFixed(1), z: +c.z.toFixed(1) })) : [];
   return JSON.stringify({
     coordinates: 'origin=center; +x=east; +y=up; +z=south',
-    mode: window.__BR_active ? (br ? br.S.phase : 'BR_LOADING') : (state.started ? (state.paused ? 'PAUSED' : 'SOLO') : 'MENU'),
+    mode: Training.active ? 'TRAINING'
+      : window.__BR_active ? (br ? br.S.phase : 'BR_LOADING') : (state.started ? (state.paused ? 'PAUSED' : 'SOLO') : 'MENU'),
     player: {
       x: +player.pos.x.toFixed(2), y: +player.pos.y.toFixed(2), z: +player.pos.z.toFixed(2),
       health: +player.health.toFixed(1), armor: +player.armor.toFixed(1), dead: player.dead,
@@ -1960,6 +2050,7 @@ window.render_game_to_text = () => {
       x: +v.group.position.x.toFixed(1), y: +v.group.position.y.toFixed(1), z: +v.group.position.z.toFixed(1),
     })),
     unopenedCrates: visibleCrates,
+    training: Training.active ? Training.debugState() : null,
   });
 };
 

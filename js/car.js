@@ -122,8 +122,9 @@ export function createCar(deps) {
     // X/Z acompanham exatamente o collider; Y preserva a proporção longitudinal.
     const targetX = cfg.half[0] * 2 * 0.98;
     const targetZ = cfg.half[2] * 2 * 0.98;
+    const uniformScale = Math.min(targetX / rawSize.x, targetZ / rawSize.z);
     const scaled = new THREE.Group();
-    scaled.scale.set(targetX / rawSize.x, targetX / rawSize.x, targetZ / rawSize.z);
+    scaled.scale.setScalar(uniformScale);
     scaled.add(oriented);
     scaled.updateMatrixWorld(true);
 
@@ -139,7 +140,10 @@ export function createCar(deps) {
     const size = box.getSize(new THREE.Vector3());
     return {
       root: scaled,
-      metrics: { sizeX: size.x, sizeY: size.y, sizeZ: size.z, minY: box.min.y, maxY: box.max.y },
+      metrics: {
+        sizeX: size.x, sizeY: size.y, sizeZ: size.z, minY: box.min.y, maxY: box.max.y,
+        uniformScale, rawAspect: rawSize.x / rawSize.z, finalAspect: size.x / size.z,
+      },
     };
   }
 
@@ -155,6 +159,7 @@ export function createCar(deps) {
       v.modelMetrics = metrics;
       v.modelRoot = root;
       v.modelAlignPending = true; // altura final vem das rodas físicas (raycast)
+      v.modelAlignWait = 1.2;     // deixa suspensão/chassi assentarem antes de medir
       v.modelStatus = 'ready';
     } catch (err) {
       v.modelStatus = 'fallback';
@@ -238,12 +243,18 @@ export function createCar(deps) {
          modelo afundava ~0,5m. Referência = RODAS físicas (não o terreno:
          na rua da cidade o asfalto fica acima do heightAt e o modelo
          afundava no slab). Roda uma vez, com o chassi em repouso. */
-      if (v.modelAlignPending && v.chassisBody.velocity.lengthSquared() < 0.04) {
+      if (v.modelAlignPending) v.modelAlignWait = Math.max(0, (v.modelAlignWait || 0) - dt);
+      if (v.modelAlignPending && v.modelAlignWait <= 0 && v.chassisBody.velocity.lengthSquared() < 0.04) {
         v.modelAlignPending = false;
         v.group.updateMatrixWorld(true);
         let wy = 0;
         for (const w of v.vehicle.wheelInfos) wy += w.worldTransform.position.y;
-        const chao = wy / 4 - v.cfg.wheelR; // fundo dos pneus = chão real da física
+        const wheelFloor = wy / 4 - v.cfg.wheelR;
+        /* Em terreno irregular o raycast do caminhão pode devolver o fundo
+           médio das rodas alguns centímetros abaixo do heightfield. Nunca
+           alinhar a carroceria abaixo do próprio terreno; em asfalto/telhado
+           a referência das rodas continua vencendo por ser mais alta. */
+        const chao = Math.max(wheelFloor, heightAt(v.group.position.x, v.group.position.z));
         const box = new THREE.Box3().setFromObject(v.modelRoot);
         v.modelRoot.position.y += (chao + 0.04 - box.min.y);
         v.modelRoot.updateMatrixWorld(true);

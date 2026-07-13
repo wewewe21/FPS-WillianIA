@@ -30,6 +30,42 @@ export function createFX(deps) {
     t.life = t.max;
   }
 
+  /* ---- projeteis de plasma (visual com tempo de voo) ----
+     O acerto continua usando a mesma autoridade/hitscan do jogo, mas o tiro
+     deixa de parecer um laser instantaneo: um nucleo emissivo percorre a
+     trajetoria ate o ponto calculado pelo combate. */
+  const PLASMA_N = 20;
+  const plasma = [];
+  for (let i = 0; i < PLASMA_N; i++) {
+    const group = new THREE.Group();
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: 0x52ffe6, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    });
+    const trailMat = coreMat.clone();
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.07, 1), coreMat);
+    const trail = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.035, 0.52), trailMat);
+    trail.position.z = 0.24;
+    group.add(core, trail);
+    group.visible = false;
+    group.frustumCulled = false;
+    scene.add(group);
+    plasma.push({ group, coreMat, trailMat, dir: new THREE.Vector3(), life: 0, max: 0, speed: 68 });
+  }
+  let plasmaIdx = 0;
+  function spawnPlasmaBolt(from, to, color = 0x52ffe6) {
+    const b = plasma[plasmaIdx]; plasmaIdx = (plasmaIdx + 1) % PLASMA_N;
+    const distance = from.distanceTo(to);
+    b.group.position.copy(from);
+    b.dir.copy(to).sub(from).normalize();
+    b.group.lookAt(to);
+    b.coreMat.color.setHex(color); b.trailMat.color.setHex(color);
+    b.coreMat.opacity = 1; b.trailMat.opacity = 0.72;
+    b.max = Math.max(0.04, distance / b.speed);
+    b.life = b.max;
+    b.group.visible = true;
+  }
+
   /* ---- partículas (faísca de impacto, poeira, sangue estilizado) ---- */
   const PART_N = 64;
   const partGeo = new THREE.CircleGeometry(0.55, 8); // octógono ~redondo, barato
@@ -72,6 +108,16 @@ export function createFX(deps) {
       t.mesh.material.opacity = Math.max(0, t.life / t.max) * 0.9;
       if (t.life <= 0) t.mesh.visible = false;
     }
+    for (const b of plasma) {
+      if (!b.group.visible) continue;
+      b.life -= dt;
+      if (b.life <= 0) { b.group.visible = false; continue; }
+      b.group.position.addScaledVector(b.dir, b.speed * dt);
+      const k = Math.min(1, b.life / Math.min(b.max, 0.16));
+      b.coreMat.opacity = k;
+      b.trailMat.opacity = k * 0.72;
+      b.group.rotation.z += dt * 9;
+    }
     for (const p of parts) {
       if (!p.mesh.visible) continue;
       p.life -= dt;
@@ -84,5 +130,8 @@ export function createFX(deps) {
       p.mesh.quaternion.copy(camera.quaternion); // billboard
     }
   }
-  return { spawnTracer, spawnParticle, burst, update };
+  return {
+    spawnTracer, spawnPlasmaBolt, spawnParticle, burst, update,
+    get plasmaActiveCount() { return plasma.reduce((n, b) => n + (b.group.visible ? 1 : 0), 0); },
+  };
 }

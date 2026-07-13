@@ -209,6 +209,15 @@ describe('Morte por míssil — vítima dentro do raio + late join', { skip: !CH
     const r = await h.play(async () => {
       const QA = window.QA, MP = QA.MP, P = MP.player;
       QA.reset(-340, 130); // centro da cidade
+      /* Teleporte é exclusivo do QA. O servidor corretamente rejeita os dez
+         primeiros saltos impossíveis antes de reancorar um cliente com lag;
+         usa emits confiáveis para atravessar essa janela sem depender do
+         canal volatile do loop normal. */
+      for (let i = 0; i < 12; i++) {
+        P.pos.set(-340, P.pos.y, 130);
+        MP.socket.emit('state', { pos: [-340, P.pos.y, 130], rotY: 0, car: -1, ship: false, heli: false });
+        await new Promise(r2 => setTimeout(r2, 110));
+      }
       P.armor = 50; P.invulnUntil = MP.state.gameTime + 999; // teste: defesas não salvam
       const iv = setInterval(() => { if (!P.dead) { P.pos.set(-340, P.pos.y, 130); } }, 300);
       const t0 = performance.now();

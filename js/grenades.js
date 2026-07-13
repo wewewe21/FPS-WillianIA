@@ -47,7 +47,8 @@ export function createGrenades(deps) {
   }
 
   const _n = new THREE.Vector3();
-  function explode(p) {
+  const _indicator = new THREE.Vector3();
+  function explode(p, profile = {}) {
     SFX.explosion();
     boomT = 0.35;
     boomLight.position.copy(p);
@@ -60,21 +61,35 @@ export function createGrenades(deps) {
       _v1.set(rand(-1, 1), rand(0.5, 1.4), rand(-1, 1)).normalize().multiplyScalar(rand(3, 7));
       FX.spawnParticle(p, _v1, i % 2 ? 0x776952 : 0x57544e, rand(0.35, 0.7), rand(0.6, 1.1), 5);
     }
-    const R = 7.5;
+    const R = profile.radius || 7.5;
+    const enemyMax = profile.enemyMax || 160, enemyMin = profile.enemyMin || 25;
+    const bossMax = profile.bossMax || 130, bossMin = profile.bossMin || 20;
+    const extraMax = profile.extraMax || 140, extraMin = profile.extraMin || 20;
+    let totalDamage = 0, hitAny = false, killAny = false;
+    _indicator.copy(p);
+    const record = (targetPos, damage, died) => {
+      totalDamage += damage;
+      hitAny = true;
+      killAny = killAny || !!died;
+      _indicator.copy(targetPos);
+    };
     for (const e of Enemies.list) {
       if (!e.alive) continue;
       const d = e.group.position.distanceTo(p);
       if (d < R) {
         _n.copy(e.group.position).sub(p).normalize();
-        e.damage(Math.round(135 * (1 - d / R) + 25), e.group.position, _n, false);
+        const damage = Math.round(enemyMin + (enemyMax - enemyMin) * (1 - d / R));
+        record(e.group.position, damage, e.damage(damage, e.group.position, _n, false));
       }
     }
+    const bossRadius = profile.bossRadius || R + 2;
     for (const B2 of Bosses) {
       if (!B2.alive) continue;
       const d = B2.pos().distanceTo(p);
-      if (d < R + 2) {
+      if (d < bossRadius) {
         _n.copy(B2.pos()).sub(p).normalize();
-        B2.damage(Math.round(110 * (1 - d / (R + 2)) + 20), p, _n, 'body');
+        const damage = Math.round(bossMin + (bossMax - bossMin) * (1 - d / bossRadius));
+        record(B2.pos(), damage, B2.damage(damage, p, _n, 'body'));
       }
     }
     for (const a of extraTargets) {
@@ -82,12 +97,14 @@ export function createGrenades(deps) {
       const d = a.pos().distanceTo(p);
       if (d < R) {
         _n.copy(a.pos()).sub(p).normalize();
-        a.damage(Math.round(120 * (1 - d / R) + 20), p, _n, false);
+        const damage = Math.round(extraMin + (extraMax - extraMin) * (1 - d / R));
+        record(a.pos(), damage, a.damage(damage, p, _n, false));
       }
     }
-    if (window.__BR_splash) window.__BR_splash(p, R, 110); // BR: fere jogadores remotos/boss
+    if (window.__BR_splash) window.__BR_splash(p, R, profile.remoteMax || 110); // BR: jogadores remotos/boss
     const dp = player.pos.distanceTo(p);
-    if (dp < 6.5) playerDamage(Math.round(55 * (1 - dp / 6.5)), p);
+    const selfRadius = profile.selfRadius || 6.5, selfMax = profile.selfMax || 55;
+    if (dp < selfRadius) playerDamage(Math.round(selfMax * (1 - dp / selfRadius)), p);
     addTrauma(clamp(0.9 - dp * 0.04, 0.15, 0.9));
     // o carro sente a onda de choque
     const dcx = Car.chassisBody.position.x - p.x, dcy = Car.chassisBody.position.y - p.y, dcz = Car.chassisBody.position.z - p.z;
@@ -97,6 +114,7 @@ export function createGrenades(deps) {
       Car.chassisBody.wakeUp(); // pode estar dormindo (PERF)
       Car.chassisBody.applyImpulse(new CANNON.Vec3(dcx * f, Math.abs(dcy) * f + 600, dcz * f));
     }
+    return { totalDamage, hitAny, killAny, hitPos: _indicator };
   }
 
   function update(dt, t) {

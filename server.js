@@ -26,7 +26,7 @@ app.use((req, res, next) => {
   next();
 });
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
-const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
+const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js', 'arena-game.js',
   'city-destruction-client.js', 'city-destruction-protocol.js'];
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
@@ -35,7 +35,11 @@ for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__
 app.use('/assets/models', express.static(path.join(__dirname, 'assets', 'models')));
 app.use('/js', express.static(path.join(__dirname, 'js'))); // módulos ES do jogo
 const server = http.createServer(app);
-const io = new Server(server);
+// QA pode bloquear o event loop do Chrome por vários segundos ao avançar
+// centenas de ticks. Produção mantém o default do Socket.IO; o harness sobe
+// somente seu servidor com uma tolerância maior para não trocar a identidade.
+const socketPingTimeout = Math.max(5000, +process.env.SOCKET_PING_TIMEOUT_MS || 20000);
+const io = new Server(server, { pingTimeout: socketPingTimeout });
 
 /* ---------------- utilidades ---------------- */
 const clean = s => String(s == null ? '' : s).replace(/[<>&"']/g, '').trim();
@@ -202,24 +206,24 @@ function rollChest(rng, luck = 0) {
 
 /* ---------------- ciclo da partida ---------------- */
 function roster(withPos) {
-  return [...players.entries()].map(([id, p]) => ({
+  return [...players.entries()].filter(([, p]) => !p.arenaRoom).map(([id, p]) => ({
     id, nick: p.nick, colors: p.colors, kills: p.kills,
     alive: p.alive, spectator: p.spectator,
     ...(withPos ? { pos: p.pos } : {}), // pos só no init — broadcast viraria wallhack
   }));
 }
 const sysChat = msg => io.emit('chat', { sys: true, msg });
-const broadcastRoster = () => io.emit('roster', { phase: match.phase, players: roster(false), aliveCount: match.aliveCount, hostId });
+const broadcastRoster = () => io.to('br').emit('roster', { phase: match.phase, players: roster(false), aliveCount: match.aliveCount, hostId });
 
 function startCountdown() {
   if (match.phase !== 'LOBBY') return;
   match.phase = 'COUNTDOWN';
   let n = COUNTDOWN_S;
   sysChat(`Partida começando em ${n}s — se prepara!`);
-  io.emit('countdown', { n });
+  io.to('br').emit('countdown', { n });
   match.countdownTimer = setInterval(() => {
     n--;
-    io.emit('countdown', { n });
+    io.to('br').emit('countdown', { n });
     if (n <= 0) { clearInterval(match.countdownTimer); startMatch(); }
   }, 1000);
   broadcastRoster();
@@ -262,7 +266,7 @@ function startMatch() {
     p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true;
     match.aliveCount++;
   }
-  io.emit('matchStart', { t0: match.t0, serverNow: Date.now(), plan: match.plan, num: match.num });
+  io.to('br').emit('matchStart', { t0: match.t0, serverNow: Date.now(), plan: match.plan, num: match.num });
   broadcastRoster();
   sysChat(`Partida #${match.num} começou — ${match.aliveCount} na nave. Boa sorte!`);
   console.log(`[MATCH ${match.num}] começou com ${match.aliveCount} jogadores · seed ${match.seed}`);
@@ -289,7 +293,7 @@ function endMatch(winnerId) {
     if (p.placement === 1) e.wins++;
   }
   rankDirty = true;
-  io.emit('matchEnd', {
+  io.to('br').emit('matchEnd', {
     winner: w ? { id: winnerId, nick: w.nick, kills: w.kills } : null,
     ranking, globalTop: topRank(), nextIn: NEXT_IN_S,
   });
@@ -305,7 +309,7 @@ function endMatch(winnerId) {
     resetRoundState();
     match.phase = 'LOBBY';
     for (const p of players.values()) { p.spectator = false; p.alive = false; p.placement = 0; }
-    io.emit('nextMatch', {}); // clientes recarregam e voltam pro lobby com a seed nova
+    io.to('br').emit('nextMatch', {}); // clientes recarregam e voltam pro lobby com a seed nova
   }, NEXT_IN_S * 1000);
 }
 
@@ -420,12 +424,293 @@ setInterval(() => {
 }, 1000).unref(); // unref: só relevante pros testes de unidade (listen mantém o processo vivo)
 
 /* ---------------- conexões ---------------- */
+/* ---------------- arenas: 1v1 e mata-mata ----------------
+   Salas independentes do Battle Royale. O servidor decide HP, kills, placar,
+   cronometro e respawn; o cliente so informa movimento e acertos candidatos. */
+const ARENA_COUNTDOWN_S = Math.max(1, +process.env.ARENA_COUNTDOWN_S || 4);
+const ARENA_RETURN_S = Math.max(2, +process.env.ARENA_RETURN_S || 7);
+const ARENA_INVULN_MS = Math.max(0, +process.env.ARENA_INVULN_MS || 1400);
+const arenaRooms = new Map();
+const ARENA_MAPS = {
+  CAMP: {
+    label: 'Campo aberto', center: [0, 0], radius: 105,
+    spawns: [[-24, 1, 0], [24, 1, 0], [0, 1, -25], [0, 1, 25], [-18, 1, -18], [18, 1, 18], [-18, 1, 18], [18, 1, -18]],
+  },
+  CITY: {
+    label: 'Distrito urbano', center: [-338, 132], radius: 115,
+    spawns: [[-374, 1, 112], [-302, 1, 152], [-360, 1, 169], [-316, 1, 95], [-384, 1, 150], [-292, 1, 116]],
+  },
+  WILDERNESS: {
+    label: 'Fronteira', center: [205, -175], radius: 115,
+    spawns: [[170, 1, -175], [240, 1, -175], [205, 1, -210], [205, 1, -140], [179, 1, -201], [231, 1, -149]],
+  },
+};
+
+function arenaConfig(raw, previous) {
+  const d = raw || {};
+  const prev = previous || {};
+  const modeRaw = String(d.mode || prev.mode || 'DEATHMATCH').toUpperCase();
+  const mode = ['DUEL', '1V1', '1X1'].includes(modeRaw) ? 'DUEL' : 'DEATHMATCH';
+  const requestedMax = Number.isFinite(+d.maxPlayers) ? Math.round(+d.maxPlayers) : (+prev.maxPlayers || 8);
+  const privateRoom = d.private == null && d.privacy == null
+    ? !!prev.private : (d.private === true || String(d.privacy).toUpperCase() === 'PRIVATE');
+  const incomingPassword = clean(d.password).slice(0, 20);
+  const password = privateRoom ? (incomingPassword || prev.password || '') : '';
+  const mapRaw = String(d.map || prev.map || 'CAMP').toUpperCase();
+  return {
+    name: cleanSoft(d.name == null ? prev.name : d.name).slice(0, 28) || (mode === 'DUEL' ? 'Duelo 1v1' : 'Mata-Mata'),
+    mode,
+    maxPlayers: mode === 'DUEL' ? 2 : Math.max(2, Math.min(16, requestedMax)),
+    private: privateRoom,
+    password,
+    map: ARENA_MAPS[mapRaw] ? mapRaw : 'CAMP',
+    scoreLimit: Math.max(3, Math.min(50, Math.round(Number.isFinite(+d.scoreLimit) ? +d.scoreLimit : (+prev.scoreLimit || 10)))),
+    timeLimit: Math.max(3, Math.min(30, Math.round(Number.isFinite(+d.timeLimit) ? +d.timeLimit : (+prev.timeLimit || 10)))),
+    respawn: Math.max(1, Math.min(10, Math.round(Number.isFinite(+d.respawn) ? +d.respawn : (+prev.respawn || 4)))),
+  };
+}
+
+function arenaPlayerPublic(id) {
+  const p = players.get(id);
+  if (!p) return null;
+  const a = p.arena || {};
+  return {
+    id, nick: p.nick, colors: p.colors,
+    score: a.score || 0, deaths: a.deaths || 0,
+    health: Number.isFinite(a.health) ? a.health : 100,
+    alive: !!a.alive,
+  };
+}
+
+function arenaRoomPublic(room) {
+  const cfg = room.config;
+  return {
+    id: room.id, name: cfg.name, mode: cfg.mode, maxPlayers: cfg.maxPlayers,
+    locked: cfg.private, map: cfg.map, mapLabel: ARENA_MAPS[cfg.map].label,
+    scoreLimit: cfg.scoreLimit, timeLimit: cfg.timeLimit, respawn: cfg.respawn,
+    phase: room.phase, hostId: room.hostId, round: room.round,
+    playerCount: room.members.size,
+    players: [...room.members].map(arenaPlayerPublic).filter(Boolean),
+    remaining: room.phase === 'PLAYING' ? Math.max(0, Math.ceil((room.endsAt - Date.now()) / 1000)) : cfg.timeLimit * 60,
+  };
+}
+
+function emitArenaList() {
+  io.emit('arenaRooms', [...arenaRooms.values()].map(arenaRoomPublic));
+}
+
+function emitArenaRoom(room) {
+  io.to('arena:' + room.id).emit('arenaRoomState', arenaRoomPublic(room));
+  emitArenaList();
+}
+
+function arenaRoomId() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let id;
+  do {
+    id = '';
+    for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  } while (arenaRooms.has(id));
+  return id;
+}
+
+function arenaSpawn(room, id) {
+  const ids = [...room.members];
+  const p = players.get(id);
+  const deaths = p && p.arena ? p.arena.deaths : 0;
+  const points = ARENA_MAPS[room.config.map].spawns;
+  const idx = Math.max(0, ids.indexOf(id));
+  return points[(idx + deaths * 3 + room.round) % points.length].slice();
+}
+
+function clearArenaTimers(room) {
+  if (room.countdownTimer) clearInterval(room.countdownTimer);
+  if (room.resetTimer) clearTimeout(room.resetTimer);
+  room.countdownTimer = null;
+  room.resetTimer = null;
+}
+
+function deleteArenaRoom(room) {
+  clearArenaTimers(room);
+  arenaRooms.delete(room.id);
+  emitArenaList();
+}
+
+function arenaLeavePlayer(id, disconnected) {
+  const p = players.get(id);
+  if (!p || !p.arenaRoom) return;
+  const room = arenaRooms.get(p.arenaRoom);
+  const roomId = p.arenaRoom;
+  p.arenaRoom = null;
+  p.arena = null;
+  p.spectator = match.phase === 'PLAYING' || match.phase === 'ENDED';
+  p.alive = false;
+  const sock = io.sockets.sockets.get(id);
+  if (sock) {
+    sock.leave('arena:' + roomId);
+    if (!disconnected) sock.join('br');
+  }
+  if (!room) return;
+  room.members.delete(id);
+  if (room.hostId === id) room.hostId = room.members.values().next().value || null;
+  if (!disconnected && sock) sock.emit('arenaLeft', { id: roomId });
+  if (!room.members.size) {
+    deleteArenaRoom(room);
+  } else if ((room.phase === 'COUNTDOWN' || room.phase === 'PLAYING') && room.members.size < 2) {
+    if (room.phase === 'PLAYING') arenaEndMatch(room, 'opponent-left');
+    else {
+      clearArenaTimers(room);
+      room.phase = 'LOBBY';
+      emitArenaRoom(room);
+    }
+  } else {
+    emitArenaRoom(room);
+  }
+  broadcastRoster();
+}
+
+function arenaJoinPlayer(socket, room, password) {
+  const p = players.get(socket.id);
+  if (!p) return { ok: false, error: 'Jogador desconectado.' };
+  if (room.phase !== 'LOBBY') return { ok: false, error: 'A partida desta sala ja comecou.' };
+  if (room.members.size >= room.config.maxPlayers) return { ok: false, error: 'A sala esta lotada.' };
+  if (room.config.private && clean(password) !== room.config.password) return { ok: false, error: 'Senha incorreta.' };
+  if (p.alive && match.phase === 'PLAYING') return { ok: false, error: 'Termine sua partida de Battle Royale primeiro.' };
+  if (p.arenaRoom && p.arenaRoom !== room.id) arenaLeavePlayer(socket.id, false);
+  if (!room.members.has(socket.id)) room.members.add(socket.id);
+  p.arenaRoom = room.id;
+  p.arena = { score: 0, deaths: 0, health: 100, alive: false, hitWindow: [], dmgWindow: [] };
+  p.spectator = true;
+  p.alive = false;
+  if (hostId === socket.id) hostId = null;
+  socket.leave('br');
+  socket.join('arena:' + room.id);
+  const publicRoom = arenaRoomPublic(room);
+  socket.emit('arenaJoined', publicRoom);
+  emitArenaRoom(room);
+  broadcastRoster();
+  return { ok: true, room: publicRoom };
+}
+
+function arenaStartMatch(room) {
+  if (!room || room.members.size < 2) {
+    if (room) { room.phase = 'LOBBY'; emitArenaRoom(room); }
+    return;
+  }
+  clearArenaTimers(room);
+  room.phase = 'PLAYING';
+  room.round++;
+  room.startedAt = Date.now();
+  room.endsAt = room.startedAt + room.config.timeLimit * 60 * 1000;
+  for (const id of room.members) {
+    const p = players.get(id);
+    if (!p) continue;
+    p.arena = { score: 0, deaths: 0, health: 100, alive: true, hitWindow: [], dmgWindow: [],
+      invulnerableUntil: Date.now() + ARENA_INVULN_MS };
+    const spawn = arenaSpawn(room, id);
+    p.pos = spawn.slice();
+    p.lastArenaState = Date.now();
+    io.to(id).emit('arenaMatchStart', {
+      room: arenaRoomPublic(room), spawn, serverNow: Date.now(),
+    });
+  }
+  emitArenaRoom(room);
+}
+
+function arenaCountdown(room) {
+  if (!room || room.phase !== 'LOBBY' || room.members.size < 2) return false;
+  room.phase = 'COUNTDOWN';
+  let n = ARENA_COUNTDOWN_S;
+  io.to('arena:' + room.id).emit('arenaCountdown', { n });
+  room.countdownTimer = setInterval(() => {
+    n--;
+    io.to('arena:' + room.id).emit('arenaCountdown', { n });
+    if (n <= 0) arenaStartMatch(room);
+  }, 1000);
+  emitArenaRoom(room);
+  return true;
+}
+
+function arenaEndMatch(room, reason) {
+  if (!room || room.phase !== 'PLAYING') return;
+  room.phase = 'ENDED';
+  const ranking = [...room.members].map(arenaPlayerPublic).filter(Boolean)
+    .sort((a, b) => b.score - a.score || a.deaths - b.deaths || a.nick.localeCompare(b.nick));
+  io.to('arena:' + room.id).emit('arenaMatchEnd', {
+    reason: reason || 'score', ranking, winner: ranking[0] || null,
+    nextIn: ARENA_RETURN_S, room: arenaRoomPublic(room),
+  });
+  emitArenaRoom(room);
+  room.resetTimer = setTimeout(() => {
+    if (!arenaRooms.has(room.id) || room.phase !== 'ENDED') return;
+    room.phase = 'LOBBY';
+    for (const id of room.members) {
+      const p = players.get(id);
+      if (p) p.arena = { score: 0, deaths: 0, health: 100, alive: false, hitWindow: [], dmgWindow: [] };
+    }
+    emitArenaRoom(room);
+  }, ARENA_RETURN_S * 1000);
+  if (room.resetTimer.unref) room.resetTimer.unref();
+}
+
+function arenaRespawn(room, id) {
+  const p = players.get(id);
+  if (!p || p.arenaRoom !== room.id || room.phase !== 'PLAYING' || !p.arena) return;
+  p.arena.health = 100;
+  p.arena.alive = true;
+  p.arena.invulnerableUntil = Date.now() + ARENA_INVULN_MS;
+  const spawn = arenaSpawn(room, id);
+  p.pos = spawn.slice();
+  p.lastArenaState = Date.now();
+  io.to(id).emit('arenaRespawn', { spawn, health: 100, invulnerableMs: ARENA_INVULN_MS });
+  emitArenaRoom(room);
+}
+
+function arenaKill(room, victimId, killerId, weapon) {
+  const victim = players.get(victimId);
+  if (!victim || !victim.arena || !victim.arena.alive || room.phase !== 'PLAYING') return;
+  const killer = killerId && killerId !== victimId ? players.get(killerId) : null;
+  victim.arena.alive = false;
+  victim.arena.health = 0;
+  victim.arena.deaths++;
+  if (killer && killer.arenaRoom === room.id && killer.arena && killer.arena.alive) killer.arena.score++;
+  const killerScore = killer && killer.arena ? killer.arena.score : 0;
+  io.to('arena:' + room.id).emit('arenaKilled', {
+    victimId, victimNick: victim.nick,
+    killerId: killer ? killerId : null, killerNick: killer ? killer.nick : null,
+    killerScore, weapon: cleanSoft(weapon).slice(0, 24) || 'ARMA',
+    respawnIn: room.config.respawn,
+  });
+  emitArenaRoom(room);
+  if (killerScore >= room.config.scoreLimit) {
+    arenaEndMatch(room, 'score');
+    return;
+  }
+  const round = room.round;
+  const timer = setTimeout(() => {
+    if (room.round === round) arenaRespawn(room, victimId);
+  }, room.config.respawn * 1000);
+  if (timer.unref) timer.unref();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const room of arenaRooms.values()) {
+    if (room.phase !== 'PLAYING') continue;
+    const remaining = Math.max(0, Math.ceil((room.endsAt - now) / 1000));
+    io.to('arena:' + room.id).emit('arenaTime', { remaining });
+    if (remaining <= 0) arenaEndMatch(room, 'time');
+  }
+}, 1000).unref();
+
 io.on('connection', socket => {
+  socket.join('br');
   const isMidMatch = match.phase === 'PLAYING' || match.phase === 'ENDED';
   players.set(socket.id, {
     nick: 'Recruta', colors: null, kills: 0,
     alive: false, spectator: isMidMatch, placement: 0,
     pos: [0, 0, 0], lastChat: 0, hitWindow: [], lastState: Date.now(), zoneHp: ZONE_HP, canDrop: true,
+    arenaRoom: null, arena: null,
   });
 
   socket.emit('init', {
@@ -444,6 +729,7 @@ io.on('connection', socket => {
     cityDestruction: match.cityDestruction,
     players: roster(true).filter(p => p.id !== socket.id),
     globalTop: topRank(),
+    arenaRooms: [...arenaRooms.values()].map(arenaRoomPublic),
   });
   broadcastRoster();
   console.log(`[+] ${socket.id} (${players.size} online, fase ${match.phase})`);
@@ -453,6 +739,10 @@ io.on('connection', socket => {
     p.nick = cleanNick(d && d.nick);
     if (d && Array.isArray(d.colors)) p.colors = d.colors.slice(0, 4).map(c => clean(c).slice(0, 9));
     broadcastRoster();
+    if (p.arenaRoom) {
+      const room = arenaRooms.get(p.arenaRoom);
+      if (room) emitArenaRoom(room);
+    }
     // o lobby emite hello a cada tecla digitada no nick — só anuncia UMA vez
     if (!p.greeted) {
       p.greeted = true;
@@ -483,7 +773,161 @@ io.on('connection', socket => {
   });
 
   /* latência: o cliente mede o RTT deste ack */
-  socket.on('pingx', cb => { if (typeof cb === 'function') cb(); });
+  // Timestamp no ACK para uma amostra NTP simples no cliente. Assim uma
+  // mensagem represada durante o carregamento de GLBs nao desloca a zona.
+  socket.on('pingx', cb => {
+    if (typeof cb === 'function') cb({ serverNow: Date.now() });
+  });
+
+  /* salas competitivas: descoberta, criacao, configuracao e ciclo */
+  socket.on('arenaList', (d, cb) => {
+    if (typeof d === 'function') cb = d;
+    if (typeof cb === 'function') cb({ ok: true, rooms: [...arenaRooms.values()].map(arenaRoomPublic) });
+  });
+
+  socket.on('arenaCreate', (d, cb) => {
+    const p = players.get(socket.id);
+    if (!p || (p.alive && match.phase === 'PLAYING')) {
+      if (typeof cb === 'function') cb({ ok: false, error: 'Termine sua partida atual primeiro.' });
+      return;
+    }
+    const config = arenaConfig(d);
+    if (config.private && config.password.length < 4) {
+      if (typeof cb === 'function') cb({ ok: false, error: 'A senha precisa ter pelo menos 4 caracteres.' });
+      return;
+    }
+    if (p.arenaRoom) arenaLeavePlayer(socket.id, false);
+    const id = arenaRoomId();
+    const room = {
+      id, config, hostId: socket.id, members: new Set(), phase: 'LOBBY', round: 0,
+      startedAt: 0, endsAt: 0, countdownTimer: null, resetTimer: null,
+    };
+    arenaRooms.set(id, room);
+    const result = arenaJoinPlayer(socket, room, config.password);
+    if (!result.ok) deleteArenaRoom(room);
+    if (typeof cb === 'function') cb(result);
+  });
+
+  socket.on('arenaJoin', (d, cb) => {
+    const id = clean(d && (d.id || d.code)).toUpperCase().slice(0, 6);
+    const room = arenaRooms.get(id);
+    const result = room ? arenaJoinPlayer(socket, room, d && d.password)
+      : { ok: false, error: 'Sala nao encontrada.' };
+    if (typeof cb === 'function') cb(result);
+  });
+
+  socket.on('arenaLeave', (d, cb) => {
+    if (typeof d === 'function') cb = d;
+    arenaLeavePlayer(socket.id, false);
+    if (typeof cb === 'function') cb({ ok: true });
+  });
+
+  socket.on('arenaUpdateRoom', (d, cb) => {
+    const p = players.get(socket.id);
+    const room = p && p.arenaRoom ? arenaRooms.get(p.arenaRoom) : null;
+    if (!room || room.hostId !== socket.id || room.phase !== 'LOBBY') {
+      if (typeof cb === 'function') cb({ ok: false, error: 'Somente o dono altera a sala no lobby.' });
+      return;
+    }
+    const next = arenaConfig(d, room.config);
+    if (next.private && next.password.length < 4) {
+      if (typeof cb === 'function') cb({ ok: false, error: 'A senha precisa ter pelo menos 4 caracteres.' });
+      return;
+    }
+    if (next.maxPlayers < room.members.size) {
+      if (typeof cb === 'function') cb({ ok: false, error: 'O limite nao pode ser menor que a quantidade atual.' });
+      return;
+    }
+    room.config = next;
+    emitArenaRoom(room);
+    if (typeof cb === 'function') cb({ ok: true, room: arenaRoomPublic(room) });
+  });
+
+  socket.on('arenaStart', (d, cb) => {
+    const p = players.get(socket.id);
+    const room = p && p.arenaRoom ? arenaRooms.get(p.arenaRoom) : null;
+    const ok = !!room && room.hostId === socket.id && arenaCountdown(room);
+    if (typeof cb === 'function') cb(ok
+      ? { ok: true }
+      : { ok: false, error: room && room.members.size < 2 ? 'Sao necessarios pelo menos 2 jogadores.' : 'Apenas o dono pode iniciar.' });
+  });
+
+  socket.on('arenaState', d => {
+    const p = players.get(socket.id);
+    const room = p && p.arenaRoom ? arenaRooms.get(p.arenaRoom) : null;
+    if (!room || room.phase !== 'PLAYING' || !p.arena || !p.arena.alive || !d || !Array.isArray(d.pos)) return;
+    const pos = d.pos.slice(0, 3).map(Number);
+    if (pos.length !== 3 || !pos.every(Number.isFinite)) return;
+    const preset = ARENA_MAPS[room.config.map];
+    if (Math.hypot(pos[0] - preset.center[0], pos[2] - preset.center[1]) > preset.radius + 70) return;
+    pos[0] = Math.max(-WORLD, Math.min(WORLD, pos[0]));
+    pos[1] = Math.max(-100, Math.min(400, pos[1]));
+    pos[2] = Math.max(-WORLD, Math.min(WORLD, pos[2]));
+    p.pos = pos;
+    p.lastArenaState = Date.now();
+    socket.to('arena:' + room.id).volatile.emit('arenaPlayerUpdate', {
+      id: socket.id, pos, rotY: +d.rotY || 0,
+      nick: p.nick, colors: p.colors, alive: true,
+    });
+  });
+
+  socket.on('arenaHit', (d, cb) => {
+    const shooter = players.get(socket.id);
+    const room = shooter && shooter.arenaRoom ? arenaRooms.get(shooter.arenaRoom) : null;
+    const victim = d && players.get(d.targetId);
+    if (!room || room.phase !== 'PLAYING' || !shooter.arena || !shooter.arena.alive ||
+        !victim || victim.arenaRoom !== room.id || !victim.arena || !victim.arena.alive) {
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    const now = Date.now();
+    if (now < (victim.arena.invulnerableUntil || 0)) {
+      if (typeof cb === 'function') cb({ ok: false, protected: true });
+      return;
+    }
+    shooter.arena.hitWindow = shooter.arena.hitWindow.filter(t => now - t < 1000);
+    if (shooter.arena.hitWindow.length >= 15 || Math.hypot(
+      shooter.pos[0] - victim.pos[0], shooter.pos[1] - victim.pos[1], shooter.pos[2] - victim.pos[2]) > 320) {
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    const dmg = Math.min(Math.max(+d.dmg || 0, 0), 95);
+    if (dmg <= 0) { if (typeof cb === 'function') cb({ ok: false }); return; }
+    shooter.arena.dmgWindow = shooter.arena.dmgWindow.filter(e => now - e.t < 1000);
+    if (shooter.arena.dmgWindow.reduce((sum, e) => sum + e.d, 0) + dmg > 650) {
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    shooter.arena.hitWindow.push(now);
+    shooter.arena.dmgWindow.push({ t: now, d: dmg });
+    victim.arena.health = Math.max(0, victim.arena.health - dmg);
+    io.to(d.targetId).emit('arenaDamaged', {
+      dmg, health: victim.arena.health, shooterId: socket.id, shooterNick: shooter.nick,
+      weapon: cleanSoft(d.weapon).slice(0, 24) || 'ARMA', fromPos: shooter.pos,
+    });
+    io.to(socket.id).emit('arenaHitConfirmed', { targetId: d.targetId, health: victim.arena.health });
+    const killed = victim.arena.health <= 0;
+    if (killed) arenaKill(room, d.targetId, socket.id, d.weapon);
+    if (typeof cb === 'function') cb({ ok: true, health: victim.arena.health, killed });
+  });
+
+  socket.on('arenaSuicide', d => {
+    const p = players.get(socket.id);
+    const room = p && p.arenaRoom ? arenaRooms.get(p.arenaRoom) : null;
+    if (room) arenaKill(room, socket.id, null, d && d.weapon || 'QUEDA');
+  });
+
+  socket.on('arenaChat', d => {
+    const p = players.get(socket.id);
+    const room = p && p.arenaRoom ? arenaRooms.get(p.arenaRoom) : null;
+    if (!room) return;
+    const now = Date.now();
+    if (now - p.lastChat < 1200) return;
+    const msg = cleanSoft(d && d.msg).slice(0, 120);
+    if (!msg) return;
+    p.lastChat = now;
+    io.to('arena:' + room.id).emit('arenaChat', { nick: p.nick, msg });
+  });
 
   /* regras da sala: só o anfitrião altera (GOLEM, animais, ciclo dia/noite) */
   socket.on('setFlags', d => {
@@ -729,6 +1173,7 @@ io.on('connection', socket => {
 
   socket.on('disconnect', () => {
     const p = players.get(socket.id);
+    if (p && p.arenaRoom) arenaLeavePlayer(socket.id, true);
     players.delete(socket.id);
     // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
     if (hostId === socket.id) hostId = null;

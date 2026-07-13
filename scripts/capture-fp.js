@@ -12,6 +12,9 @@ const CHROME = ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   process.env.CHROME_PATH || ''].find(p => p && fs.existsSync(p));
 const PORT = +(process.argv[2] || 3213);
+const ONLY = process.argv[3]
+  ? new Set(process.argv[3].split(',').map(Number).filter(Number.isInteger))
+  : null;
 const output = path.join(__dirname, '..', 'output', 'fp');
 
 (async () => {
@@ -49,6 +52,9 @@ const output = path.join(__dirname, '..', 'output', 'fp');
         await new Promise(r => setTimeout(r, 100));
       // cenário limpo: player num campo aberto, meio-dia
       const MP = window.__MP;
+      // Os passos manuais abaixo ajustam pose/ADS; renderizar o composer em
+      // cada um tornava a bateria inteira dezenas de vezes mais lenta.
+      MP.composer.render = () => {};
       MP.player.pos.set(30, MP.groundAt(30, 30, 999), 30);
       MP.player.vel.set(0, 0, 0);
       G.Env.tod = 0.5;
@@ -59,16 +65,18 @@ const output = path.join(__dirname, '..', 'output', 'fp');
     const shots = [];
     const nWeapons = await page.evaluate(() => window.__game.arsenal.length);
     for (let i = 0; i < nWeapons; i++) {
+      if (ONLY && !ONLY.has(i)) continue;
       shots.push({ file: `arma-${i}.png`, setup: { idx: i, mode: 'idle' } });
       shots.push({ file: `arma-${i}-recarga50.png`, setup: { idx: i, mode: 'reload', k: 0.5 } });
+      shots.push({ file: `arma-${i}-ads.png`, setup: { idx: i, mode: 'ads' } });
     }
-    shots.push({ file: 'pose-queda.png', setup: { mode: 'fall' } });
-    shots.push({ file: 'pose-paraquedas.png', setup: { mode: 'chute' } });
-    shots.push({ file: 'olhando-pro-chao.png', setup: { idx: 0, mode: 'down' } });
-    shots.push({ file: 'corpo-3a-pessoa.png', setup: { idx: 0, mode: 'detach' } });
-    shots.push({ file: 'corpo-bind-pose.png', setup: { mode: 'bind' } });
-    shots.push({ file: 'arma-0-ads.png', setup: { idx: 0, mode: 'ads' } });
-    shots.push({ file: 'arma-6-ads.png', setup: { idx: 6, mode: 'ads' } });
+    if (!ONLY) {
+      shots.push({ file: 'pose-queda.png', setup: { mode: 'fall' } });
+      shots.push({ file: 'pose-paraquedas.png', setup: { mode: 'chute' } });
+      shots.push({ file: 'olhando-pro-chao.png', setup: { idx: 0, mode: 'down' } });
+      shots.push({ file: 'corpo-3a-pessoa.png', setup: { idx: 0, mode: 'detach' } });
+      shots.push({ file: 'corpo-bind-pose.png', setup: { mode: 'bind' } });
+    }
 
     for (const s of shots) {
       const report = await page.evaluate(setup => {

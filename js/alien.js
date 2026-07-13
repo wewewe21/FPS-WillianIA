@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 
 export function createAlien(deps) {
-  const { rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, Bosses, Pickups, MFlags, setTimeScale, Chars } = deps;
+  const { rand, TAU, _v1, _v2, heightAt, biomeAt, WATER_LEVEL, CITY, SFX, FX, scene, csmMat, addScore, addKillFeed, showBanner, unlockWeapon, state, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale, Chars } = deps;
   // acha um ponto de deserto para a queda do disco
   let SITE = { x: 260, z: 260 };
   for (let i = 0; i < 200; i++) {
@@ -74,27 +74,59 @@ export function createAlien(deps) {
 
   /* pele nova: alien rigado (alien.optimized.glb) com a animação embutida
      "Take 001" em loop — FSM/hitbox/dano continuam os mesmos */
-  let mixer = null, hasModel = false;
+  let mixer = null, modelRoot = null, hasModel = false;
   if (Chars) Chars.character('/assets/models/Personagens/alien.optimized.glb', { height: 3.7 })
     .then(mold => {
       const inst = mold.build();
       group.traverse(o => { if (o.isMesh) o.visible = false; }); // corpo procedural some
       group.add(inst.root);
       mixer = inst.mixer;
+      modelRoot = inst.root;
       hasModel = true;
       const take = Object.values(inst.actions)[0];
       if (take) take.play();
     })
     .catch(err => console.error('Alien GLB falhou — Visitante segue procedural:', err));
 
-  const B = { alive: true, active: false, hp: 1900, hpMax: 1900, yaw: 0, phase: 0, nextShot: 0, blinkT: 6, deadT: -1, respawnT: 0 };
+  const B = {
+    alive: true, active: false, hp: 1900, hpMax: 1900, yaw: 0, phase: 0,
+    nextShot: 0, nextMelee: 0, meleeT: 0, meleeHit: false,
+    blinkT: 6, deadT: -1, respawnT: 0,
+  };
   const orbs = [];
-  const orbMat = new THREE.MeshStandardMaterial({ color: 0x03130f, emissive: 0x35ffc8, emissiveIntensity: 4, roughness: 0.3 });
+  const orbTarget = new THREE.Vector3();
+  const orbStep = new THREE.Vector3();
+  const orbClosest = new THREE.Vector3();
+  const orbMat = new THREE.MeshBasicMaterial({
+    color: 0x9affea, transparent: true, opacity: 0.98,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  const haloMat = new THREE.MeshBasicMaterial({
+    color: 0x20ffd0, transparent: true, opacity: 0.24,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
   for (let i = 0; i < 6; i++) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.26, 10, 8), orbMat);
+    const m = new THREE.Group();
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.24, 12, 10), orbMat);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10), haloMat);
+    m.add(halo, core);
+    if (i < 3) {
+      const light = new THREE.PointLight(0x35ffc8, 2.2, 7, 2);
+      m.add(light);
+    }
     m.visible = false; scene.add(m);
-    orbs.push({ m, vel: new THREE.Vector3(), live: false });
+    orbs.push({ m, core, halo, vel: new THREE.Vector3(), prev: new THREE.Vector3(), live: false });
   }
+  const meleeWave = new THREE.Mesh(
+    new THREE.RingGeometry(0.65, 0.9, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0x68ffe2, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+    }),
+  );
+  meleeWave.rotation.x = -Math.PI / 2;
+  meleeWave.visible = false;
+  scene.add(meleeWave);
   const sph = [
     { c: new THREE.Vector3(), r: 0.75, part: 'head' },
     { c: new THREE.Vector3(), r: 0.62, part: 'body' },
@@ -129,14 +161,37 @@ export function createAlien(deps) {
   function update(dt, t) {
     for (const o of orbs) {
       if (!o.live) continue;
+      o.prev.copy(o.m.position);
       o.m.position.addScaledVector(o.vel, dt);
-      o.m.scale.setScalar(1 + Math.sin(t * 26) * 0.15);
-      const d = o.m.position.distanceTo(player.pos);
-      if (d < 1.2 || o.m.position.y < heightAt(o.m.position.x, o.m.position.z) + 0.2) {
+      const pulse = 1 + Math.sin(t * 28) * 0.13;
+      o.core.scale.setScalar(pulse);
+      o.halo.scale.setScalar(1 + Math.sin(t * 18) * 0.18);
+      o.m.rotateY(dt * 7);
+      // Swept collision against the player's torso prevents a fast orb from
+      // stepping through the player on a slow frame.
+      orbTarget.copy(player.pos); orbTarget.y += 1.05;
+      orbStep.copy(o.m.position).sub(o.prev);
+      const segLen2 = Math.max(0.0001, orbStep.lengthSq());
+      orbClosest.copy(orbTarget).sub(o.prev);
+      const along = THREE.MathUtils.clamp(orbClosest.dot(orbStep) / segLen2, 0, 1);
+      orbClosest.copy(o.prev).addScaledVector(orbStep, along);
+      const hitDistance = orbTarget.distanceTo(orbClosest);
+      const groundHit = o.m.position.y < heightAt(o.m.position.x, o.m.position.z) + 0.22;
+      if (hitDistance < 1.15 || groundHit) {
         o.live = false; o.m.visible = false;
         FX.burst(o.m.position, _v1.set(0, 1, 0), 'spark');
-        if (d < 4) playerDamage(Math.round(16 * (1 - d / 5)) + 5, o.m.position);
+        const d = o.m.position.distanceTo(player.pos);
+        if (hitDistance < 1.15 || d < 4.5) {
+          playerDamage(Math.max(7, Math.round(25 * (1 - d / 5.5))), o.m.position);
+          if (addTrauma) addTrauma(0.18);
+        }
       }
+    }
+    if (meleeWave.visible) {
+      const k = 1 - B.meleeT / 0.58;
+      meleeWave.scale.setScalar(1 + k * 5.5);
+      meleeWave.material.opacity = Math.max(0, (1 - k) * 0.72);
+      if (B.meleeT <= 0) meleeWave.visible = false;
     }
     if (!B.alive) {
       if (B.deadT >= 0) {
@@ -161,6 +216,26 @@ export function createAlien(deps) {
       return;
     }
     B.phase += dt;
+    if (B.meleeT > 0) {
+      const old = B.meleeT;
+      B.meleeT = Math.max(0, B.meleeT - dt);
+      const strikeK = Math.sin((1 - B.meleeT / 0.58) * Math.PI);
+      if (modelRoot) modelRoot.position.z = strikeK * 0.42;
+      if (!B.meleeHit && old > 0.29 && B.meleeT <= 0.29) {
+        B.meleeHit = true;
+        const closeNow = group.position.distanceTo(player.pos);
+        meleeWave.position.set(group.position.x, heightAt(group.position.x, group.position.z) + 0.08, group.position.z);
+        meleeWave.scale.setScalar(1);
+        meleeWave.material.opacity = 0.72;
+        meleeWave.visible = true;
+        FX.burst(group.position.clone().add(_v1.set(0, 1.6, 0)), _v2.set(0, 1, 0), 'spark');
+        if (closeNow < 4.8 && !player.dead) {
+          playerDamage(34, group.position);
+          if (addTrauma) addTrauma(0.42);
+        }
+      }
+      if (B.meleeT <= 0 && modelRoot) modelRoot.position.z = 0;
+    }
     // teleporte lateral (blink)
     B.blinkT -= dt;
     if (B.blinkT <= 0 && dP < 60) {
@@ -187,14 +262,24 @@ export function createAlien(deps) {
       parts.armR.rotation.x = -1.2; // mão erguida disparando
       parts.armL.rotation.x = Math.sin(B.phase * 1.5) * 0.3;
     }
+    // Golpe de energia de curta distância. Ele tem telegraph/lunge e só causa
+    // dano no instante central, deixando espaço para o jogador recuar.
+    if (d < 4.1 && state.gameTime >= B.nextMelee && !player.dead && B.meleeT <= 0) {
+      B.nextMelee = state.gameTime + 2.15;
+      B.nextShot = Math.max(B.nextShot, state.gameTime + 0.9);
+      B.meleeT = 0.58;
+      B.meleeHit = false;
+      SFX.roar();
+    }
     // tiro triplo de plasma
-    if (dP < 70 && state.gameTime >= B.nextShot && !player.dead) {
+    if (dP < 70 && d > 5.2 && state.gameTime >= B.nextShot && !player.dead && B.meleeT <= 0) {
       B.nextShot = state.gameTime + 1.6;
       for (let i = 0; i < 3; i++) {
         const o = orbs.find(o => !o.live);
         if (!o) break;
         o.live = true; o.m.visible = true;
         o.m.position.set(group.position.x, group.position.y + 2.8, group.position.z);
+        o.prev.copy(o.m.position);
         _v2.copy(player.pos); _v2.y += 1.2;
         _v2.x += rand(-2, 2) * i; _v2.z += rand(-2, 2) * i;
         o.vel.copy(_v2).sub(o.m.position).normalize().multiplyScalar(22);

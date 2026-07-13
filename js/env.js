@@ -43,7 +43,7 @@ export function createEnv(deps) {
   const snowP = [];
   for (let i = 0; i < SN; i++) snowP.push({ x: rand(-20, 20), y: rand(0, 18), z: rand(-20, 20), ph: rand(TAU) });
 
-  const FOG_DAY = new THREE.Color(0xb9d1e4), FOG_NIGHT = new THREE.Color(0x0c1422), FOG_RAIN = new THREE.Color(0x76828e);
+  const FOG_DAY = new THREE.Color(0x9fbacf), FOG_NIGHT = new THREE.Color(0x0c1422), FOG_RAIN = new THREE.Color(0x76828e);
   const SUN_DAY = new THREE.Color(0xffe7c0), HEMI_DAY = new THREE.Color(0xa9cdf2), HEMI_NIGHT = new THREE.Color(0x2a3c5e);
   const _f = new THREE.Color(), _sd2 = new THREE.Vector3();
 

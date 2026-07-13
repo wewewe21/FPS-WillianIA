@@ -3,10 +3,16 @@
    ================================================================ */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export function createHeli(deps) {
   const { CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos } = deps;
   const group = new THREE.Group();
+  /* O grupo externo continua sendo a identidade de física/multiplayer. O
+     modelo procedural é apenas fallback enquanto o GLB carrega. */
+  const fallbackRoot = new THREE.Group();
+  fallbackRoot.name = 'HeliFallback';
+  group.add(fallbackRoot);
   const body = csmMat(new THREE.MeshStandardMaterial({ color: 0x2b5e8c, metalness: 0.5, roughness: 0.3 }));
   const dark = csmMat(new THREE.MeshStandardMaterial({ color: 0x1a1d22, roughness: 0.6 }));
   const glassH = new THREE.MeshStandardMaterial({ color: 0xa8d8f0, metalness: 0.85, roughness: 0.08, transparent: true, opacity: 0.6 });
@@ -15,7 +21,7 @@ export function createHeli(deps) {
     m.position.set(x, y, z);
     m.rotation.set(o.rx || 0, o.ry || 0, o.rz || 0);
     m.castShadow = true;
-    group.add(m); return m;
+    fallbackRoot.add(m); return m;
   }
   hp(new RoundedBoxGeometry(3.1, 1.5, 1.6, 3, 0.5), body, 0.2, 1.15, 0);                   // fuselagem
   hp(new RoundedBoxGeometry(0.9, 1.1, 1.4, 3, 0.4), glassH, 1.6, 1.2, 0);                  // cabine de vidro
@@ -33,10 +39,93 @@ export function createHeli(deps) {
   const b1 = new THREE.Mesh(blade, dark), b2 = new THREE.Mesh(blade, dark);
   b2.rotation.y = Math.PI / 2;
   rotor.add(b1, b2);
-  group.add(rotor);
+  fallbackRoot.add(rotor);
   const hs = Structures.heliSpot;
   group.position.set(hs.x, hs.y + 0.05, hs.z);
   scene.add(group);
+
+  const modelUrl = '/assets/models/Veículos/low_poly_helicopter.glb';
+  let modelStatus = 'loading', modelError = '', modelRoot = null;
+  let modelMixer = null, modelAction = null, modelMetrics = null;
+  const modelMaterials = new Set();
+
+  /* O asset veio do Sketchfab com pivô longe da fuselagem e a frente em -X.
+     Normaliza pela fuselagem (não pelo rotor) e ancora no eixo do rotor
+     principal, que é o centro natural de giro do helicóptero. */
+  function normalizedModel(gltf) {
+    const imported = gltf.scene;
+    let fuselage = null, mainRotor = null;
+    imported.traverse(o => {
+      if (/Copter_Palette/i.test(o.name)) fuselage = o;
+      if (/^Propeller_2(?:_|$)/i.test(o.name)) mainRotor = o;
+      if (!o.isMesh) return;
+      const cloneMat = material => {
+        const m = material.clone();
+        modelMaterials.add(m);
+        return m;
+      };
+      o.material = Array.isArray(o.material) ? o.material.map(cloneMat) : cloneMat(o.material);
+      o.castShadow = false;
+      o.receiveShadow = false;
+    });
+
+    const oriented = new THREE.Group();
+    oriented.rotation.y = Math.PI; // nariz do asset (-X) -> frente arcade (+X)
+    oriented.add(imported);
+    oriented.updateWorldMatrix(true, true);
+    const bodyBox = new THREE.Box3().setFromObject(fuselage || imported);
+    const bodySize = bodyBox.getSize(new THREE.Vector3());
+    if (bodySize.x < 1e-3 || bodySize.y < 1e-3)
+      throw new Error('modelo de helicóptero sem volume');
+
+    const scaled = new THREE.Group();
+    scaled.scale.setScalar(6.1 / bodySize.x);
+    scaled.add(oriented);
+    scaled.updateWorldMatrix(true, true);
+    const allBox = new THREE.Box3().setFromObject(scaled);
+    const pivotBox = new THREE.Box3().setFromObject(mainRotor || fuselage || imported);
+    const pivot = pivotBox.getCenter(new THREE.Vector3());
+    scaled.position.set(-pivot.x, 0.05 - allBox.min.y, -pivot.z);
+    scaled.updateWorldMatrix(true, true);
+
+    const finalBox = new THREE.Box3().setFromObject(scaled);
+    const size = finalBox.getSize(new THREE.Vector3());
+    const visual = new THREE.Group();
+    visual.name = 'HeliGLB';
+    visual.add(scaled);
+
+    /* "Main" também anima a translação/rotação do helicóptero. Essas
+       tracks brigariam com a física; tocamos exclusivamente os dois rotores. */
+    const sourceClip = gltf.animations.find(a => a.name === 'Main') || gltf.animations[0];
+    if (sourceClip) {
+      const rotorTracks = sourceClip.tracks.filter(track => /Propeller/i.test(track.name));
+      if (rotorTracks.length) {
+        const clip = new THREE.AnimationClip('Rotors', sourceClip.duration, rotorTracks);
+        modelMixer = new THREE.AnimationMixer(imported);
+        modelAction = modelMixer.clipAction(clip);
+        modelAction.play();
+      }
+    }
+    return { visual, metrics: { sizeX: size.x, sizeY: size.y, sizeZ: size.z, minY: finalBox.min.y } };
+  }
+
+  async function attachModel() {
+    try {
+      const gltf = await new GLTFLoader().loadAsync(modelUrl);
+      const built = normalizedModel(gltf);
+      modelRoot = built.visual;
+      modelMetrics = built.metrics;
+      group.add(modelRoot);
+      fallbackRoot.visible = false;
+      modelStatus = 'ready';
+    } catch (err) {
+      modelStatus = 'fallback';
+      modelError = err instanceof Error ? err.message : String(err);
+      fallbackRoot.visible = true;
+      console.error('Helicóptero GLB falhou - mantendo modelo procedural:', err);
+    }
+  }
+  const ready = attachModel();
 
   const vel = new THREE.Vector3();
   let yaw = 0, pitchK = 0, rollK = 0, rotorSpd = 0;
@@ -67,6 +156,10 @@ export function createHeli(deps) {
     rotorSpd = damp(rotorSpd, on ? 26 : 1.2, 1.6, dt);
     rotor.rotation.y += rotorSpd * dt;
     trotor.rotation.x += rotorSpd * 3 * dt;
+    if (modelMixer) {
+      modelMixer.timeScale = 0.18 + (rotorSpd / 26) * 2.8;
+      modelMixer.update(dt);
+    }
     if (on) {
       const fwdIn = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
       const yawIn = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0);
@@ -96,5 +189,13 @@ export function createHeli(deps) {
       SFX.heliUpdate(false, 0);
     }
   }
-  return { group, update, tryEnter, exit, get vel() { return vel; } };
+  return {
+    group, update, tryEnter, exit, ready, modelUrl,
+    get vel() { return vel; },
+    get modelStatus() { return modelStatus; },
+    get modelError() { return modelError; },
+    get modelRoot() { return modelRoot; },
+    get modelMetrics() { return modelMetrics; },
+    get modelAction() { return modelAction; },
+  };
 }

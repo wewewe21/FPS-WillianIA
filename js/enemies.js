@@ -224,30 +224,57 @@ export function createEnemies(deps) {
   for (let i = 0; i < CFG.ENEMY_COUNT; i++) makeEnemy(i);
   for (const c of Structures.enemyCamps) makeEnemy(list.length, c); // torre + bases militares
 
-  /* ---- pele nova: GUARDIÃO mutante rigado (Guardiao.glb, anims Punch/Shoot/Walk).
-     Troca só o VISUAL: FSM, hitbox e balanceamento continuam idênticos.
-     Executivos (suit) mantêm o corpo procedural — são civis, não mutantes. */
-  if (Chars) Chars.character('/assets/models/Personagens/Guardiao.glb', { height: 1.92 })
-    .then(mold => {
+  /* Guardião nos inimigos comuns e o soldado rigado nos antigos executivos
+     da Torre Nexus. A troca é apenas visual: IA, hitbox e dano são mantidos. */
+  const modelReadyTasks = [];
+  if (Chars) {
+    modelReadyTasks.push(Chars.character('/assets/models/Personagens/Guardiao.glb', { height: 1.92 })
+      .then(mold => {
+        for (const e of list) {
+          if (e.suit) continue;
+          const { root, mixer, actions, findNode } = mold.build();
+          e.group.traverse(o => { if (o.isMesh) o.visible = false; });
+          e.group.add(root);
+          e.hasModel = true;
+          e.modelKind = 'guardiao';
+          e.mixer = mixer;
+          e.actions = actions;
+          if (actions.Walk) { actions.Walk.play(); actions.Walk.setEffectiveWeight(1); }
+          if (actions.Shoot) { actions.Shoot.setLoop(THREE.LoopOnce, 1); actions.Shoot.clampWhenFinished = false; }
+          if (actions.Punch) { actions.Punch.setLoop(THREE.LoopOnce, 1); }
+          const barrel = findNode('MuzzleFlash') || findNode('GunBarrel');
+          if (barrel && e.flash) { barrel.add(e.flash); e.flash.position.set(0, 0, 0); e.flash.visible = true; }
+          e.nextMelee = 0;
+        }
+      })
+      .catch(err => console.error('Guardião GLB falhou — inimigos seguem procedurais:', err)));
+
+    modelReadyTasks.push(Chars.character(
+      '/assets/models/Personagens/ps1low_poly_night_vision_special_forces_soldier.glb',
+      { height: 1.88 },
+    ).then(mold => {
       for (const e of list) {
-        if (e.suit) continue;
+        if (!e.suit) continue;
         const { root, mixer, actions, findNode } = mold.build();
-        // esconde o boneco procedural, mas mantém os grupos (o FSM anima
-        // parts.* e a lógica de mira/flash usa as âncoras)
         e.group.traverse(o => { if (o.isMesh) o.visible = false; });
         e.group.add(root);
         e.hasModel = true;
+        e.modelKind = 'special-forces';
+        e.name = 'Operador-' + String(e.id + 1).padStart(2, '0');
         e.mixer = mixer;
+        actions.Walk = actions.SMGwalk || actions.SHOTGUNwalk || actions.Default;
         e.actions = actions;
         if (actions.Walk) { actions.Walk.play(); actions.Walk.setEffectiveWeight(1); }
-        if (actions.Shoot) { actions.Shoot.setLoop(THREE.LoopOnce, 1); actions.Shoot.clampWhenFinished = false; }
-        if (actions.Punch) { actions.Punch.setLoop(THREE.LoopOnce, 1); }
-        const barrel = findNode('MuzzleFlash') || findNode('GunBarrel');
-        if (barrel && e.flash) { barrel.add(e.flash); e.flash.position.set(0, 0, 0); }
-        e.nextMelee = 0;
+        const smg = findNode('SMGBone') || findNode('SMG');
+        if (e.flash) {
+          e.flash.visible = true;
+          if (smg) { smg.add(e.flash); e.flash.position.set(0, 0, 0); }
+        }
+        e.nextMelee = Infinity;
       }
-    })
-    .catch(err => console.error('Guardião GLB falhou — inimigos seguem procedurais:', err));
+    }).catch(err => console.error('Soldado de forças especiais GLB falhou — usando fallback:', err)));
+  }
+  const ready = Promise.all(modelReadyTasks);
 
   /* tiro do inimigo: hitscan com spread, tracer e chance de errar */
   const _eFrom = new THREE.Vector3(), _eTo = new THREE.Vector3(), _eDir = new THREE.Vector3();
@@ -463,5 +490,5 @@ export function createEnemies(deps) {
     }
   }
 
-  return { list, update };
+  return { list, update, ready };
 }
