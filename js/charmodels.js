@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { prepRiggedMesh } from './meshutils.js';
 
 export function createCharModels() {
   const loader = new GLTFLoader();
@@ -46,19 +47,7 @@ export function createCharModels() {
 
     function build() {
       const inst = cloneSkeleton(proto);
-      inst.traverse(o => {
-        if (o.isMesh || o.isSkinnedMesh) {
-          o.castShadow = false;   // precedente dos carros: CSM 4x multiplicaria draw calls
-          o.receiveShadow = false;
-          o.frustumCulled = false; // esqueleto animado desloca a malha do bounding original
-          for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-            if (m && m.isMeshStandardMaterial && !m.map) {
-              const l = m.color.r * 0.299 + m.color.g * 0.587 + m.color.b * 0.114;
-              if (l > 0.72) m.color.multiplyScalar(0.72 / l);
-            }
-          }
-        }
-      });
+      prepRiggedMesh(inst);
       const orient = new THREE.Group();
       orient.rotation.y = yaw;
       orient.scale.setScalar(s);

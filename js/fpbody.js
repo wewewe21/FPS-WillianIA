@@ -7,6 +7,7 @@
    Se o GLB falhar, as mãos procedurais antigas continuam no lugar. */
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { prepRiggedMesh } from './meshutils.js';
 
 export function createFpBody(deps) {
   const { camera, player, getGun, weaponRoot } = deps;
@@ -64,19 +65,7 @@ export function createFpBody(deps) {
   new GLTFLoader().loadAsync('/assets/models/Personagens/low_poly_helldiver_rig.glb')
     .then(gltf => {
       const model = gltf.scene;
-      model.traverse(o => {
-        if (o.isMesh || o.isSkinnedMesh) {
-          o.castShadow = false;
-          o.receiveShadow = false;
-          o.frustumCulled = false; // rig na câmera: bounding não acompanha ossos
-          for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
-            if (m && m.isMeshStandardMaterial && !m.map) {
-              const l = m.color.r * 0.299 + m.color.g * 0.587 + m.color.b * 0.114;
-              if (l > 0.72) m.color.multiplyScalar(0.72 / l);
-            }
-          }
-        }
-      });
+      prepRiggedMesh(model);
       // normaliza a altura e pendura na câmera, ancorando pelo BOUNDING BOX
       // (o pivô do GLB não é o pescoço — sem isto a câmera nasce dentro do peito)
       const box = new THREE.Box3().setFromObject(model);
