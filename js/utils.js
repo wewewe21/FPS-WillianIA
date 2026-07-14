@@ -9,7 +9,5 @@ export const rand   = (a = 1, b) => (b === undefined ? Math.random() * a : a + M
 export const TAU = Math.PI * 2;
 
 export const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
-export const _q1 = new THREE.Quaternion();
-export const _m1 = new THREE.Matrix4();
 export const chaseCamPos = new THREE.Vector3();
 export const chaseLook = new THREE.Vector3();

@@ -10,7 +10,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { CSM } from 'three/addons/csm/CSM.js';
 import { CFG, SETTINGS, persistSettings } from './js/config.js';
-import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, _q1, _m1, chaseCamPos, chaseLook } from './js/utils.js';
+import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
