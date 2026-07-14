@@ -1,0 +1,27 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "server.js",
+    "game.js",
+    "br-game.js",
+    "multiplayer-client.js",
+    "city-destruction-protocol.js",
+    "city-destruction-client.js",
+    "js/minimap-worker.js",
+    "eslint.config.js",
+    "scripts/*.js",
+    "test/*.js"
+  ],
+  "project": [
+    "*.js",
+    "js/**/*.js",
+    "scripts/**/*.js",
+    "test/**/*.js"
+  ],
+  "ignore": [
+    "tests/**",
+    ".venv/**",
+    "node_modules/**"
+  ],
+  "ignoreBinaries": ["python3"]
+}

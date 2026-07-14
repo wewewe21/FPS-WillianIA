@@ -8,7 +8,13 @@
     "test": "node scripts/run-tests.js",
     "stress": "node scripts/stress.js",
     "test:e2e": "python3 tests/city-destruction-e2e.py",
-    "lint": "eslint server.js game.js js/ multiplayer-client.js br-game.js city-destruction-protocol.js city-destruction-client.js scripts/ test/ eslint.config.js"
+    "lint": "eslint server.js game.js js/ multiplayer-client.js br-game.js city-destruction-protocol.js city-destruction-client.js scripts/ test/ eslint.config.js",
+    "analyze:dead": "knip",
+    "analyze:duplicates": "jscpd . --pattern '**/*.js' --ignore 'node_modules/**,dist/**,coverage/**'",
+    "analyze:cycles": "madge --circular --extensions js .",
+    "analyze:lines": "cloc . --exclude-dir=node_modules,.git,dist,coverage",
+    "quality": "npm run lint && npm test",
+    "refactor:check": "npm run analyze:dead && npm run analyze:cycles && npm run quality"
   },
   "engines": {
     "node": ">=18"
@@ -21,8 +27,12 @@
     "@eslint/js": "^10.0.1",
     "@gltf-transform/cli": "^4.4.1",
     "cannon-es": "^0.20.0",
+    "cloc": "^2.6.0-cloc",
     "eslint": "^10.7.0",
     "globals": "^17.7.0",
+    "jscpd": "^5.0.12",
+    "knip": "^6.26.0",
+    "madge": "^8.0.0",
     "puppeteer-core": "^24.43.1",
     "socket.io-client": "^4.7.5",
     "three": "^0.185.1"
