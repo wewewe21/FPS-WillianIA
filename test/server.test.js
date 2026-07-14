@@ -374,6 +374,10 @@ describe('Combate', () => {
   it('dada uma morte com killer, então a kill é creditada com colocação', async t => {
     const { clients } = await playing(t, 3);
     const [a, b] = clients;
+    // crédito de kill exige um acerto validado recente: A precisa ter atingido
+    // B antes do `died`.
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 40, weapon: 'FUZIL', fromPos: [0, 1.5, 0] });
+    await sleep(200);
     const killed = once(a.s, 'playerKilled');
     const res = await ack(b.s, 'died', { killerId: a.init.id, weapon: 'FUZIL' });
     const k = await killed;
@@ -434,6 +438,10 @@ describe('Combate', () => {
     const { clients } = await playing(t, 3);
     const [a, b, c] = clients;
     const endP = once(a.s, 'matchEnd');
+    // crédito exige acerto validado: A atinge C e B antes de cada morte
+    a.s.emit('shotHit', { targetId: c.init.id, dmg: 40, weapon: 'FUZIL', fromPos: [0, 1.5, 0] });
+    a.s.emit('shotHit', { targetId: b.init.id, dmg: 40, weapon: 'FUZIL', fromPos: [0, 1.5, 0] });
+    await sleep(200);
     await ack(c.s, 'died', { killerId: a.init.id, weapon: 'FUZIL' });
     await ack(b.s, 'died', { killerId: a.init.id, weapon: 'FUZIL' });
     const end = await endP;

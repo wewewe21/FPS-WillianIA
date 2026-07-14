@@ -115,8 +115,31 @@ const ZONE_HP = BR_FAST ? 20 : 175;
 const ZONE_GRACE_S = BR_FAST ? 2 : 25;   // pós-voo: janela de queda sem punição
 const FLOAT_AFTER_S = BR_FAST ? 3 : 60;  // "nunca pousou" vale a partir daqui
 const AFK_MS = BR_FAST ? 4000 : 45000;
+// invulnerabilidade de queda de paraquedas: só vale na janela inicial
+// (nave termina em flyTime, a descida dura mais um tanto). Fora dela, o flag
+// de queda não concede invulnerabilidade. Tunável nos testes.
+const FALL_GRACE_S = Math.max(1, +process.env.FALL_GRACE_S || 30);
 const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
 const CLAIM_COOLDOWN_MS = Math.max(500, +process.env.CLAIM_COOLDOWN_MS || 30000);
+/* teto de conexões simultâneas por IP. Loopback é ISENTO (os bots e o host
+   de teste conectam de localhost — sem isenção a lobby esvaziaria).
+   IP_LIMIT_ALL=1 desliga o bypass (usado só nos testes). Atrás de proxy o
+   IP real vem no X-Forwarded-For. */
+const MAX_CONN_PER_IP = Math.max(1, +process.env.MAX_CONN_PER_IP || 6);
+const IP_BYPASS_LOOPBACK = process.env.IP_LIMIT_ALL !== '1';
+const connByIp = new Map();
+// tentativas erradas de código de anfitrião contadas POR IP (o cooldown
+// sobrevive a reconexão, ao contrário de um contador por-socket).
+const claimFailByIp = new Map();
+const KILL_CREDIT_WINDOW_MS = 10000; // crédito de kill só com acerto validado nos últimos 10s
+function clientIp(socket) {
+  const xff = socket.handshake.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  return socket.handshake.address || 'unknown';
+}
+function isLoopback(ip) {
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'unknown';
+}
 // GAS_DEFAULT (QA): fixa o modo inicial do gás — os testes legados assumem a
 // clássica; em produção o padrão é 'auto' (cada partida sorteia o modo)
 const GAS_DEFAULT = ['auto', 'classica', 'inversa', 'off'].includes(process.env.GAS_DEFAULT)
@@ -292,7 +315,7 @@ function startMatch() {
   for (const p of players.values()) {
     if (p.spectator) continue; // quem entrou tarde continua espectador
     p.alive = true; p.kills = 0; p.placement = 0;
-    p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true;
+    p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true; p.landed = false; p.hitBy = {};
     match.aliveCount++;
   }
   io.emit('matchStart', { t0: match.t0, serverNow: Date.now(), plan: match.plan, num: match.num });
@@ -458,14 +481,37 @@ setInterval(() => {
   }
 }, 1000).unref(); // unref: só relevante pros testes de unidade (listen mantém o processo vivo)
 
+/* invulnerável a combate PvP? nave (já validada pelo anti-cheat) OU queda
+   de paraquedas dentro da janela inicial. `p.fall` já cobre fall+chute.
+   `p.landed` fecha a janela assim que o jogador toca o chão (reporta estado
+   sem ship/fall/chute) — depois disso o flag de queda não protege mais. */
+function combatImmune(p) {
+  if (p.ship) return true;
+  if (!p.fall || p.landed) return false;
+  return match.plan && Date.now() - match.t0 < (match.plan.ship.flyTime + FALL_GRACE_S) * 1000;
+}
+
 /* ---------------- conexões ---------------- */
 io.on('connection', socket => {
+  // recusa a conexão acima do teto por IP (loopback isento)
+  const ip = clientIp(socket);
+  socket.data.ip = ip; // sempre disponível (ex.: rate-limit de claimHost por IP)
+  if (!(IP_BYPASS_LOOPBACK && isLoopback(ip))) {
+    const n = connByIp.get(ip) || 0;
+    if (n >= MAX_CONN_PER_IP) {
+      socket.emit('rejected', { reason: 'too_many_connections' });
+      socket.disconnect(true);
+      return;
+    }
+    connByIp.set(ip, n + 1);
+    socket.data.ipCounted = ip;
+  }
   const isMidMatch = match.phase === 'PLAYING' || match.phase === 'ENDED';
   players.set(socket.id, {
     nick: 'Recruta', colors: null, kills: 0,
     alive: false, spectator: isMidMatch, placement: 0,
     pos: [0, 0, 0], lastChat: 0, hitWindow: [], lastState: Date.now(), zoneHp: ZONE_HP, canDrop: true,
-    bot: false, heldWeapon: 'FACA', ship: false, fall: false, chute: false,
+    bot: false, heldWeapon: 'FACA', ship: false, fall: false, chute: false, landed: false,
   });
 
   socket.emit('init', {
@@ -509,12 +555,15 @@ io.on('connection', socket => {
   socket.on('claimHost', (d, cb) => {
     const p = players.get(socket.id);
     if (!p) { if (typeof cb === 'function') cb({ ok: false }); return; }
-    // anti força-bruta: 5 tentativas erradas por janela e o socket esfria
+    // 5 tentativas erradas por janela esfriam o IP (contador por IP, não por
+    // socket — reconectar não devolve tentativas)
     const nowH = Date.now();
-    p.claimT = (p.claimT || []).filter(t => nowH - t < CLAIM_COOLDOWN_MS);
-    if (p.claimT.length >= 5) { if (typeof cb === 'function') cb({ ok: false }); return; }
+    const ipKey = socket.data.ip || 'unknown';
+    const fails = (claimFailByIp.get(ipKey) || []).filter(t => nowH - t < CLAIM_COOLDOWN_MS);
+    if (fails.length >= 5) { claimFailByIp.set(ipKey, fails); if (typeof cb === 'function') cb({ ok: false }); return; }
     const ok = clean(d && d.code).toUpperCase() === HOST_CODE;
-    if (!ok) p.claimT.push(nowH);
+    if (!ok) fails.push(nowH);
+    claimFailByIp.set(ipKey, fails);
     if (ok && hostId !== socket.id) {
       hostId = socket.id;
       sysChat(`👑 ${p.nick} agora é o anfitrião`);
@@ -614,6 +663,9 @@ io.on('connection', socket => {
     p.ship = !!d.ship;
     p.fall = !!d.fall || !!d.chute;
     p.chute = !!d.chute;
+    // tocou o chão: fecha a janela de invulnerabilidade de queda. Uma vez
+    // pousado, não "desapousa" na partida.
+    if (match.phase === 'PLAYING' && p.alive && !p.ship && !p.fall) p.landed = true;
     p.heldWeapon = weaponCode(d.heldWeapon) || p.heldWeapon;
     p.lastState = now;
     socket.volatile.broadcast.emit('playerUpdate', {
@@ -635,7 +687,7 @@ io.on('connection', socket => {
     if (!weapon) return;
     const maxRange = weapon === 'FACA' ? 4 : weapon === 'ESCOPETA' ? 120 : 320;
     // A nave/queda é uma fase invulnerável e tiros além do alcance útil não existem.
-    if (p.ship || p.fall || victim.ship || victim.fall) return;
+    if (combatImmune(p) || combatImmune(victim)) return;
     if (Math.hypot(p.pos[0] - victim.pos[0], p.pos[1] - victim.pos[1], p.pos[2] - victim.pos[2]) > maxRange) return;
     let fromPos = [p.pos[0], p.pos[1] + 1.5, p.pos[2]];
     if (Array.isArray(d.fromPos)) {
@@ -656,6 +708,9 @@ io.on('connection', socket => {
     p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
     if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return;
     p.dmgWindow.push({ t: now, d: dmgReq });
+    // registra o acerto validado na vítima: o crédito de kill (evento `died`)
+    // só é dado a quem realmente acertou aqui
+    (victim.hitBy || (victim.hitBy = {}))[socket.id] = now;
     socket.broadcast.emit('playerFired', {
       shooterId: socket.id, targetId: d.targetId, weapon,
       fromPos, toPos: victim.pos.slice(0, 3),
@@ -681,7 +736,7 @@ io.on('connection', socket => {
     if (!victim.alive) return;
     const kind = d.kind === 'GRANADA' || d.kind === 'BAZUCA' ? d.kind : null;
     if (!kind) return;
-    if (p.ship || p.fall || victim.ship || victim.fall) return;
+    if (combatImmune(p) || combatImmune(victim)) return;
     const impact = Array.isArray(d.impactPos) ? d.impactPos.slice(0, 3).map(Number) : [];
     if (impact.length !== 3 || !impact.every(Number.isFinite)) return;
     // granada não voa o mapa inteiro; foguete tem o alcance de tiro normal
@@ -699,6 +754,7 @@ io.on('connection', socket => {
     p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
     if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 520) return;
     p.dmgWindow.push({ t: now, d: dmgReq });
+    (victim.hitBy || (victim.hitBy = {}))[socket.id] = now; // vale pro crédito de kill
     io.to(d.targetId).emit('youWereHit', {
       dmg: dmgReq, fromPos: impact,
       shooterId: socket.id, shooterNick: p.nick,
@@ -736,6 +792,9 @@ io.on('connection', socket => {
     let killer = !environmentalCause && d && d.killerId ? players.get(d.killerId) : null;
     if (killer && killer.spectator) killer = null; // espectador não mata ninguém
     if (killer && d.killerId === socket.id) killer = null; // suicídio não vira eliminação própria no feed
+    // crédito de kill só pra quem realmente acertou a vítima nos últimos 10s
+    // (o `killerId` que a vítima declara não basta — precisa de acerto validado)
+    if (killer && !(victim.hitBy && Date.now() - (victim.hitBy[d.killerId] || 0) < KILL_CREDIT_WINDOW_MS)) killer = null;
     if (killer) killer.kills++;
     const byZone = cause ? cause === 'gas' : !!(d && d.byZone);
     io.emit('playerKilled', {
@@ -784,6 +843,9 @@ io.on('connection', socket => {
   socket.on('deathDrop', d => {
     const p = players.get(socket.id);
     if (!p || match.phase !== 'PLAYING') return;
+    // loot só vem de quem participa da partida (não de espectador). NÃO
+    // bloquear por !alive: morte por zona/cidade já zera alive antes do drop.
+    if (p.spectator) return;
     if (!p.canDrop) return; // um drop por vida — sem spam de loot
     if (!d || !Array.isArray(d.pos) || !Array.isArray(d.items)) return;
     const pos = d.pos.slice(0, 3).map(Number);
@@ -852,6 +914,12 @@ io.on('connection', socket => {
   });
 
   socket.on('disconnect', () => {
+    // devolve a vaga do IP ao pool (só se esta conexão foi contada)
+    const ipc = socket.data.ipCounted;
+    if (ipc && connByIp.has(ipc)) {
+      const n = connByIp.get(ipc) - 1;
+      if (n <= 0) { connByIp.delete(ipc); claimFailByIp.delete(ipc); } else connByIp.set(ipc, n);
+    }
     const p = players.get(socket.id);
     players.delete(socket.id);
     // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
