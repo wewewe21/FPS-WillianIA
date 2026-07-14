@@ -1,5 +1,6 @@
 /* criaturas da noite (zumbis/fantasmas) — extraído de game.js; deps explícitas */
 import * as THREE from 'three';
+import { meleeBlocked } from './aihelpers.js';
 
 export function createNight(deps) {
   const { rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, Structures, obstaclesNear, addScore, addKillFeed, state, player, playerDamage, extraTargets, Pickups, Env, MFlags } = deps;
@@ -73,28 +74,8 @@ export function createNight(deps) {
   for (let i = 0; i < 5; i++) makeCreature(true);
   let wasDeepNight = false;
 
-  /* mordida/toque não atravessa parede, árvore nem pedra — o fantasma pode
-     FLUTUAR através delas (design), mas o golpe precisa de contato real */
-  const _attackFrom = new THREE.Vector3(), _attackTo = new THREE.Vector3();
-  function meleeBlocked(c) {
-    const g = c.group;
-    _attackFrom.set(g.position.x, g.position.y + 1, g.position.z);
-    _attackTo.set(player.pos.x, player.pos.y + 0.9, player.pos.z);
-    if (Math.abs(_attackTo.y - _attackFrom.y) > 1.8) return true; // andar de cima/baixo
-    if (Structures && typeof Structures.segBlocked === 'function' &&
-        Structures.segBlocked(_attackFrom, _attackTo)) return true;
-    if (typeof obstaclesNear !== 'function') return false;
-    const dx = _attackTo.x - _attackFrom.x, dz = _attackTo.z - _attackFrom.z;
-    const len2 = dx * dx + dz * dz;
-    if (len2 < 1e-8) return false;
-    for (const o of obstaclesNear((_attackFrom.x + _attackTo.x) * 0.5, (_attackFrom.z + _attackTo.z) * 0.5)) {
-      const k = Math.max(0, Math.min(1,
-        ((o.x - _attackFrom.x) * dx + (o.z - _attackFrom.z) * dz) / len2));
-      const nx = _attackFrom.x + dx * k, nz = _attackFrom.z + dz * k;
-      if ((nx - o.x) ** 2 + (nz - o.z) ** 2 < o.r * o.r) return true;
-    }
-    return false;
-  }
+  /* mordida/toque não atravessa parede/árvore/pedra — fantasma flutua (design)
+     mas o golpe precisa de contato real; ver meleeBlocked() em aihelpers.js */
 
   function update(dt, t) {
     const nk = Env.nightK;
@@ -134,7 +115,7 @@ export function createNight(deps) {
         }
       }
       c.hitT = Math.max(0, c.hitT - dt);
-      if (dP < 1.6 && c.hitT <= 0 && !player.dead && !meleeBlocked(c)) {
+      if (dP < 1.6 && c.hitT <= 0 && !player.dead && !meleeBlocked(c.group, player.pos, Structures, obstaclesNear)) {
         c.hitT = c.ghost ? 0.8 : 1.2;
         playerDamage(c.ghost ? 7 : 13, g.position, { type: c.ghost ? 'ghost' : 'zombie' });
         if (c.ghost) SFX.whisper();

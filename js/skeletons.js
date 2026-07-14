@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
+import { meleeBlocked } from './aihelpers.js';
 
 export function createSkeletons(deps) {
   const { rand, TAU, heightAt, WATER_LEVEL, SFX, scene, csmMat, addScore, addKillFeed,
@@ -15,7 +16,6 @@ export function createSkeletons(deps) {
   const COUNT = 7, HP = 90, SPEED = 3.1, MELEE_DMG = 12, MELEE_RANGE = 1.8, MELEE_CD = 1.1;
   const MIN_SPAWN_SEPARATION = 24;
   const list = [];
-  const _attackFrom = new THREE.Vector3(), _attackTo = new THREE.Vector3();
   let enabled = true;
   const api = { list, update, setEnabled, modelReady: false };
 
@@ -25,25 +25,6 @@ export function createSkeletons(deps) {
       sk.enabled = enabled;
       sk.group.visible = enabled && sk.alive;
     }
-  }
-
-  function meleeBlocked(sk) {
-    const g = sk.group;
-    _attackFrom.set(g.position.x, g.position.y + 1, g.position.z);
-    _attackTo.set(player.pos.x, player.pos.y + 0.9, player.pos.z);
-    if (Math.abs(_attackTo.y - _attackFrom.y) > 1.8) return true;
-    if (Structures && typeof Structures.segBlocked === 'function' && Structures.segBlocked(_attackFrom, _attackTo)) return true;
-    if (typeof obstaclesNear !== 'function') return false;
-    const dx = _attackTo.x - _attackFrom.x, dz = _attackTo.z - _attackFrom.z;
-    const len2 = dx * dx + dz * dz;
-    if (len2 < 1e-8) return false;
-    for (const o of obstaclesNear((_attackFrom.x + _attackTo.x) * 0.5, (_attackFrom.z + _attackTo.z) * 0.5)) {
-      const k = Math.max(0, Math.min(1,
-        ((o.x - _attackFrom.x) * dx + (o.z - _attackFrom.z) * dz) / len2));
-      const nx = _attackFrom.x + dx * k, nz = _attackFrom.z + dz * k;
-      if ((nx - o.x) ** 2 + (nz - o.z) ** 2 < o.r * o.r) return true;
-    }
-    return false;
   }
 
   // ponto de chão firme (fora de lago) — pra spawn e respawn
@@ -194,7 +175,7 @@ export function createSkeletons(deps) {
       g.rotation.z = sw * 0.05; // gingado
       // porrada de osso
       sk.hitT = Math.max(0, sk.hitT - dt);
-      if (dP < MELEE_RANGE && sk.hitT <= 0 && !player.dead && !meleeBlocked(sk)) {
+      if (dP < MELEE_RANGE && sk.hitT <= 0 && !player.dead && !meleeBlocked(sk.group, player.pos, Structures, obstaclesNear)) {
         sk.hitT = MELEE_CD;
         playerDamage(MELEE_DMG, g.position, { type: 'skeleton' });
       }
