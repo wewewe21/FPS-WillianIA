@@ -959,7 +959,7 @@ process.on('exit', () => { if (botsProc) try { botsProc.kill(); } catch (e) { /*
 
 /* internos expostos pra suite de QA; o listen só roda quando executado
    direto (node server.js) — require() nos testes não abre porta */
-module.exports = { saveRankNow, buildPlan, zoneAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank };
+module.exports = { saveRankNow, buildPlan, zoneAt, shipPosAt, rollChest, mulberry32, LIM, rankEntry, pruneRank, topRank };
 
 if (require.main === module) {
   server.listen(PORT, () => {

@@ -22,7 +22,7 @@ process.once('exit', cleanupRank);
 // além do processo filho que executa a partida.
 const inheritedRankFile = process.env.RANK_FILE;
 process.env.RANK_FILE = rankFile;
-const { zoneAt } = require(path.join(__dirname, '..', 'server.js'));
+const { zoneAt, shipPosAt } = require(path.join(__dirname, '..', 'server.js'));
 if (inheritedRankFile === undefined) delete process.env.RANK_FILE;
 else process.env.RANK_FILE = inheritedRankFile;
 
@@ -39,12 +39,6 @@ const PORT = 3197;
 const URL = `http://localhost:${PORT}`;
 let activeServer = null;
 
-const shipPos = (t, plan) => {
-  const sp = plan.ship;
-  const k = Math.min(Math.max(t / sp.flyTime, 0), 1.18);
-  return [sp.from[0] + (sp.to[0] - sp.from[0]) * k, sp.alt,
-    sp.from[1] + (sp.to[1] - sp.from[1]) * k];
-};
 const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floor(arr.length * p)] : 0;
 
 (async () => {
@@ -122,7 +116,7 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
       if (!b.alive || b.afk && b.landed) continue;
       if (b.quitAt && t > b.quitAt && b.s.connected) { b.s.disconnect(); b.alive = false; continue; }
       if (b.phase === 'SHIP') {
-        const sp = shipPos(t, plan);
+        const sp = shipPosAt(t, plan);
         [b.x, b.y, b.z] = sp;
         if (t >= b.jumpAt) { b.phase = 'FALL'; }
         b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, car: -1 });

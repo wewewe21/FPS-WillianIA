@@ -9,7 +9,7 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { io } = require('socket.io-client');
-const { zoneAt, mulberry32 } = require(path.join(__dirname, '..', 'server.js'));
+const { zoneAt, mulberry32, shipPosAt } = require(path.join(__dirname, '..', 'server.js'));
 
 const NICKS = ['Zumbi', 'Falcao', 'Vaga-Lume', 'Trovao', 'Golem Jr', 'Coiote', 'Visitante', 'Sombra',
   'Pantera', 'Cacto', 'Urubu', 'Lagarto', 'Tempestade', 'Neve', 'Fumaca', 'Raio'];
@@ -24,12 +24,6 @@ const WEAPON_PROFILES = {
   PLASMA: { range: 75, dmg: 19, bursts: 2, cooldown: 1.0 },
   SNIPER: { range: 110, dmg: 32, bursts: 1, cooldown: 1.2 }, // leve: rápida, dano menor
   FACA: { range: 2.8, dmg: 24, bursts: 1, cooldown: 1.0 },
-};
-
-const shipPos = (t, plan) => {
-  const sp = plan.ship;
-  const k = Math.min(Math.max(t / sp.flyTime, 0), 1.18);
-  return [sp.from[0] + (sp.to[0] - sp.from[0]) * k, sp.alt, sp.from[1] + (sp.to[1] - sp.from[1]) * k];
 };
 
 function selectTarget(self, candidates, maxRange) {
@@ -310,7 +304,7 @@ function startBots(N, URL) {
     for (const b of bots) {
       if (!b.alive) continue;
       if (b.phase === 'SHIP') {
-        [b.x, b.y, b.z] = shipPos(t, plan);
+        [b.x, b.y, b.z] = shipPosAt(t, plan);
         if (t >= b.jumpAt) b.phase = 'FALL';
         b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, heldWeapon: 'FACA', car: -1 });
       } else if (b.phase === 'FALL') {
