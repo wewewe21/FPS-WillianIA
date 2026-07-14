@@ -154,3 +154,35 @@ duplicações eliminadas, arquivos removidos).
 
 Regra de ouro (skill): **nunca declarar redução só porque game.js encolheu.**
 Reportar sempre a **redução líquida do repositório**.
+
+## Resultado (2026-07-14) — parada consciente
+
+Executado e commitado (5 commits, suíte 278/278 verde, lint limpo):
+
+| Commit | Etapa | Net |
+|---|---|---|
+| tooling+inventário | 0 | — |
+| `_q1`/`_m1` + capture-car-models | 1 (código morto) | ‑71 |
+| `meleeBlocked` → `js/aihelpers.js` | 2a | ‑13 |
+| `shipPosAt` reusado (3 cópias→1) | 2a | ‑12 |
+| `prepRiggedMesh` → `js/meshutils.js` | 2a | ~0 (mata clone 125 tok) |
+
+**Redução líquida ≈ ‑96 linhas (~0,8%).** Modesta **porque a base já está no
+piso**: dead code zero, dup exata 1,82%, zero ciclos. As funções grandes são
+grandes por fazerem trabalho **distinto**, não por repetição.
+
+**NÃO fazer (decisão registrada pra não reabrir):**
+
+- **Fábrica mesh/material / `capBrightness` centralizado:** é **net-NEGATIVO**.
+  Cada site troca 2 linhas do tone-cap por 1 call + 1 linha de `import` → saldo
+  **+lines**. O código de material já é terso; extrair só adiciona boilerplate.
+  Valor seria single-source da constante `0.72`, não redução. **Não vale.**
+- **Fatiar o `start()` de 1432 linhas do br-game.js:** é **extração** (move
+  linhas entre arquivos, net ≈ 0), não redução, e carrega risco ALTO de
+  protocolo/multiplayer. Só faz sentido como objetivo "organizar", não "reduzir".
+- **Unificar deslize-em-obstáculo (skeletons/animals/night):** ~‑12 linhas, mas
+  os fatores de slide e raios divergem por criatura de propósito (afinação de
+  navegação). Risco médio pra ganho marginal. Adiado.
+
+Ferramentas de análise (`npm run analyze:*`, `refactor:check`) e a skill
+`codebase-reduction` ficam pra manter a higiene daqui pra frente.
