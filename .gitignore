@@ -24,3 +24,6 @@ tests/screenshots/
 
 # evidências geradas localmente pelos harness de captura
 output/
+
+# credenciais/infra de deploy (skill global)
+deploy.env
