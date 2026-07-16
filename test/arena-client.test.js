@@ -77,6 +77,15 @@ describe('Cliente dos modos 1v1 e Mata-Mata', { skip: !CHROME && 'Chrome nao enc
     await h.play(() => document.getElementById('arenaCurrentStart').click());
     botMatch = await started;
     await h.page.waitForFunction('window.__ARENA_active && window.__ARENA_debug?.active', { timeout: 15000 });
+    const hostId = botMatch.room.hostId;
+    const hostState = new Promise(resolve => {
+      const handler = update => {
+        if (update.id !== hostId) return;
+        bot.off('arenaPlayerUpdate', handler);
+        resolve(update);
+      };
+      bot.on('arenaPlayerUpdate', handler);
+    });
     const stateTimer = setInterval(() => bot.emit('arenaState', { pos: botMatch.spawn, rotY: 0 }), 80);
     try {
       await h.page.waitForFunction(
@@ -89,9 +98,16 @@ describe('Cliente dos modos 1v1 e Mata-Mata', { skip: !CHROME && 'Chrome nao enc
           if (data.victimId === window.__MP_init.id) window.__arenaKilledQA++;
         });
       });
-      const hostId = botMatch.room.hostId;
-      assert.equal((await ack(bot, 'arenaHit', { targetId: hostId, dmg: 60, weapon: 'FUZIL QA' })).health, 40);
-      assert.equal((await ack(bot, 'arenaHit', { targetId: hostId, dmg: 60, weapon: 'FUZIL QA' })).killed, true);
+      const hostPos = (await hostState).pos;
+      const delta = hostPos.map((value, index) => value - botMatch.spawn[index]);
+      const length = Math.hypot(...delta) || 1;
+      const hit = shotSeq => ({
+        targetId: hostId, weaponId: 6, shotSeq, hits: 1, headshots: 1,
+        aim: delta.map(value => value / length),
+      });
+      assert.equal((await ack(bot, 'arenaHit', hit(1))).health, 40);
+      await new Promise(resolve => setTimeout(resolve, 280));
+      assert.equal((await ack(bot, 'arenaHit', hit(2))).killed, true);
       await h.page.waitForFunction('window.__arenaKilledQA === 1', { timeout: 5000 });
       await h.page.waitForFunction('!window.__game.player.dead && window.__game.player.health === 100', { timeout: 7000 });
       const result = await h.play(() => ({
@@ -112,5 +128,40 @@ describe('Cliente dos modos 1v1 e Mata-Mata', { skip: !CHROME && 'Chrome nao enc
     } finally {
       clearInterval(stateTimer);
     }
+  });
+
+  it('entra diretamente em espectador quando o backend aplica a sanção de integridade', async () => {
+    const results = await h.play(async () => {
+      const socket = window.__MP.socket;
+      window.__MP.playerDamage = () => ({ blocked: true });
+      const targetId = [...window.__ARENA_debug.remotes.keys()][0];
+      const payload = {
+        targetId, weaponId: 5, shotSeq: 2_000_000,
+        hits: 1, headshots: 1, aim: [0, 0, -1],
+      };
+      const emit = () => new Promise((res, rej) =>
+        socket.timeout(3000).emit('arenaHit', payload, (error, data) => error ? rej(error) : res(data)));
+      return { first: await emit(), second: await emit(), third: await emit() };
+    });
+    assert.equal(results.first.ok, false);
+    assert.equal(results.second.ok, false);
+    assert.equal(results.third.enforced, true);
+
+    await h.page.waitForFunction(
+      "window.__BR_freeze && document.getElementById('arenaSpawnNotice')?.textContent.includes('ESPECTADOR')",
+      { timeout: 5000 },
+    );
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    const state = await h.play(() => ({
+      frozen: window.__BR_freeze,
+      notice: document.getElementById('arenaSpawnNotice')?.textContent,
+      meAlive: window.__ARENA_debug.room.players.find(player => player.id === window.__MP_init.id)?.alive,
+      errors: window.__game.errors.slice(),
+    }));
+    assert.equal(state.frozen, true);
+    assert.match(state.notice, /ESPECTADOR/);
+    assert.equal(state.meAlive, false);
+    assert.deepEqual(state.errors, []);
+    assert.deepEqual(h.pageErrors, []);
   });
 });

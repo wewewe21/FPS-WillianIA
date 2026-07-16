@@ -51,6 +51,11 @@ const ack = (socket, event, data) => new Promise((resolve, reject) =>
   socket.timeout(4000).emit(event, data, (error, result) => error ? reject(error) : resolve(result)));
 const once = (socket, event) => new Promise(resolve => socket.once(event, resolve));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function aimAt(from, to) {
+  const vector = [to[0] - from[0], to[1] + 1 - (from[1] + 1.4), to[2] - from[2]];
+  const length = Math.hypot(...vector) || 1;
+  return vector.map(value => value / length);
+}
 
 async function clientsFor(t, count) {
   const server = await spawnServer();
@@ -113,19 +118,27 @@ describe('Salas 1v1 e Mata-Mata', () => {
     await sleep(25);
 
     let matchEnded;
+    let targetSpawn = guestMatch.spawn;
+    let shotSeq = 0;
     for (let score = 1; score <= 3; score++) {
       const killed = once(guest.socket, 'arenaKilled');
       const respawned = score < 3 ? once(guest.socket, 'arenaRespawn') : null;
       if (score === 3) matchEnded = once(host.socket, 'arenaMatchEnd');
-      const first = await ack(host.socket, 'arenaHit', { targetId: guest.init.id, dmg: 60, weapon: 'FUZIL' });
-      const second = await ack(host.socket, 'arenaHit', { targetId: guest.init.id, dmg: 60, weapon: 'FUZIL' });
-      assert.equal(first.health, 40);
+      const hit = () => ({
+        targetId: guest.init.id, weaponId: 0, shotSeq: ++shotSeq,
+        hits: 1, headshots: 1, aim: aimAt(hostMatch.spawn, targetSpawn), dmg: 99999, weapon: 'HACK',
+      });
+      const first = await ack(host.socket, 'arenaHit', hit());
+      await sleep(100);
+      const second = await ack(host.socket, 'arenaHit', hit());
+      assert.equal(first.health, 48);
       assert.equal(second.killed, true);
       const death = await killed;
       assert.equal(death.killerScore, score);
       if (respawned) {
         const respawn = await respawned;
         assert.equal(respawn.health, 100);
+        targetSpawn = respawn.spawn;
         await sleep(25);
       }
     }
@@ -170,5 +183,63 @@ describe('Salas 1v1 e Mata-Mata', () => {
     assert.equal(ids.includes(arenaHost.init.id), false);
     assert.equal(ids.includes(arenaGuest.init.id), false);
     assert.equal(ids.includes(brHost.init.id), true);
+  });
+
+  it('rejeita invisibilidade subterrânea e teleporte repetido sem reancorar', async t => {
+    const [host, guest] = await clientsFor(t, 2);
+    const made = await ack(host.socket, 'arenaCreate', { mode: 'DUEL', name: 'Movimento seguro', map: 'CAMP' });
+    await ack(guest.socket, 'arenaJoin', { id: made.room.id });
+    const hostStarted = once(host.socket, 'arenaMatchStart');
+    const guestStarted = once(guest.socket, 'arenaMatchStart');
+    await ack(host.socket, 'arenaStart', {});
+    const [hostMatch] = await Promise.all([hostStarted, guestStarted]);
+    await sleep(25);
+    host.socket.emit('arenaState', { pos: hostMatch.spawn, rotY: 0, weaponId: 0 });
+    await sleep(100);
+    const updates = [];
+    guest.socket.on('arenaPlayerUpdate', update => updates.push(update));
+    const enforcement = once(host.socket, 'securityEnforcement');
+    const killed = once(host.socket, 'arenaKilled');
+    for (let index = 0; index < 15; index++) {
+      host.socket.emit('arenaState', { pos: [70, -900, 0], rotY: 0, weaponId: 0 });
+      await sleep(35);
+    }
+    assert.equal(updates.some(update => update.id === host.init.id && (update.pos[0] > 50 || update.pos[1] < 0)), false);
+    assert.equal((await enforcement).action, 'spectate');
+    assert.equal((await killed).spectator, true);
+  });
+
+  it('remove da rodada quem reutiliza o mesmo disparo impossível e não concede respawn', async t => {
+    const [host, guest] = await clientsFor(t, 2);
+    const made = await ack(host.socket, 'arenaCreate', {
+      mode: 'DUEL', name: 'Integridade', map: 'CAMP', respawn: 1,
+    });
+    await ack(guest.socket, 'arenaJoin', { id: made.room.id });
+    const hostStarted = once(host.socket, 'arenaMatchStart');
+    const guestStarted = once(guest.socket, 'arenaMatchStart');
+    await ack(host.socket, 'arenaStart', {});
+    const [hostMatch, guestMatch] = await Promise.all([hostStarted, guestStarted]);
+    await sleep(25);
+
+    const enforcement = once(host.socket, 'securityEnforcement');
+    const killed = once(host.socket, 'arenaKilled');
+    const respawns = [];
+    host.socket.on('arenaRespawn', data => respawns.push(data));
+    const payload = {
+      targetId: guest.init.id, weaponId: 0, shotSeq: 1,
+      hits: 1, headshots: 0, aim: aimAt(hostMatch.spawn, guestMatch.spawn),
+    };
+    assert.equal((await ack(host.socket, 'arenaHit', payload)).ok, true);
+    assert.equal((await ack(host.socket, 'arenaHit', payload)).ok, false);
+    assert.equal((await ack(host.socket, 'arenaHit', payload)).enforced, true);
+    const [action, death] = await Promise.all([enforcement, killed]);
+
+    assert.equal(action.action, 'spectate');
+    assert.equal(death.victimId, host.init.id);
+    assert.equal(death.weapon, 'ANTI-CHEAT');
+    assert.equal(death.spectator, true);
+    assert.equal(death.respawnIn, null);
+    await sleep(1200);
+    assert.equal(respawns.length, 0);
   });
 });

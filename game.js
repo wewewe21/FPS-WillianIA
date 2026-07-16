@@ -1233,6 +1233,7 @@ function startReload(t) {
   if (gun.reloading || gun.mag === gun.magSize || gun.reserve <= 0) return;
   gun.reloading = true;
   gun.reloadEnd = t + gun.reloadTime;
+  if (window.__MP_reload) window.__MP_reload(arsenal.indexOf(gun));
   SFX.reload();
 }
 function finishReload() {

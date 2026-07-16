@@ -19,6 +19,8 @@
     const LIM = MP.CFG.WORLD_SIZE / 2;
     const A = G.arsenal;
     const KNIFE = 5; // índice da faca no arsenal
+    const reportReload = weaponId => socket.emit('combatReload', { weaponId });
+    window.__MP_reload = reportReload;
 
     /* encaminha estado do evento da cidade (o script pode bootar depois) */
     function sendCity(c) {
@@ -125,9 +127,9 @@
           this.sphCache[2].c.set(p.x, p.y + 0.42, p.z);
           return this.sphCache;
         },
-        damage(dmg, hitPos) {
+        damage(dmg, hitPos, direction, head, shot) {
           if (hitPos && hitPos.y < this.group.position.y + 0.78) dmg *= 0.8; // perna dói menos
-          queueHit(this.id, Math.round(dmg));
+          queueHit(this.id, Math.round(dmg), hitPos, direction, head, shot);
           this.hitT = 0.3;
           return false; // morte confirmada pelo dono/servidor
         },
@@ -189,16 +191,27 @@
     /* acertos agregados por alvo (escopeta = 1 mensagem, não 8) */
     const pendingHits = new Map();
     let hitFlush = false;
-    function queueHit(targetId, dmg) {
-      pendingHits.set(targetId, (pendingHits.get(targetId) || 0) + dmg);
+    const vectorArray = value => value && Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z)
+      ? [value.x, value.y, value.z] : null;
+    function queueHit(targetId, dmg, hitPos, direction, head, shot) {
+      const current = pendingHits.get(targetId) || { hits: 0, headshots: 0, hitPos: null, aim: null, shot: null };
+      current.hits++;
+      if (head) current.headshots++;
+      current.hitPos = vectorArray(hitPos) || current.hitPos;
+      current.aim = vectorArray(direction) || current.aim;
+      current.shot = shot || current.shot;
+      pendingHits.set(targetId, current);
       if (hitFlush) return;
       hitFlush = true;
       queueMicrotask(() => {
         hitFlush = false;
-        for (const [tid, total] of pendingHits) {
+        for (const [tid, hit] of pendingHits) {
+          const weaponId = hit.shot ? hit.shot.weaponId : A.indexOf(G.gun);
+          const shotSeq = hit.shot ? hit.shot.shotSeq : MP.player.shotSeq;
           socket.emit('shotHit', {
-            targetId: tid, dmg: Math.min(total, 95), weapon: G.gun ? G.gun.name : '???',
-            fromPos: [MP.player.pos.x, MP.player.pos.y + 1.5, MP.player.pos.z],
+            targetId: tid, weaponId, shotSeq,
+            hits: hit.hits, headshots: hit.headshots,
+            hitPos: hit.hitPos, aim: hit.aim,
           });
         }
         pendingHits.clear();
@@ -228,6 +241,7 @@
       bullets.push({
         p: origin.clone(), v: dir.clone().multiplyScalar(gun.projSpeed),
         drop: gun.projDrop || 6, life: 1.7, dmg: gun.dmg, laser: !!gun.laser,
+        weaponId: A.indexOf(gun), shotSeq: MP.player.shotSeq,
       });
     };
     function segSphere(p0, seg, segLen, c, r) { // distância ao longo do segmento ou -1
@@ -273,7 +287,7 @@
           MP.DmgNums.spawn(_bv, Math.round(dmg), head);
           MP.showHitmarker(false);
           if (head) MP.SFX.headshot(); else MP.SFX.hit();
-          bestRp.damage(dmg, _bv);
+          bestRp.damage(dmg, _bv, _bp, head, { weaponId: b.weaponId, shotSeq: b.shotSeq });
           bullets.splice(i, 1);
           continue;
         }
@@ -301,7 +315,7 @@
         MP.DmgNums.spawn(_bv, Math.round(dmg), false);
         MP.showHitmarker(false);
         MP.SFX.hit();
-        bestRp.damage(dmg, _bv);
+        bestRp.damage(dmg, _bv, dir, false);
       }
     };
 
@@ -787,8 +801,13 @@
           this.sphCache[3].c.set(p.x, p.y + 1.1, p.z);
           return this.sphCache;
         },
-        damage(dmg, hitPos) {
-          socket.emit('bossHit', { dmg: Math.round(dmg) });
+        damage(dmg, hitPos, direction, head, shot) {
+          socket.emit('bossHit', {
+            weaponId: shot ? shot.weaponId : A.indexOf(G.gun),
+            shotSeq: shot ? shot.shotSeq : MP.player.shotSeq,
+            hits: 1, headshots: head ? 1 : 0,
+            bossPos: [this.group.position.x, this.group.position.y, this.group.position.z],
+          });
           bossHp = Math.max(0, bossHp - dmg); // predição local
           return false;
         },
@@ -797,7 +816,7 @@
     }
     function bossStep(dt) {
       if (!boss) return;
-      const F = G.Structures.FORT_POS;
+      const F = S.plan.boss;
       if (!boss.alive) { // afundando
         if (bossDeadAnim < 1) {
           bossDeadAnim += dt * 0.4;
@@ -829,7 +848,6 @@
       if (S.phase === 'PLAY' && !MP.player.dead && d < 8 && t - lastAoE > 2.2) {
         lastAoE = t;
         boss.slamT = 0.5;
-        MP.playerDamage(16, boss.group.position);
       }
       // barra de vida
       const near = d < 75;
@@ -891,17 +909,7 @@
       MP.setTimeScale(1);
       // morreu dirigindo/voando: sai do veículo, senão a câmera fica presa no carro no espectador
       try { if (G.state.driving || G.state.flying) G.tryToggleCar(); } catch (e) {}
-      const killer = S.lastHit && Date.now() - S.lastHit.t < 9000 ? S.lastHit : null;
-      // solta o loot no chão pros outros: armas + munição + colete + kit
-      const items = [];
-      for (let i = 0; i < A.length; i++) if (!A[i].melee && !A[i].locked)
-        items.push({ type: 'weapon', weapon: i, ammo: A[i].mag + A[i].reserve, rarity: 'raro' });
-      items.push({ type: 'ammo', amount: 60 });
-      items.push({ type: 'armor', amount: 50 });
-      if (G.inventory.medkits > 0) items.push({ type: 'med' });
-      socket.emit('deathDrop', { pos: [MP.player.pos.x, MP.player.pos.y, MP.player.pos.z], items });
-      socket.timeout(3000).emit('died',
-        { killerId: killer ? killer.shooterId : null, weapon: killer ? killer.weapon : null, byZone: !killer },
+      socket.timeout(3000).emit('reportDeath', { cause: 'AMBIENTE' },
         (err, res) => { if (!err && res && res.placement) S.myPlacement = res.placement; showRecap(); });
       setTimeout(showRecap, 1500); // garantia caso o ack não venha
     };
@@ -1019,6 +1027,7 @@
     socket.on('roster', d => {
       S.hostId = d.hostId;
       S.aliveCount = d.aliveCount;
+      S.roster = Array.isArray(d.players) ? d.players : [];
       LOBBY.setRoster(d.players);
       const alive = d.players.filter(p => p.alive).sort((a, b) => b.kills - a.kills);
       UI.rosterBox.innerHTML = '<div style="opacity:.6;font-size:9.5px;letter-spacing:2px">VIVOS · KILLS</div>' +
@@ -1048,14 +1057,47 @@
       rp.weapon = Number.isInteger(d.weapon) ? d.weapon : 0;
       rp.shotSeq = Number.isInteger(d.shotSeq) ? d.shotSeq : rp.shotSeq;
     });
+    socket.on('playerHidden', d => { if (d && d.id) removeRemote(d.id); });
     socket.on('playerLeft', d => removeRemote(d.id));
     socket.on('youWereHit', d => {
       S.lastHit = { shooterId: d.shooterId, shooterNick: d.shooterNick, weapon: d.weapon, t: Date.now() };
       const f = d.fromPos;
+      MP.player.armor = 0; // efeitos locais sem reaplicar a absorção já calculada no servidor
       MP.playerDamage(d.dmg, { x: f[0], y: f[1], z: f[2] });
+      if (Number.isFinite(d.health)) { MP.player.health = Math.max(0, d.health); MP.updateHealthHUD(); }
+      if (Number.isFinite(d.armor)) { MP.player.armor = Math.max(0, d.armor); MP.updateArmorHUD(); }
+    });
+    socket.on('healthSync', d => {
+      if (!d || !Number.isFinite(d.health)) return;
+      MP.player.health = Math.max(0, d.health); MP.updateHealthHUD();
+      if (Number.isFinite(d.armor)) { MP.player.armor = Math.max(0, d.armor); MP.updateArmorHUD(); }
+    });
+    function applyCombatState(data) {
+      if (!data || !Array.isArray(data.weapons)) return;
+      for (const state of data.weapons) {
+        const weapon = A[state.id];
+        if (!weapon) continue;
+        weapon.locked = !state.unlocked;
+        if (!weapon.melee) {
+          weapon.mag = Math.max(0, Math.min(weapon.magSize, Number(state.mag) || 0));
+          weapon.reserve = Math.max(0, Number(state.reserve) || 0);
+          if (!state.reloadingMs) weapon.reloading = false;
+        }
+      }
+      MP.updateSlotsHUD(); MP.updateAmmoHUD();
+    }
+    applyCombatState(INIT.combat);
+    socket.on('combatState', applyCombatState);
+    socket.on('securityEnforcement', d => {
+      if (!d || d.action !== 'spectate') return;
+      forceDeath = false;
+      enterSpectator();
+      UI.toast('Integridade da partida violada: você foi removido da rodada.', 'épico');
     });
     socket.on('playerKilled', d => {
-      const feed = d.byCity
+      const feed = d.bySecurity
+        ? `🛡 <b>${esc(d.victimNick)}</b> foi removido por violação de integridade`
+        : d.byCity
         ? `☄ <b>${esc(d.victimNick)}</b> morreu no ataque de mísseis à cidade`
         : d.byZone
           ? `☣ <b>${esc(d.victimNick)}</b> morreu pro gás`
@@ -1070,7 +1112,16 @@
         }
         // servidor me eliminou (zona/AFK/mísseis) mas meu cliente ainda me acha vivo:
         // força a morte local, senão viro fantasma jogando numa partida onde já morri
-        if (!MP.player.dead && (S.phase === 'PLAY' || S.phase === 'FALL' || S.phase === 'SHIP')) forceDeath = true;
+        if (!MP.player.dead && (S.phase === 'PLAY' || S.phase === 'FALL' || S.phase === 'SHIP')) {
+          forceDeath = true;
+          // Fallback independente de playerDamage: um script local pode interceptar
+          // a animação de morte, mas não pode manter o jogador ativo no servidor.
+          setTimeout(() => {
+            if (disposed || !forceDeath || recapShown || S.phase === 'ENDED') return;
+            forceDeath = false;
+            showRecap();
+          }, 800);
+        }
       }
       if (d.killerId === INIT.id) {
         S.myKills = d.killerKills;
@@ -1196,6 +1247,8 @@
 
     /* posse de veículo arbitrada no servidor (mata a corrida do "mesmo carro") */
     let myCarClaim = -1;
+    let myHeliClaim = false;
+    let heliClaimPending = false;
     function claimCar(idx) {
       myCarClaim = idx;
       socket.timeout(2500).emit('enterCar', { idx }, (err, res) => {
@@ -1215,9 +1268,21 @@
         myCarClaim = -1;
       }
     });
+    function claimHeli() {
+      heliClaimPending = true;
+      socket.timeout(2500).emit('enterHeli', {}, (err, res) => {
+        heliClaimPending = false;
+        myHeliClaim = !err && !!res && res.ok;
+        if (!myHeliClaim && G.state.flying) {
+          G.tryToggleCar();
+          MP.centerMsg('Helicóptero ocupado!', 1500);
+        }
+      });
+    }
 
     /* =============== envio do meu estado (10x/s) =============== */
     intervalIds.push(setInterval(() => {
+      if (window.__QA_SUPPRESS_BR_AUTO_STATE) return;
       if (!window.__BR_active || !MP.state.started || MP.state.paused) return;
       if (S.phase === 'SPECT' || S.phase === 'ENDED' || MP.player.dead) return;
       let p = MP.player.pos, rotY, car = -1, heli = false;
@@ -1238,6 +1303,8 @@
       if (S.phase === 'PLAY') {
         if (car >= 0 && myCarClaim !== car) claimCar(car);
         else if (car < 0 && myCarClaim >= 0) { socket.emit('leaveCar', { idx: myCarClaim }); myCarClaim = -1; }
+        if (heli && !myHeliClaim && !heliClaimPending) claimHeli();
+        else if (!heli && myHeliClaim) { socket.emit('leaveHeli', {}); myHeliClaim = false; }
       }
       socket.volatile.emit('state', {
         pos: [p.x, p.y, p.z], rotY, car, heli,
@@ -1246,33 +1313,26 @@
         crouch: S.phase === 'PLAY' && MP.player.crouchT > 0.45,
         velY: S.phase === 'FALL' ? fallVy : MP.player.vel.y,
         weapon: G.gun?.pistol ? 2 : G.gun?.pellets > 1 ? 1 : G.gun?.melee ? 3 : 0,
+        weaponId: A.indexOf(G.gun),
         shotSeq: MP.player.shotSeq,
-        armor: MP.player.armor, // alimenta o HP-espelho autoritativo do servidor
       });
     }, 100));
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ');
 
     /* watchdog de aba oculta: o loop de frames congela quando o navegador some
-       da tela — sem isto o jogador ficava eterno "na nave"/no ar, imortal fora
-       da zona, e a partida nunca terminava. Aqui, em setInterval (roda mesmo
-       em segundo plano): pulo automático, queda grosseira até o chão e o dano
-       do gás continuam acontecendo. */
+       da tela. A posição continua sendo reportada; HP da zona pertence ao servidor. */
     let lastRaf = performance.now();
     intervalIds.push(setInterval(() => {
       if (S.phase === 'SHIP' && S.plan && S.matchT() >= S.plan.ship.flyTime) jumpFromShip();
       const starved = performance.now() - lastRaf > 1500; // rAF morto = aba oculta
       if (!starved || !window.__BR_active) return;
       if (S.phase === 'FALL') fallStep(0.5);              // cai em passos de 0.5s
-      if (S.plan && S.phase === 'PLAY' && !MP.player.dead) {
-        updateZone();
-        const P = MP.player.pos;
-        if (Math.hypot(P.x - zc.x, P.z - zc.z) > zc.r) MP.playerDamage(zc.dps * 0.5, null);
-      }
+      if (S.plan && S.phase === 'PLAY' && !MP.player.dead) updateZone();
     }, 500));
 
     /* =============== loop principal do BR =============== */
     const _shipV = new THREE.Vector3();
-    let lastT = performance.now(), hudAcc = 0, dmgAcc = 0, promptAcc = 0;
+    let lastT = performance.now(), hudAcc = 0, zoneUiAcc = 0, promptAcc = 0;
     (function brTick() {
       if (disposed) return;
       requestAnimationFrame(brTick);
@@ -1411,15 +1471,13 @@
           zoneWall.material.color.setHex(zc.shrinking ? 0xff7043 : 0x37e0ff);
           zoneWall.material.opacity = zc.shrinking ? 0.2 : 0.13;
         }
-        dmgAcc += dt;
-        if (dmgAcc > 0.5) {
-          dmgAcc = 0;
+        zoneUiAcc += dt;
+        if (zoneUiAcc > 0.5) {
+          zoneUiAcc = 0;
           const P = MP.player.pos;
           const dz = Math.hypot(P.x - zc.x, P.z - zc.z);
           const fora = S.phase === 'PLAY' && !MP.player.dead && dz > zc.r && !MP.state.cinematic;
           UI.gasTint.style.opacity = fora ? '1' : '0'; // tela avermelha FORA da safe
-          if (fora)
-            MP.playerDamage(zc.dps * 0.5, null); // se alguém me feriu há pouco, a kill ainda é dele
         }
       }
 
@@ -1467,6 +1525,7 @@
       window.__BR_zumbis = false;
       window.__BR_chuteOpen = false;
       window.__FP_pose = null;
+      if (window.__MP_reload === reportReload) delete window.__MP_reload;
       if (window.__BR_cameraOverride === cameraOverride) window.__BR_cameraOverride = null;
       window.removeEventListener('mousemove', shipOrbitMouse);
       window.removeEventListener('wheel', shipOrbitWheel);

@@ -27,8 +27,11 @@
     let serverDead = false;
     let serverHealth = 100;
     let suicideSent = false;
+    let enforcedSpectator = false;
     let boundary = null;
     let resultData = null;
+    const reportReload = weaponId => socket.emit('combatReload', { weaponId });
+    window.__MP_reload = reportReload;
 
     window.__ARENA_active = true;
     window.__BR_active = true; // reaproveita a trava que desliga a IA solo
@@ -181,10 +184,10 @@
           this.spheres[2].c.set(p.x, p.y + .42, p.z);
           return this.spheres;
         },
-        damage(damage, hit) {
+        damage(damage, hit, direction, head) {
           if (!this.alive) return false;
           if (hit && hit.y < this.group.position.y + .75) damage *= .8;
-          queueHit(this.id, damage);
+          queueHit(this.id, damage, hit, direction, head);
           return false;
         },
       };
@@ -218,14 +221,22 @@
 
     const pendingHits = new Map();
     let hitFlush = false;
-    function queueHit(id, damage) {
-      pendingHits.set(id, (pendingHits.get(id) || 0) + damage);
+    const vectorArray = value => value && Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z)
+      ? [value.x, value.y, value.z] : null;
+    function queueHit(id, damage, hitPos, direction, head) {
+      const current = pendingHits.get(id) || { hits: 0, headshots: 0, hitPos: null, aim: null };
+      current.hits++;
+      if (head) current.headshots++;
+      current.hitPos = vectorArray(hitPos) || current.hitPos;
+      current.aim = vectorArray(direction) || current.aim;
+      pendingHits.set(id, current);
       if (hitFlush) return;
       hitFlush = true;
       queueMicrotask(() => {
         hitFlush = false;
-        for (const [targetId, total] of pendingHits) socket.emit('arenaHit', {
-          targetId, dmg: Math.min(95, Math.round(total)), weapon: G.gun ? G.gun.name : 'ARMA',
+        for (const [targetId, hit] of pendingHits) socket.emit('arenaHit', {
+          targetId, weaponId: G.arsenal.indexOf(G.gun), shotSeq: MP.player.shotSeq,
+          hits: hit.hits, headshots: hit.headshots, hitPos: hit.hitPos, aim: hit.aim,
         });
         pendingHits.clear();
       });
@@ -236,7 +247,10 @@
         for (const rp of remotes.values()) {
           if (!rp.alive || !rp.group.visible) continue;
           const distance = rp.group.position.distanceTo(point);
-          if (distance < radius) queueHit(rp.id, maxDamage * (1 - distance / radius) + 20);
+          if (distance < radius) {
+            const direction = rp.group.position.clone().sub(MP.player.pos).normalize();
+            queueHit(rp.id, maxDamage * (1 - distance / radius) + 20, rp.group.position, direction, false);
+          }
         }
       };
       window.__BR_melee = (origin, direction, damage) => {
@@ -249,7 +263,7 @@
           best = rp; bestDistance = distance;
         }
         if (best) {
-          queueHit(best.id, damage);
+          queueHit(best.id, damage, best.group.position, direction, false);
           MP.showHitmarker(false); MP.SFX.hit();
         }
       };
@@ -273,6 +287,21 @@
       MP.player.armor = 0;
       G.switchWeapon(0);
       MP.updateSlotsHUD(); MP.updateAmmoHUD(); MP.updateInvHUD(); MP.updateArmorHUD();
+    }
+
+    function applyCombatState(data) {
+      if (!data || !Array.isArray(data.weapons)) return;
+      for (const state of data.weapons) {
+        const weapon = G.arsenal[state.id];
+        if (!weapon) continue;
+        weapon.locked = !state.unlocked;
+        if (!weapon.melee) {
+          weapon.mag = Math.max(0, Math.min(weapon.magSize, Number(state.mag) || 0));
+          weapon.reserve = Math.max(0, Number(state.reserve) || 0);
+          if (!state.reloadingMs) weapon.reloading = false;
+        }
+      }
+      MP.updateSlotsHUD(); MP.updateAmmoHUD();
     }
 
     function buildBoundary() {
@@ -361,6 +390,8 @@
     function beginRound(data) {
       room = data.room;
       resultData = null;
+      enforcedSpectator = false;
+      window.__BR_freeze = false;
       const result = el('arenaResult'); if (result) result.style.display = 'none';
       remaining = room.timeLimit * 60;
       for (const rp of remotes.values()) {
@@ -371,6 +402,7 @@
         if (rp.rigAnimator?.reset) rp.rigAnimator.reset();
       }
       respawn(data.spawn, 1400);
+      applyCombatState(data.combat);
       buildBoundary(); updateHud();
       notice(room.mode === 'DUEL' ? 'DUELO INICIADO' : 'MATA-MATA INICIADO', 1800);
     }
@@ -378,7 +410,7 @@
     installHud();
     LOBBY.hide(); UI.showHud(false); UI.hint('');
     if (!MP.state.started) G.forceStart();
-    disableSoloWorld(); setupLoadout(); installCombatHooks(); buildBoundary();
+    disableSoloWorld(); setupLoadout(); applyCombatState(ctx.combat); installCombatHooks(); buildBoundary();
     for (const player of room.players || []) makeRemote(player);
     respawn(ctx.spawn, 1400); updateHud();
 
@@ -403,6 +435,7 @@
       rp.weapon = Number.isInteger(data.weapon) ? data.weapon : 0;
       rp.shotSeq = Number.isInteger(data.shotSeq) ? data.shotSeq : rp.shotSeq;
     });
+    socket.on('arenaPlayerHidden', data => { if (data && data.id) removeRemote(data.id); });
     socket.on('arenaDamaged', data => {
       if (!data) return;
       serverHealth = Math.max(0, data.health);
@@ -412,21 +445,38 @@
       MP.player.health = serverHealth; MP.updateHealthHUD();
     });
     socket.on('arenaHitConfirmed', () => { MP.showHitmarker(false); MP.SFX.hit(); });
+    socket.on('securityEnforcement', data => {
+      if (!data || data.action !== 'spectate') return;
+      enforcedSpectator = true;
+      serverDead = true;
+      serverHealth = 0;
+      window.__BR_freeze = true;
+      MP.player.invulnUntil = Infinity;
+      try { if (document.pointerLockElement) document.exitPointerLock(); } catch (e) {}
+      notice('REMOVIDO DA RODADA · ESPECTADOR', 5000);
+      feed('<b>Violação de integridade detectada.</b> Você ficará como espectador até a próxima rodada.');
+    });
     socket.on('arenaKilled', data => {
       if (!data) return;
       const rp = remotes.get(data.victimId);
       if (rp) { rp.alive = false; rp.deadT = 0.001; rp.group.visible = true; }
       if (data.victimId === INIT.id) {
         serverDead = true; suicideSent = true;
+        enforcedSpectator = enforcedSpectator || !!data.spectator;
         serverHealth = 0;
         if (!MP.player.dead) { MP.player.invulnUntil = 0; MP.playerDamage(99999, null); }
-        const deathSub = el('deathSub'); if (deathSub) deathSub.textContent = `respawn em ${data.respawnIn}s`;
+        const deathSub = el('deathSub');
+        if (deathSub) deathSub.textContent = data.spectator ? 'espectador até a próxima rodada' : `respawn em ${data.respawnIn}s`;
       }
       feed(data.killerNick
         ? `<b>${esc(data.killerNick)}</b> eliminou ${esc(data.victimNick)} <span style="opacity:.55">${esc(data.weapon)}</span>`
         : `${esc(data.victimNick)} caiu fora da arena`);
     });
-    socket.on('arenaRespawn', data => respawn(data.spawn, data.invulnerableMs));
+    socket.on('arenaRespawn', data => {
+      if (enforcedSpectator) return;
+      respawn(data.spawn, data.invulnerableMs); applyCombatState(data.combat);
+    });
+    socket.on('combatState', applyCombatState);
     socket.on('arenaTime', data => { remaining = data.remaining; updateHud(); });
     socket.on('arenaMatchEnd', showResult);
     socket.on('arenaMatchStart', beginRound);
@@ -438,7 +488,7 @@
     });
 
     intervals.push(setInterval(() => {
-      if (!active || room.phase !== 'PLAYING' || MP.player.dead) return;
+      if (!active || room.phase !== 'PLAYING' || MP.player.dead || enforcedSpectator) return;
       let position = MP.player.pos, rotY = MP.camera.rotation.y;
       if (G.state.driving) { position = G.Car.group.position; rotY = G.Car.group.rotation.y; }
       else if (G.state.flying) { position = G.Heli.group.position; rotY = G.Heli.group.rotation.y; }
@@ -448,6 +498,7 @@
         crouch: MP.player.crouchT > 0.45,
         velY: MP.player.vel.y,
         weapon: G.gun?.pistol ? 2 : G.gun?.pellets > 1 ? 1 : G.gun?.melee ? 3 : 0,
+        weaponId: G.arsenal.indexOf(G.gun),
         shotSeq: MP.player.shotSeq,
       });
     }, 100));
@@ -493,7 +544,7 @@
           rp.body.armL.rotation.x = -swing * .65; rp.body.armR.rotation.x = swing * .65;
         }
       }
-      if (room.phase === 'PLAYING' && !MP.player.dead) {
+      if (room.phase === 'PLAYING' && !MP.player.dead && !enforcedSpectator) {
         if (Math.abs(MP.player.health - serverHealth) > .05) {
           MP.player.health = serverHealth;
           MP.updateHealthHUD();
@@ -513,7 +564,7 @@
           notice('LIMITE DA ARENA', 650);
         }
       }
-      if (MP.player.dead && !serverDead && !suicideSent && room.phase === 'PLAYING') {
+      if (MP.player.dead && !serverDead && !suicideSent && !enforcedSpectator && room.phase === 'PLAYING') {
         suicideSent = true; socket.emit('arenaSuicide', { weapon: 'QUEDA' });
       }
       frameId = requestAnimationFrame(frame);
@@ -529,6 +580,7 @@
     function teardown() {
       if (!active) return;
       active = false; window.__ARENA_active = false; window.__BR_active = false;
+      if (window.__MP_reload === reportReload) delete window.__MP_reload;
       cancelAnimationFrame(frameId); for (const timer of intervals) clearInterval(timer);
       for (const id of [...remotes.keys()]) removeRemote(id);
       if (boundary) { MP.scene.remove(boundary); boundary.traverse(obj => { if (obj.geometry) obj.geometry.dispose(); if (obj.material) obj.material.dispose(); }); }

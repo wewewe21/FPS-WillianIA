@@ -133,10 +133,16 @@ async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort } = {}) {
   bot.emit('hello', { nick: 'BotHost' });
   await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: hostCode },
     (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
+  const botStarted = new Promise(resolve => bot.once('matchStart', resolve));
   bot.emit('requestStart');
+  bot.matchStart = await botStarted;
   await h.page.waitForFunction('window.__BR_debug && !!window.__BR_debug.S.plan', { timeout: 30000 });
   await h.play(() => {
     const S = window.__BR_debug.S;
+    // Estes cenários exercitam somente apresentação local em posições
+    // artificiais. Não publique os teletransportes do harness como candidatos
+    // reais ao servidor autoritativo.
+    window.__QA_SUPPRESS_BR_AUTO_STATE = true;
     S.phase = 'PLAY';           // pula nave/queda: direto pro chão
     window.__BR_freeze = false;
     window.QA.reset(30, 30);

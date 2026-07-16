@@ -85,6 +85,35 @@ const ack = (sock, ev, data) => new Promise((res, rej) =>
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const collect = (sock, ev) => { const a = []; sock.on(ev, d => a.push(d)); return a; };
 
+function shipPositionAt(plan, seconds) {
+  const progress = Math.min(Math.max(seconds / plan.ship.flyTime, 0), 1.18);
+  return [
+    plan.ship.from[0] + (plan.ship.to[0] - plan.ship.from[0]) * progress,
+    plan.ship.alt,
+    plan.ship.from[1] + (plan.ship.to[1] - plan.ship.from[1]) * progress,
+  ];
+}
+
+function holdAtCity(client, plan, t0) {
+  const city = [-340, 130];
+  const dx = plan.ship.to[0] - plan.ship.from[0];
+  const dz = plan.ship.to[1] - plan.ship.from[1];
+  const progress = Math.max(0, Math.min(1,
+    ((city[0] - plan.ship.from[0]) * dx + (city[1] - plan.ship.from[1]) * dz) / (dx * dx + dz * dz)));
+  const jumpAt = plan.ship.flyTime * progress;
+  const target = shipPositionAt(plan, jumpAt);
+  assert.ok(Math.hypot(target[0] - city[0], target[2] - city[1]) < 100,
+    'a rota de QA não cruza o raio letal da cidade');
+  return setInterval(() => {
+    const elapsed = (Date.now() - t0) / 1000;
+    if (elapsed < jumpAt) {
+      client.s.volatile.emit('state', { pos: shipPositionAt(plan, elapsed), rotY: 0, ship: true });
+      return;
+    }
+    client.s.volatile.emit('state', { pos: target, rotY: 0, ship: false });
+  }, 20);
+}
+
 async function partida(t, n, env = {}) {
   const srv = await spawnServer(env);
   t.after(() => srv.stop());
@@ -163,14 +192,10 @@ describe('Destruição da cidade — servidor autoritativo', () => {
   });
 
   it('dado o impacto, então quem está DENTRO do raio morre e quem está fora sobrevive — sem kill pra ninguém', async t => {
-    const { cs } = await partida(t, 3);
-    const [a, b, c] = cs;
-    // a: no centro da cidade; b: a 300m; c: borda de fora do raio (110m)
-    const iv = setInterval(() => {
-      a.s.volatile.emit('state', { pos: [-340, 4, 130], rotY: 0, car: -1 });
-      b.s.volatile.emit('state', { pos: [0, 4, 0], rotY: 0, car: -1 });
-      c.s.volatile.emit('state', { pos: [-340 + 110, 4, 130], rotY: 0, car: -1 });
-    }, 120);
+    const { cs, plan, t0 } = await partida(t, 3, { WORLD_SEED: '169', FLY_TIME: '5' });
+    const [a, b] = cs;
+    // A salta legitimamente quando a rota cruza a cidade; os demais ficam na nave, fora do raio.
+    const iv = holdAtCity(a, plan, t0);
     t.after(() => clearInterval(iv));
     const mortes = collect(b.s, 'playerKilled');
     await sleep(3400);
@@ -185,12 +210,9 @@ describe('Destruição da cidade — servidor autoritativo', () => {
   it('dada a vítima com armadura/invulnerabilidade (estado do cliente), então morre mesmo assim (decisão é do servidor)', async t => {
     // o servidor não consulta armadura/invuln — mata pela posição; este teste
     // fixa o CONTRATO: morte independe de estado defensivo do cliente
-    const { cs } = await partida(t, 2);
+    const { cs, plan, t0 } = await partida(t, 2, { WORLD_SEED: '169', FLY_TIME: '5' });
     const [a, b] = cs;
-    const iv = setInterval(() => {
-      a.s.volatile.emit('state', { pos: [-345, 4, 128], rotY: 0, car: -1 });
-      b.s.volatile.emit('state', { pos: [200, 4, 200], rotY: 0, car: -1 });
-    }, 120);
+    const iv = holdAtCity(a, plan, t0);
     t.after(() => clearInterval(iv));
     const mortes = collect(b.s, 'playerKilled');
     await sleep(3400);

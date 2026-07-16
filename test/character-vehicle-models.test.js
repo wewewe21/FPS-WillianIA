@@ -63,8 +63,12 @@ describe('Integração viva de avatar remoto e helicóptero', { skip: !CHROME &&
 
   it('dado outro jogador, então usa Helldiver de 1,9m e preserva nick, paraquedas e cache ao sair', async () => {
     bot = await startBRMatch(h);
-    const pos = await h.play(() => [36, window.__MP.groundAt(36, 34, 999), 34]);
-    bot.emit('state', { pos, rotY: 0.4, car: -1, heli: false, ship: false, chute: false });
+    const ship = bot.matchStart.plan.ship;
+    const elapsed = (Date.now() - bot.matchStart.t0) / 1000;
+    const progress = Math.min(Math.max(elapsed / ship.flyTime, 0), 1.18);
+    const pos = [ship.from[0] + (ship.to[0] - ship.from[0]) * progress, ship.alt,
+      ship.from[1] + (ship.to[1] - ship.from[1]) * progress];
+    bot.emit('state', { pos, rotY: 0.4, car: -1, heli: false, ship: true, chute: false });
     await h.page.waitForFunction(
       '[...window.__BR_debug.remotes.values()].some(r => r.modelStatus === "ready")',
       { timeout: 20000 },

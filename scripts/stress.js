@@ -49,7 +49,7 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
       x: 0, y: 0, z: 0, jumpAt: 8 * (0.25 + 0.7 * Math.random()),
       landed: false, afk: Math.random() < 0.05,          // 5% travam (aba oculta)
       quitAt: Math.random() < 0.10 ? 15 + Math.random() * 25 : 0, // 10% caem no meio
-      wp: null, lastShot: 0, diedSent: false,
+      wp: null, lastShot: 0, shotSeq: 0, diedSent: false,
     };
     s.on('connect_error', e => problems.push(`bot${i} connect_error ${e.message}`));
     s.on('init', d => { b.id = d.id; resolve(b); });
@@ -60,11 +60,9 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
     });
     s.on('youWereHit', d => {
       if (!b.alive || b.diedSent) return;
-      b.hp -= d.dmg;
+      b.hp = Number.isFinite(d.health) ? d.health : b.hp;
       if (b.hp <= 0) {
         b.diedSent = true; b.alive = false;
-        s.emit('deathDrop', { pos: [b.x, b.y, b.z], items: [{ type: 'ammo', amount: 60 }, { type: 'armor', amount: 50 }] });
-        s.emit('died', { killerId: d.shooterId, weapon: d.weapon });
       }
     });
     s.on('playerKilled', d => {
@@ -123,11 +121,16 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
           b.lastShot = t;
           const vivos = bots.filter(o => o.alive && o !== b && o.s.connected);
           const alvo = vivos[Math.floor(Math.random() * vivos.length)];
-          if (alvo) for (let k = 0; k < 3; k++)
-            b.s.emit('shotHit', { targetId: alvo.id, dmg: 18, weapon: 'FUZIL', fromPos: [b.x, b.y + 1.5, b.z] });
+          if (alvo) {
+            const ax = alvo.x - b.x, ay = alvo.y - b.y, az = alvo.z - b.z;
+            const distance = Math.hypot(ax, ay, az);
+            if (distance <= 3) b.s.emit('shotHit', {
+              targetId: alvo.id, weaponId: 5, shotSeq: ++b.shotSeq,
+              hits: 1, headshots: 0, aim: [ax / (distance || 1), ay / (distance || 1), az / (distance || 1)],
+            });
+          }
         }
         if (Math.random() < 0.002) b.s.emit('openChest', { key: 'c' + Math.floor(Math.random() * 34) }, () => {});
-        if (Math.random() < 0.002) b.s.emit('bossHit', { dmg: 100 });
         if (Math.random() < 0.001) b.s.emit('chat', { msg: 'gg bot ' + b.i });
       }
     }
