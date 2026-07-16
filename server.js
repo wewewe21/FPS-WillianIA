@@ -146,6 +146,11 @@ const GAS_DEFAULT = ['auto', 'classica', 'inversa', 'off'].includes(process.env.
   ? process.env.GAS_DEFAULT : 'auto';
 const CITY_DELAY_MS = Math.max(500, +process.env.CITY_DESTRUCTION_DELAY_MS || CityProto.DELAY_DEFAULT);
 const CITY_IMPACT_MS = Math.max(300, +process.env.CITY_DESTRUCTION_IMPACT_DELAY_MS || CityProto.IMPACT_DELAY_DEFAULT);
+// TEMPO da partida (regra da sala): escala o cronograma da zona/gás. 'normal' =
+// ritmo atual (~8 min). Só o host altera; congelado no plano no início da partida.
+const TEMPO_SCALE = { relampago: 0.38, curta: 0.62, normal: 1, longa: 1.5, maratona: 2.25 };
+const TEMPO_MODES = Object.keys(TEMPO_SCALE);
+const TEMPO_DEFAULT = TEMPO_MODES.includes(process.env.TEMPO_DEFAULT) ? process.env.TEMPO_DEFAULT : 'normal';
 
 const match = {
   phase: 'LOBBY',            // LOBBY | COUNTDOWN | PLAYING | ENDED
@@ -160,7 +165,7 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
-  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true }, // regras da sala (só o host altera)
+  flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT }, // regras da sala (só o host altera)
   cityDestruction: { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null },
   countdownTimer: null, endTimer: null,
 };
@@ -184,8 +189,9 @@ function freeCarsOf(id) {
   }
 }
 
-function buildPlan(seed, gasMode = 'classica') {
+function buildPlan(seed, gasMode = 'classica', tempo = 'normal') {
   const rng = mulberry32(seed ^ 0x9E3779B9);
+  const tScale = TEMPO_SCALE[tempo] || 1; // escala a duração da zona pelo preset
   // nave: atravessa o mapa passando perto do centro
   const a = rng() * Math.PI * 2;
   const ship = {
@@ -196,10 +202,10 @@ function buildPlan(seed, gasMode = 'classica') {
   // flag da sala: gás pode ser sorteado, invertido ou desligado (playtest:
   // "fechando de fora pra dentro sempre fica chato" + vulcão no canto)
   const gas = gasMode === 'auto' ? (rng() < 0.55 ? 'classica' : 'inversa') : gasMode;
-  if (gas === 'off') return { ship, zone: [], gas, boss: { hp: 3600 } };
-  // ritmo folgado: dá pra explorar o mapa antes do gás apertar
-  const waits = [110, 80, 65, 50, 40];  // s parado antes de mexer
-  const shrinks = [40, 32, 26, 22, 18]; // s em movimento
+  if (gas === 'off') return { ship, zone: [], gas, tempo, boss: { hp: 3600 } };
+  // ritmo folgado: dá pra explorar o mapa antes do gás apertar (escalado por tempo)
+  const waits = [110, 80, 65, 50, 40].map(w => Math.round(w * tScale));  // s parado antes de mexer
+  const shrinks = [40, 32, 26, 22, 18].map(s => Math.round(s * tScale)); // s em movimento
   const dps = [1, 2, 4, 7, 12];
   const phases = [];
   let t = ship.flyTime + 30; // gás só começa a contar depois da queda
@@ -213,7 +219,7 @@ function buildPlan(seed, gasMode = 'classica') {
         tWaitEnd: t + waits[i], tShrinkEnd: t + waits[i] + shrinks[i], dps: dps[i] });
       t += waits[i] + shrinks[i];
     }
-    return { ship, zone: phases, gas, boss: { hp: 3600 } };
+    return { ship, zone: phases, gas, tempo, boss: { hp: 3600 } };
   }
   // clássica: 5 fases encolhendo; cada centro cabe dentro do círculo anterior
   const radii = [560, 340, 200, 110, 55, 24];
@@ -227,7 +233,7 @@ function buildPlan(seed, gasMode = 'classica') {
     t += waits[i] + shrinks[i];
     cx = nx; cz = nz;
   }
-  return { ship, zone: phases, gas, boss: { hp: 3600 } };
+  return { ship, zone: phases, gas, tempo, boss: { hp: 3600 } };
 }
 
 /* loot dos baús — rolado no servidor (anti-trapaça leve) */
@@ -291,7 +297,7 @@ function startMatch() {
   match.phase = 'PLAYING';
   match.num++;
   match.t0 = Date.now();
-  match.plan = buildPlan(match.seed, match.flags.gas);
+  match.plan = buildPlan(match.seed, match.flags.gas, match.flags.tempo);
   resetRoundState();
   match.plan.flags = { ...match.flags }; // congela as regras da partida
   // destruição da cidade: timestamps ABSOLUTOS do servidor (fonte de verdade)
@@ -585,6 +591,7 @@ io.on('connection', socket => {
     if (typeof d.alien === 'boolean') match.flags.alien = d.alien;
     if (['auto', 'dia', 'noite'].includes(d.ciclo)) match.flags.ciclo = d.ciclo;
     if (['auto', 'classica', 'inversa', 'off'].includes(d.gas)) match.flags.gas = d.gas;
+    if (TEMPO_MODES.includes(d.tempo)) match.flags.tempo = d.tempo;
     if (Number.isInteger(d.bots)) {
       const n = Math.max(0, Math.min(8, d.bots));
       if (n !== match.flags.bots) { match.flags.bots = n; syncBots(); }
@@ -926,7 +933,7 @@ io.on('connection', socket => {
     if (hostId === socket.id) hostId = null;
     freeCarsOf(socket.id);
     if (players.size === 0) { // sala vazia: sessão volta ao estado de fábrica
-      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true };
+      match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true, gas: GAS_DEFAULT, alien: true, tempo: TEMPO_DEFAULT };
       match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
       if (match.phase === 'COUNTDOWN' && match.countdownTimer) clearInterval(match.countdownTimer);
       if (match.phase !== 'PLAYING' && match.phase !== 'ENDED') match.phase = 'LOBBY';

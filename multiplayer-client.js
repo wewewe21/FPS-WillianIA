@@ -286,6 +286,14 @@
                   <option value="dia">sempre dia</option>
                   <option value="noite">sempre noite</option>
                 </select></label>
+              <label>Tempo da partida:
+                <select id="fgTempo" class="brInput">
+                  <option value="relampago">Relâmpago (~3 min)</option>
+                  <option value="curta">Curta (~5 min)</option>
+                  <option value="normal">Normal (~8 min)</option>
+                  <option value="longa">Longa (~12 min)</option>
+                  <option value="maratona">Maratona (~18 min)</option>
+                </select></label>
             </div>
           </div>
         </div>
@@ -354,7 +362,8 @@
         animais: document.getElementById('fgAnimais'), zumbis: document.getElementById('fgZumbis'),
         cidade: document.getElementById('fgCidade'), alien: document.getElementById('fgAlien'),
         gas: document.getElementById('fgGas'),
-        bots: document.getElementById('fgBots'), ciclo: document.getElementById('fgCiclo') };
+        bots: document.getElementById('fgBots'), ciclo: document.getElementById('fgCiclo'),
+        tempo: document.getElementById('fgTempo') };
       const syncFlagsUI = () => {
         const isHost = INIT.id === S.hostId;
         if (fg.golem) { fg.golem.checked = S.flags.golem; fg.golem.disabled = !isHost; }
@@ -365,14 +374,15 @@
         if (fg.gas) { fg.gas.value = S.flags.gas || 'auto'; fg.gas.disabled = !isHost; }
         if (fg.bots) { fg.bots.value = String(S.flags.bots || 0); fg.bots.disabled = !isHost; }
         if (fg.ciclo) { fg.ciclo.value = S.flags.ciclo; fg.ciclo.disabled = !isHost; }
+        if (fg.tempo) { fg.tempo.value = S.flags.tempo || 'normal'; fg.tempo.disabled = !isHost; }
       };
       window.__BR_syncFlagsUI = syncFlagsUI;
       syncFlagsUI();
       const sendFlags = () => socket.emit('setFlags',
         { golem: fg.golem.checked, animais: fg.animais.checked, zumbis: fg.zumbis.checked,
           cidade: fg.cidade.checked, alien: fg.alien.checked, gas: fg.gas.value,
-          bots: +fg.bots.value, ciclo: fg.ciclo.value });
-      for (const k of ['golem', 'animais', 'zumbis', 'cidade', 'alien', 'gas', 'bots', 'ciclo'])
+          bots: +fg.bots.value, ciclo: fg.ciclo.value, tempo: fg.tempo.value });
+      for (const k of ['golem', 'animais', 'zumbis', 'cidade', 'alien', 'gas', 'bots', 'ciclo', 'tempo'])
         if (fg[k]) fg[k].addEventListener('change', sendFlags);
       const hIn = document.getElementById('brHostCode'), hBtn = document.getElementById('brHostBtn');
       if (hBtn) hBtn.addEventListener('click', () => claimHost(hIn.value));
