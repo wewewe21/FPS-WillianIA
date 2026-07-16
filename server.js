@@ -27,9 +27,11 @@ app.use((req, res, next) => {
 });
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
-  'city-destruction-client.js', 'city-destruction-protocol.js'];
+  'city-destruction-client.js', 'city-destruction-protocol.js', 'favicon.svg'];
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+// probe automático dos navegadores por /favicon.ico → serve o SVG (evita o 404)
+app.get('/favicon.ico', (req, res) => res.type('image/svg+xml').sendFile(path.join(__dirname, 'favicon.svg')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
 // modelos 3D: static restrito à pasta (o express.static bloqueia path traversal);
 // a pasta agora tem subdiretórios (Armas/, Cenários/, Personagens/, Veículos/)
