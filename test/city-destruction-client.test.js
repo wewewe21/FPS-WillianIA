@@ -185,7 +185,7 @@ describe('Cinemática — jogador fora do raio sobrevive e recupera o controle',
 describe('Morte por míssil — vítima dentro do raio + late join', { skip: !CHROME && 'Chrome não encontrado' }, () => {
   let h, bot, bot2, bot2iv;
   before(async () => {
-    h = await bootGame({ port: 3177, extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '300',
+    h = await bootGame({ port: 3177, worldSeed: '169', extraEnv: { COUNTDOWN_S: '1', NEXT_IN_S: '300', FLY_TIME: '20',
       CITY_DESTRUCTION_DELAY_MS: '5000', CITY_DESTRUCTION_IMPACT_DELAY_MS: '1500' } });
     // 2º sobrevivente fora do raio: a vítima morre no míssil e a partida
     // precisa continuar VIVA (fim de partida agora reseta o evento — correto)
@@ -193,8 +193,17 @@ describe('Morte por míssil — vítima dentro do raio + late join', { skip: !CH
     bot2 = io('http://localhost:3177', { transports: ['websocket'] });
     await new Promise(r => bot2.once('init', r));
     bot2.emit('hello', { nick: 'Sentinela' });
-    bot2.on('matchStart', () => {
-      bot2iv = setInterval(() => bot2.emit('state', { pos: [250, 3, -250], rotY: 0, car: -1 }), 2000);
+    bot2.on('matchStart', matchStart => {
+      bot2iv = setInterval(() => {
+        const ship = matchStart.plan.ship;
+        const elapsed = (Date.now() - matchStart.t0) / 1000;
+        const progress = Math.min(Math.max(elapsed / ship.flyTime, 0), 1.18);
+        bot2.emit('state', { pos: [
+          ship.from[0] + (ship.to[0] - ship.from[0]) * progress,
+          ship.alt,
+          ship.from[1] + (ship.to[1] - ship.from[1]) * progress,
+        ], rotY: 0, ship: true });
+      }, 60);
     });
     bot = await startBRMatch(h);
   });
@@ -207,23 +216,28 @@ describe('Morte por míssil — vítima dentro do raio + late join', { skip: !CH
 
   it('dado o jogador NA cidade, então morre com a mensagem oficial e sem kill creditada', async t => {
     const r = await h.play(async () => {
-      const QA = window.QA, MP = QA.MP, P = MP.player;
-      QA.reset(-340, 130); // centro da cidade
-      /* Teleporte é exclusivo do QA. O servidor corretamente rejeita os dez
-         primeiros saltos impossíveis antes de reancorar um cliente com lag;
-         usa emits confiáveis para atravessar essa janela sem depender do
-         canal volatile do loop normal. */
-      for (let i = 0; i < 12; i++) {
-        P.pos.set(-340, P.pos.y, 130);
-        MP.socket.emit('state', { pos: [-340, P.pos.y, 130], rotY: 0, car: -1, ship: false, heli: false });
-        await new Promise(r2 => setTimeout(r2, 110));
-      }
+      const MP = window.QA.MP, P = MP.player, S = window.__BR_debug.S;
+      const ship = S.plan.ship, city = [-340, 130];
+      const dx = ship.to[0] - ship.from[0], dz = ship.to[1] - ship.from[1];
+      const progress = Math.max(0, Math.min(1,
+        ((city[0] - ship.from[0]) * dx + (city[1] - ship.from[1]) * dz) / (dx * dx + dz * dz)));
+      const jumpAt = ship.flyTime * progress;
+      const target = [ship.from[0] + dx * progress, ship.alt, ship.from[1] + dz * progress];
+      const movement = setInterval(() => {
+        const elapsed = S.matchT();
+        if (elapsed < jumpAt) {
+          const k = Math.min(Math.max(elapsed / ship.flyTime, 0), 1.18);
+          MP.socket.emit('state', { pos: [ship.from[0] + dx * k, ship.alt, ship.from[1] + dz * k], rotY: 0, ship: true });
+        } else {
+          MP.socket.emit('state', { pos: target, rotY: 0, ship: false });
+          P.pos.x = target[0]; P.pos.z = target[2];
+        }
+      }, 20);
       P.armor = 50; P.invulnUntil = MP.state.gameTime + 999; // teste: defesas não salvam
-      const iv = setInterval(() => { if (!P.dead) { P.pos.set(-340, P.pos.y, 130); } }, 300);
       const t0 = performance.now();
       while (!P.dead && performance.now() - t0 < 15000)
         await new Promise(r2 => setTimeout(r2, 200));
-      clearInterval(iv);
+      clearInterval(movement);
       return {
         morreu: P.dead === true,
         mensagem: document.getElementById('deathSub').textContent,

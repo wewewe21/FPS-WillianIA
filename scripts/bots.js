@@ -28,7 +28,7 @@ for (let i = 0; i < N; i++) {
   const s = io(URL, { transports: ['websocket'] });
   const b = {
     i, s, id: null, alive: false, hp: 100, phase: 'LOBBY',
-    x: 0, y: 0, z: 0, wp: null, lastShot: 0, diedSent: false,
+    x: 0, y: 0, z: 0, wp: null, lastShot: 0, shotSeq: 0, diedSent: false,
     jumpAt: 0, mira: 0.4 + Math.random() * 0.5, // "pontaria" varia por bot
   };
   s.on('init', d => { b.id = d.id; s.emit('hello', { nick: NICKS[i % NICKS.length] + (i >= NICKS.length ? i : '') }); });
@@ -40,11 +40,9 @@ for (let i = 0; i < N; i++) {
   });
   s.on('youWereHit', d => {
     if (!b.alive || b.diedSent) return;
-    b.hp -= d.dmg;
+    b.hp = Number.isFinite(d.health) ? d.health : b.hp;
     if (b.hp <= 0) {
       b.diedSent = true; b.alive = false;
-      s.emit('deathDrop', { pos: [b.x, b.y, b.z], items: [{ type: 'ammo', amount: 60 }, { type: 'armor', amount: 50 }] });
-      s.emit('died', { killerId: d.shooterId, weapon: d.weapon });
       console.log(`[bot ${i}] morreu`);
     }
   });
@@ -80,9 +78,14 @@ setInterval(() => {
         const alvos = bots.filter(o => o.alive && o !== b);
         const alvo = alvos[Math.floor(Math.random() * alvos.length)];
         // "erra" conforme a pontaria — só uma fração das rajadas acerta
-        if (alvo && Math.random() < b.mira)
-          for (let k = 0; k < 2; k++)
-            b.s.emit('shotHit', { targetId: alvo.id, dmg: 14, weapon: 'FUZIL', fromPos: [b.x, b.y + 1.5, b.z] });
+        if (alvo && Math.random() < b.mira) {
+          const ax = alvo.x - b.x, ay = alvo.y - b.y, az = alvo.z - b.z;
+          const distance = Math.hypot(ax, ay, az);
+          if (distance <= 3) b.s.emit('shotHit', {
+            targetId: alvo.id, weaponId: 5, shotSeq: ++b.shotSeq,
+            hits: 1, headshots: 0, aim: [ax / (distance || 1), ay / (distance || 1), az / (distance || 1)],
+          });
+        }
       }
     }
   }

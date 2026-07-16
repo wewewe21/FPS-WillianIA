@@ -73,6 +73,7 @@
       hostId: INIT.hostId,
       flags: INIT.flags || { golem: true, animais: true, ciclo: 'auto' },
       myKills: 0, aliveCount: 0, myPlacement: 0,
+      roster: Array.isArray(INIT.players) ? INIT.players : [],
       lastHit: null,            // { shooterId, shooterNick, weapon, t }
       chuteOpen: false, jumped: false,
       lateJoin: INIT.phase === 'PLAYING' || INIT.phase === 'ENDED',
@@ -739,7 +740,7 @@
       currentArenaRoom = data.room;
       window.__ARENA_game.start({
         MP, G, INIT, socket, S, UI, LOBBY, esc, remoteCharacter, teardownOnline,
-        room: data.room, spawn: data.spawn,
+        room: data.room, spawn: data.spawn, combat: data.combat,
       });
     });
 

@@ -38,8 +38,21 @@ describe('Latência (proxy +120ms por sentido)', { skip: !CHROME && 'Chrome não
       bot.emit('hello', { nick: 'BotHost' }); // força um broadcast de roster
     });
     assert.ok(pageId, 'não achei o jogador da página no roster');
+    const ship = bot.matchStart.plan.ship;
+    const elapsed = (Date.now() - bot.matchStart.t0) / 1000;
+    const progress = Math.min(Math.max(elapsed / ship.flyTime, 0), 1.18);
+    const sharedPosition = [
+      ship.from[0] + (ship.to[0] - ship.from[0]) * progress,
+      ship.alt,
+      ship.from[1] + (ship.to[1] - ship.from[1]) * progress,
+    ];
+    bot.emit('state', { pos: sharedPosition, rotY: 0, ship: true });
+    await h.play(position => window.__MP.socket.emit('state', { pos: position, rotY: 0, ship: true }), sharedPosition);
+    await new Promise(resolve => setTimeout(resolve, 500));
     await h.play(() => { const P = window.QA.MP.player; P.invulnUntil = 0; P.health = 100; P.armor = 0; });
-    for (let i = 0; i < 4; i++) bot.emit('shotHit', { targetId: pageId, dmg: 20, weapon: 'LAGGUN', fromPos: [0, 5, 0] });
+    bot.emit('shotHit', {
+      targetId: pageId, weaponId: 5, shotSeq: 1, hits: 1, headshots: 0, aim: [0, 0, -1],
+    });
     const r = await h.play(async () => {
       const P = window.QA.MP.player;
       const t0 = performance.now();

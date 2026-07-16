@@ -3,8 +3,8 @@
    Uma sala global com máquina de estados:
      LOBBY → (host inicia) → PLAYING (nave→queda→combate) → ENDED → LOBBY
    Cada partida usa uma seed nova (mapa/loot/zona/rota da nave mudam).
-   O servidor é dono de: fase da partida, loot dos baús, HP do boss,
-   kills/colocação, vencedor, chat e ranking global.
+   O servidor é dono de: fase, posições aceitas, HP/armadura, arsenal/munição,
+   cadência/dano, loot, GOLEM, kills/colocação, vencedor, chat e ranking.
    ================================================================ */
 'use strict';
 const express = require('express');
@@ -13,6 +13,7 @@ const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const CityProto = require('./city-destruction-protocol.js');
+const MultiplayerRules = require('./multiplayer-rules.js');
 
 const app = express();
 /* cache: código do jogo REVALIDA sempre (no-cache + ETag = 304 barato) —
@@ -26,7 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
-const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js', 'arena-game.js',
+const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js', 'arena-game.js', 'multiplayer-rules.js',
   'city-destruction-client.js', 'city-destruction-protocol.js'];
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__dirname, f)));
@@ -35,11 +36,6 @@ for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__
 app.use('/assets/models', express.static(path.join(__dirname, 'assets', 'models')));
 app.use('/assets/animations', express.static(path.join(__dirname, 'assets', 'Animações')));
 app.use('/js', express.static(path.join(__dirname, 'js'))); // módulos ES do jogo
-// Export visual produzido pelo editor local. Apenas este JSON final é público;
-// o projeto do editor e suas rotas nunca fazem parte deste servidor.
-app.get('/config/weapon-poses.json', (req, res) => {
-  res.sendFile(path.join(__dirname, 'config', 'weapon-poses.json'));
-});
 const server = http.createServer(app);
 // QA pode bloquear o event loop do Chrome por vários segundos ao avançar
 // centenas de ticks. Produção mantém o default do Socket.IO; o harness sobe
@@ -117,6 +113,13 @@ function topRank(n = 10) {
 /* ---------------- estado da sala/partida ---------------- */
 const WORLD = 1100, LIM = WORLD / 2 - 60; // limites úteis do mapa
 const players = new Map(); // id -> { nick, colors, kills, alive, spectator, placement, pos, lastChat, lastHits: [] }
+const BR_MAX_HEALTH = 100;
+const POSITION_HORIZONTAL_LIMIT = WORLD / 2 + 100; // inclui as extremidades da rota da nave
+const POSITION_MIN_Y = -20;
+const POSITION_MAX_Y = 600;
+const SHOT_SEQUENCE_MAX = 0x7fffffff;
+const SECURITY_SIGNAL_WINDOW_MS = 3000;
+const SECURITY_ENFORCEMENT_SCORE = 12;
 
 /* anfitrião: SÓ quem digitar o código vira host (nada de host aleatório).
    Código fixo abaixo; a variável de ambiente HOST_CODE sobrescreve se quiser trocar. */
@@ -128,12 +131,12 @@ const COUNTDOWN_S = Math.max(1, +process.env.COUNTDOWN_S || 10);
 const NEXT_IN_S = Math.max(1, +process.env.NEXT_IN_S || 14);
 const FLY_TIME = Math.max(1, +process.env.FLY_TIME || 55);
 const BR_FAST = !!process.env.BR_FAST; // acelera o backstop da zona nos testes
-const ZONE_HP = BR_FAST ? 20 : 175;
 const ZONE_GRACE_S = BR_FAST ? 2 : 25;   // pós-voo: janela de queda sem punição
 const FLOAT_AFTER_S = BR_FAST ? 3 : 60;  // "nunca pousou" vale a partir daqui
 const AFK_MS = BR_FAST ? 4000 : 45000;
-const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
+const ZONE_DRAIN_X = BR_FAST ? 50 : 1;
 const CLAIM_COOLDOWN_MS = Math.max(500, +process.env.CLAIM_COOLDOWN_MS || 30000);
+const BOSS_HP = Math.max(1, +process.env.BOSS_HP || 3600);
 const CITY_DELAY_MS = Math.max(500, +process.env.CITY_DESTRUCTION_DELAY_MS || CityProto.DELAY_DEFAULT);
 const CITY_IMPACT_MS = Math.max(300, +process.env.CITY_DESTRUCTION_IMPACT_DELAY_MS || CityProto.IMPACT_DELAY_DEFAULT);
 
@@ -150,6 +153,7 @@ const match = {
   dropSeq: 0,
   bossHp: 0, bossMaxHp: 0, bossDead: false,
   carOwners: {},             // idx do veículo -> socket.id (posse arbitrada aqui)
+  heliOwner: null,
   flags: { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true }, // regras da sala (só o host altera)
   cityDestruction: { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null },
   countdownTimer: null, endTimer: null,
@@ -160,13 +164,351 @@ function resetRoundState() {
   match.drops.clear();
   match.dropSeq = 0;
   match.carOwners = {};
+  match.heliOwner = null;
+}
+
+function validChestKey(key) {
+  if (key === 'boss') return true;
+  const matchKey = /^([cs])(\d{1,3})$/.exec(key);
+  if (!matchKey) return false;
+  const index = Number(matchKey[2]);
+  return matchKey[1] === 'c' ? index < 34 : index < 128;
+}
+
+function createCombatState(arena = false) {
+  return {
+    weapons: MultiplayerRules.WEAPONS.map(weapon => ({
+      unlocked: arena || weapon.id === MultiplayerRules.BR_START_WEAPON,
+      mag: weapon.melee ? 0 : weapon.magSize,
+      reserve: arena ? Number.POSITIVE_INFINITY : 0,
+      reloadUntil: 0,
+    })),
+    equipped: arena ? 0 : MultiplayerRules.BR_START_WEAPON,
+    lastSeq: -1,
+    nextFireAt: 0,
+    currentShot: null,
+  };
+}
+
+function createSecurityState() {
+  return { score: 0, lastSignalAt: 0, enforced: false };
+}
+
+function combatPublic(combat) {
+  if (!combat) return null;
+  const now = Date.now();
+  return {
+    equipped: combat.equipped,
+    weapons: combat.weapons.map((slot, id) => ({
+      id,
+      unlocked: !!slot.unlocked,
+      mag: Number.isFinite(slot.mag) ? slot.mag : MultiplayerRules.WEAPONS[id].magSize,
+      reserve: Number.isFinite(slot.reserve) ? slot.reserve : 999,
+      reloadingMs: Math.max(0, slot.reloadUntil - now),
+    })),
+  };
+}
+
+function emitCombatState(id, combat) {
+  io.to(id).emit('combatState', combatPublic(combat));
+}
+
+function completeReload(slot, weapon, now) {
+  if (!slot.reloadUntil || now < slot.reloadUntil) return;
+  const needed = Math.max(0, weapon.magSize - slot.mag);
+  const available = Number.isFinite(slot.reserve) ? slot.reserve : needed;
+  const amount = Math.min(needed, available);
+  slot.mag += amount;
+  if (Number.isFinite(slot.reserve)) slot.reserve -= amount;
+  slot.reloadUntil = 0;
+}
+
+function startCombatReload(combat, weaponId, now = Date.now()) {
+  const weapon = MultiplayerRules.weaponById(weaponId);
+  const slot = weapon && combat && combat.weapons[weaponId];
+  if (!weapon || !slot || !slot.unlocked || weapon.melee) return false;
+  completeReload(slot, weapon, now);
+  if (slot.reloadUntil || slot.mag >= weapon.magSize || slot.reserve <= 0) return false;
+  slot.reloadUntil = now + weapon.reloadTime * 1000;
+  return true;
+}
+
+function isNewShotSequence(seq, previous) {
+  if (previous < 0) return true;
+  if (seq > previous) return true;
+  return previous > SHOT_SEQUENCE_MAX - 1024 && seq < 1024;
+}
+
+function authorizeShot(combat, raw, targetKey, consumeAmmo) {
+  if (!combat || !raw) return null;
+  const weapon = MultiplayerRules.weaponById(raw.weaponId);
+  const seq = Number(raw.shotSeq);
+  if (!weapon || !Number.isInteger(seq) || seq < 0 || seq > SHOT_SEQUENCE_MAX) return null;
+  const now = Date.now();
+  const current = combat.currentShot;
+  if (current && current.seq === seq) {
+    if (current.weaponId !== weapon.id || now - current.at > 350 || current.targets.has(targetKey)) return null;
+    const counts = MultiplayerRules.hitCounts(weapon, raw.hits, raw.headshots);
+    if (weapon.rocket) {
+      if (current.targets.size >= 16) return null;
+    } else {
+      if (current.remainingHits <= 0) return null;
+      counts.hits = Math.min(counts.hits, current.remainingHits);
+      counts.headshots = Math.min(counts.headshots, counts.hits);
+      current.remainingHits -= counts.hits;
+    }
+    current.targets.add(targetKey);
+    return { weapon, damage: MultiplayerRules.damageForHit(weapon, counts.hits, counts.headshots) };
+  }
+  if (!isNewShotSequence(seq, combat.lastSeq) || now + 12 < combat.nextFireAt) return null;
+  const slot = combat.weapons[weapon.id];
+  if (!slot || !slot.unlocked) return null;
+  completeReload(slot, weapon, now);
+  if (slot.reloadUntil) return null;
+  if (consumeAmmo && !weapon.melee) {
+    if (slot.mag <= 0) {
+      startCombatReload(combat, weapon.id, now);
+      return null;
+    }
+    slot.mag--;
+    if (slot.mag === 0 && slot.reserve > 0) slot.reloadUntil = now + weapon.reloadTime * 1000;
+  }
+  combat.equipped = weapon.id;
+  combat.lastSeq = seq;
+  combat.nextFireAt = now + MultiplayerRules.fireIntervalMs(weapon);
+  const counts = MultiplayerRules.hitCounts(weapon, raw.hits, raw.headshots);
+  combat.currentShot = {
+    seq, weaponId: weapon.id, at: now, targets: new Set([targetKey]),
+    remainingHits: weapon.rocket ? Number.POSITIVE_INFINITY : weapon.pellets - counts.hits,
+  };
+  return { weapon, damage: MultiplayerRules.damageForHit(weapon, counts.hits, counts.headshots) };
+}
+
+function impossibleShotReuse(combat, raw, targetKey) {
+  if (!combat || !raw) return null;
+  const weapon = MultiplayerRules.weaponById(raw.weaponId);
+  const seq = Number(raw.shotSeq);
+  const current = combat.currentShot;
+  if (!weapon || !Number.isInteger(seq) || !current || current.seq !== seq ||
+      current.weaponId !== weapon.id || Date.now() - current.at > 350) return null;
+  if (current.targets.has(targetKey)) return 'duplicate-shot-target';
+  if (!weapon.rocket && current.remainingHits <= 0) return 'shot-hit-budget-exceeded';
+  return null;
+}
+
+function grantCombatItems(player, items) {
+  if (!player || !player.combat || !Array.isArray(items)) return;
+  for (const item of items) {
+    if (item.type === 'weapon') {
+      const weapon = MultiplayerRules.weaponById(item.weapon);
+      const slot = weapon && player.combat.weapons[weapon.id];
+      if (!weapon || !slot) continue;
+      slot.unlocked = true;
+      if (!weapon.melee) {
+        slot.mag = Math.max(slot.mag, weapon.magSize);
+        slot.reserve = Math.min(999, slot.reserve + Math.max(0, Math.round(+item.ammo || 0)));
+      }
+    } else if (item.type === 'ammo') {
+      let id = player.combat.equipped;
+      let slot = player.combat.weapons[id];
+      if (!slot || !slot.unlocked || MultiplayerRules.WEAPONS[id].melee) {
+        id = player.combat.weapons.findIndex((candidate, index) => candidate.unlocked && !MultiplayerRules.WEAPONS[index].melee);
+        slot = player.combat.weapons[id];
+      }
+      if (slot) slot.reserve = Math.min(999, slot.reserve + Math.max(0, Math.round(+item.amount || 0)));
+    } else if (item.type === 'armor') {
+      player.armor = Math.min(100, (player.armor || 0) + Math.max(0, Math.round(+item.amount || 0)));
+    }
+  }
+}
+
+function serverDeathDrop(player) {
+  if (!player || !player.canDrop || !player.combat) return;
+  player.canDrop = false;
+  const items = [];
+  for (const weapon of MultiplayerRules.WEAPONS) {
+    const slot = player.combat.weapons[weapon.id];
+    if (!slot.unlocked || weapon.melee) continue;
+    items.push({
+      type: 'weapon', weapon: weapon.id,
+      ammo: Math.min(999, Math.max(0, slot.mag + slot.reserve)), rarity: 'raro',
+    });
+  }
+  if (!items.length) return;
+  const dropId = 'drop' + (++match.dropSeq);
+  const pos = player.pos.slice(0, 3);
+  match.drops.set(dropId, { pos, items, taken: false });
+  io.to('br').emit('dropSpawn', { id: dropId, pos, items });
+}
+
+function killBrPlayer(victimId, options = {}) {
+  const victim = players.get(victimId);
+  if (!victim || !victim.alive || victim.spectator || match.phase !== 'PLAYING') return false;
+  const killerId = options.killerId && options.killerId !== victimId ? options.killerId : null;
+  const killer = killerId ? players.get(killerId) : null;
+  const validKiller = killer && killer.alive && !killer.spectator && !killer.arenaRoom ? killer : null;
+  const aliveBefore = [...players.values()].filter(player => player.alive && !player.spectator && !player.arenaRoom).length;
+  victim.alive = false;
+  victim.health = 0;
+  victim.placement = Math.max(1, aliveBefore);
+  match.lastDead = victimId;
+  if (validKiller) validKiller.kills++;
+  serverDeathDrop(victim);
+  freeCarsOf(victimId);
+  if (match.heliOwner === victimId) match.heliOwner = null;
+  io.to('br').emit('playerKilled', {
+    victimId, victimNick: victim.nick,
+    killerId: validKiller ? killerId : null,
+    killerNick: validKiller ? validKiller.nick : null,
+    killerKills: validKiller ? validKiller.kills : 0,
+    weapon: options.weapon || '???',
+    byZone: !!options.byZone,
+    byCity: !!options.byCity,
+    bySecurity: !!options.bySecurity,
+    placement: victim.placement,
+  });
+  if (!options.deferVictory) {
+    broadcastRoster();
+    checkVictory();
+  }
+  return true;
+}
+
+function enforceSecurityPenalty(playerId, code) {
+  const player = players.get(playerId);
+  if (!player || player.security.enforced) return false;
+  const room = player.arenaRoom ? arenaRooms.get(player.arenaRoom) : null;
+  const canEnforceArena = room && room.phase === 'PLAYING' && player.arena && player.arena.alive;
+  const canEnforceBr = !player.arenaRoom && match.phase === 'PLAYING' && player.alive && !player.spectator;
+  if (!canEnforceArena && !canEnforceBr) return false;
+
+  player.security.enforced = true;
+  io.to(playerId).emit('securityEnforcement', {
+    action: 'spectate',
+    reason: 'integrity-violation',
+  });
+  const enforced = canEnforceArena
+    ? arenaKill(room, playerId, null, 'ANTI-CHEAT', { spectator: true })
+    : killBrPlayer(playerId, { weapon: 'ANTI-CHEAT', bySecurity: true });
+  if (!enforced) player.security.enforced = false;
+  else console.warn(`[SECURITY] ${player.nick} (${playerId}) removido da rodada: ${code}`);
+  return enforced;
+}
+
+function recordSecuritySignal(playerId, code, points) {
+  const player = players.get(playerId);
+  if (!player || player.security.enforced) return false;
+  const now = Date.now();
+  if (now - player.security.lastSignalAt > SECURITY_SIGNAL_WINDOW_MS) player.security.score = 0;
+  player.security.lastSignalAt = now;
+  player.security.score += points;
+  if (player.security.score < SECURITY_ENFORCEMENT_SCORE) return false;
+  return enforceSecurityPenalty(playerId, code);
+}
+
+function finiteVector(value) {
+  if (!Array.isArray(value) || value.length < 3) return null;
+  const vector = value.slice(0, 3).map(Number);
+  return vector.every(Number.isFinite) ? vector : null;
+}
+
+function resetMovementBudget(player, now = Date.now()) {
+  player.movementBudget = { at: now, horizontal: 4, vertical: 5 };
+}
+
+function acceptsMovement(player, horizontal, vertical, horizontalSpeed, verticalSpeed, now) {
+  if (!player.movementBudget) resetMovementBudget(player, now);
+  const budget = player.movementBudget;
+  const elapsed = Math.max(0, Math.min(1, (now - budget.at) / 1000));
+  budget.at = now;
+  budget.horizontal = Math.min(horizontalSpeed * 0.75 + 4, budget.horizontal + horizontalSpeed * elapsed);
+  budget.vertical = Math.min(verticalSpeed * 0.75 + 5, budget.vertical + verticalSpeed * elapsed);
+  if (horizontal > budget.horizontal || vertical > budget.vertical) return false;
+  budget.horizontal -= horizontal;
+  budget.vertical -= vertical;
+  return true;
+}
+
+function validatesAim(shooter, victim, weapon, raw) {
+  const dx = victim.pos[0] - shooter.pos[0];
+  const dy = victim.pos[1] + 1 - (shooter.pos[1] + 1.4);
+  const dz = victim.pos[2] - shooter.pos[2];
+  const distance = Math.hypot(dx, dy, dz);
+  if (distance > weapon.maxRange + 3) return false;
+  if (distance < 2) return true;
+  const aim = finiteVector(raw.aim);
+  if (!aim) return false;
+  const aimLength = Math.hypot(aim[0], aim[1], aim[2]);
+  if (aimLength < 0.5 || aimLength > 1.5) return false;
+  const dot = (aim[0] * dx + aim[1] * dy + aim[2] * dz) / (aimLength * distance);
+  const allowance = Math.min(0.45, Math.atan2(1.15, distance) + weapon.spreadHip * 2 + 0.035);
+  return dot >= Math.cos(allowance);
+}
+
+function rejectMovement(playerId, player, now, reason, points = 1) {
+  player.lastPosT = now;
+  player.strikes = (player.strikes || 0) + 1;
+  if (player.strikes === 20) console.log(`[CHEAT] ${player.nick} movimento rejeitado: ${reason}`);
+  recordSecuritySignal(playerId, 'movement:' + reason, points);
+  return false;
+}
+
+function brRecipientCanSee(sourceId, source, recipientId, recipient) {
+  if (recipient.arenaRoom || source.arenaRoom || recipientId === sourceId) return false;
+  if (match.phase !== 'PLAYING') return true;
+  if (!recipient.alive || recipient.spectator) {
+    const spectateTarget = [...players.entries()].find(([id, player]) =>
+      id !== recipientId && player.alive && !player.spectator && !player.arenaRoom);
+    return !!spectateTarget && spectateTarget[0] === sourceId;
+  }
+  return Math.hypot(
+    source.pos[0] - recipient.pos[0],
+    source.pos[1] - recipient.pos[1],
+    source.pos[2] - recipient.pos[2],
+  ) <= MultiplayerRules.BR_INTEREST_RADIUS;
+}
+
+function broadcastBrPosition(sourceId, source, payload) {
+  if (!(source.relevantTo instanceof Set)) source.relevantTo = new Set();
+  for (const [recipientId, recipient] of players) {
+    const recipientSocket = io.sockets.sockets.get(recipientId);
+    if (!recipientSocket) continue;
+    const relevant = brRecipientCanSee(sourceId, source, recipientId, recipient);
+    if (relevant) {
+      recipientSocket.volatile.emit('playerUpdate', payload);
+      source.relevantTo.add(recipientId);
+    } else if (source.relevantTo.delete(recipientId)) {
+      recipientSocket.emit('playerHidden', { id: sourceId });
+    }
+  }
+}
+
+function broadcastArenaPosition(room, sourceId, source, payload) {
+  if (!(source.arenaRelevantTo instanceof Set)) source.arenaRelevantTo = new Set();
+  for (const recipientId of room.members) {
+    if (recipientId === sourceId) continue;
+    const recipient = players.get(recipientId);
+    const recipientSocket = io.sockets.sockets.get(recipientId);
+    if (!recipient || !recipientSocket) continue;
+    const relevant = !!recipient.arena && recipient.arena.alive && Math.hypot(
+      source.pos[0] - recipient.pos[0],
+      source.pos[1] - recipient.pos[1],
+      source.pos[2] - recipient.pos[2],
+    ) <= MultiplayerRules.ARENA_INTEREST_RADIUS;
+    if (relevant) {
+      recipientSocket.volatile.emit('arenaPlayerUpdate', payload);
+      source.arenaRelevantTo.add(recipientId);
+    } else if (source.arenaRelevantTo.delete(recipientId)) {
+      recipientSocket.emit('arenaPlayerHidden', { id: sourceId });
+    }
+  }
 }
 
 function freeCarsOf(id) {
   for (const k of Object.keys(match.carOwners)) {
     if (match.carOwners[k] === id) {
       delete match.carOwners[k];
-      io.emit('carFree', { idx: +k });
+      io.to('br').emit('carFree', { idx: +k });
     }
   }
 }
@@ -180,6 +522,7 @@ function buildPlan(seed) {
     to: [-Math.cos(a) * 620 + (rng() - 0.5) * 300, -Math.sin(a) * 620 + (rng() - 0.5) * 300],
     alt: 250, flyTime: FLY_TIME,
   };
+  const boss = { hp: BOSS_HP, x: Math.cos(a) * 400, z: Math.sin(a) * 400 };
   // zona: 5 fases encolhendo; cada centro cabe dentro do círculo anterior
   const radii = [560, 340, 200, 110, 55, 24];
   const waits = [50, 45, 40, 35, 30];   // s parado antes de encolher
@@ -197,10 +540,16 @@ function buildPlan(seed) {
     t += waits[i] + shrinks[i];
     cx = nx; cz = nz;
   }
-  return { ship, zone: phases, boss: { hp: 3600 } };
+  return { ship, zone: phases, boss };
 }
 
-/* loot dos baús — rolado no servidor (anti-trapaça leve) */
+function bossPositionAt(t, plan = match.plan) {
+  if (!plan || !plan.boss) return null;
+  const angle = t * 0.055;
+  return [plan.boss.x + Math.cos(angle) * 26, plan.boss.z + Math.sin(angle) * 26];
+}
+
+/* loot dos baús — rolado e concedido no servidor */
 const WEAPON_TIERS = [ // idx do arsenal: 1=escopeta 0=fuzil 2=DMR 3=bazuca 4=plasma 6=sniper leve 7=escopeta rajada
   { rarity: 'incomum',  weapon: 1, ammo: 18 },
   { rarity: 'incomum',  weapon: 7, ammo: 27 },
@@ -224,15 +573,14 @@ function rollChest(rng, luck = 0) {
 }
 
 /* ---------------- ciclo da partida ---------------- */
-function roster(withPos) {
+function roster() {
   return [...players.entries()].filter(([, p]) => !p.arenaRoom).map(([id, p]) => ({
     id, nick: p.nick, colors: p.colors, kills: p.kills,
     alive: p.alive, spectator: p.spectator,
-    ...(withPos ? { pos: p.pos } : {}), // pos só no init — broadcast viraria wallhack
   }));
 }
 const sysChat = msg => io.emit('chat', { sys: true, msg });
-const broadcastRoster = () => io.to('br').emit('roster', { phase: match.phase, players: roster(false), aliveCount: match.aliveCount, hostId });
+const broadcastRoster = () => io.to('br').emit('roster', { phase: match.phase, players: roster(), aliveCount: match.aliveCount, hostId });
 
 function startCountdown() {
   if (match.phase !== 'LOBBY') return;
@@ -282,13 +630,20 @@ function startMatch() {
   for (const p of players.values()) {
     if (p.spectator) continue; // quem entrou tarde continua espectador
     p.alive = true; p.kills = 0; p.placement = 0;
-    p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true;
-    // HP AUTORITATIVO do servidor: espelha o combate pra decidir a morte aqui,
-    // não confiando no cliente da vítima (ver shotHit/serverCombatKill).
-    p.hp = 100; p.armor = 0; p.killTimes = []; p.dmgTo = new Map();
+    p.health = BR_MAX_HEALTH;
+    p.armor = 0;
+    p.combat = createCombatState(false);
+    p.security = createSecurityState();
+    p.lastBossDamageAt = 0;
+    p.lastState = Date.now(); p.canDrop = true;
+    p.pos = shipPosAt(0, match.plan);
+    p.lastPos = p.pos.slice(); p.lastPosT = Date.now();
+    p.onShip = true; resetMovementBudget(p, p.lastPosT);
+    p.relevantTo = new Set();
     match.aliveCount++;
   }
   io.to('br').emit('matchStart', { t0: match.t0, serverNow: Date.now(), plan: match.plan, num: match.num });
+  for (const [id, p] of players) if (!p.spectator && !p.arenaRoom) emitCombatState(id, p.combat);
   broadcastRoster();
   sysChat(`Partida #${match.num} começou — ${match.aliveCount} na nave. Boa sorte!`);
   console.log(`[MATCH ${match.num}] começou com ${match.aliveCount} jogadores · seed ${match.seed}`);
@@ -343,42 +698,6 @@ function checkVictory() {
   else if (alive.length === 0) endMatch(match.lastDead || null); // morte mútua: último a cair vence
 }
 
-/* ---------------- morte de combate DECIDIDA PELO SERVIDOR ----------------
-   Chamada só quando o HP-espelho do servidor chega a 0. É a autoridade sobre
-   quem morre em combate: um cliente adulterado não consegue nem forjar mortes
-   alheias nem se tornar imortal (o mirror ignora o que o cliente diz de vida).
-   O `died` do cliente vira só um fallback pra morte ambiental (queda/afogar). */
-function serverCombatKill(victimId, killerId, weapon) {
-  const victim = players.get(victimId);
-  if (!victim || !victim.alive || victim.spectator || match.phase !== 'PLAYING') return;
-  victim.alive = false;
-  victim.placement = match.aliveCount;
-  match.lastDead = victimId;
-  const killer = killerId && killerId !== victimId ? players.get(killerId) : null;
-  if (killer && !killer.spectator) {
-    killer.kills++;
-    // detector: ninguém abate 4+ pessoas em 1.5s de forma legítima
-    const nowK = Date.now();
-    killer.killTimes = (killer.killTimes || []).filter(t => nowK - t < 1500);
-    killer.killTimes.push(nowK);
-    if (killer.killTimes.length >= 4) {
-      const sock = io.sockets.sockets.get(killerId);
-      console.log(`[CHEAT] ${killer.nick} (${killerId}) abateu ${killer.killTimes.length} em 1.5s — expulso`);
-      if (sock) sock.disconnect(true);
-    }
-  }
-  io.emit('playerKilled', {
-    victimId, victimNick: victim.nick,
-    killerId: killer ? killerId : null, killerNick: killer ? killer.nick : null,
-    killerKills: killer ? killer.kills : 0,
-    weapon: cleanSoft(weapon).slice(0, 24) || '???',
-    byZone: false, placement: victim.placement,
-  });
-  freeCarsOf(victimId);
-  broadcastRoster();
-  checkVictory();
-}
-
 /* ---------------- destruição da cidade (relógio do servidor) ----------------
    ticker curto em vez de setTimeout único: sobrevive a ajustes de relógio e
    garante transições exatamente-uma-vez por eventId. */
@@ -402,16 +721,7 @@ setInterval(() => {
     for (const [id, p] of players) {
       if (p.spectator || !p.alive) continue;
       if (Math.hypot(p.pos[0] - C.x, p.pos[2] - C.z) > R) continue;
-      p.alive = false;
-      p.placement = match.aliveCount;
-      match.lastDead = id;
-      freeCarsOf(id);
-      io.emit('playerKilled', {
-        victimId: id, victimNick: p.nick,
-        killerId: null, killerNick: null, killerKills: 0,
-        weapon: 'MÍSSEIS', byZone: false, byCity: true,
-        placement: p.placement,
-      });
+      killBrPlayer(id, { weapon: 'MÍSSEIS', byCity: true, deferVictory: true });
       console.log(`[CIDADE] ${p.nick} morreu no ataque de mísseis`);
     }
     cityBroadcast();
@@ -420,11 +730,9 @@ setInterval(() => {
   }
 }, 250).unref();
 
-/* ---------------- zona autoritativa (backstop do servidor) ----------------
-   O dano de gás normal é aplicado pelo cliente, mas cliente com aba oculta
-   congela o loop e ficava "vivo flutuando fora da safe" pra sempre, travando
-   a vitória. Aqui o servidor espelha o círculo e elimina quem o cliente não
-   elimina: fora da zona, flutuando na altitude da nave ou AFK sem mandar estado. */
+/* ---------------- zona autoritativa ----------------
+   O servidor espelha o círculo, mantém o HP oficial e elimina quem fica fora,
+   flutuando na altitude da nave ou AFK sem mandar estado. */
 /* posição esperada da nave em t (valida o flag ship dos clientes) */
 function shipPosAt(t, plan = match.plan) {
   const sp = plan.ship;
@@ -461,25 +769,44 @@ setInterval(() => {
     const outside = Math.hypot(p.pos[0] - zone.x, p.pos[2] - zone.z) > zone.r + 1;
     const floating = p.pos[1] > 120 && t > flyT + FLOAT_AFTER_S; // nunca pousou
     const afk = now - (p.lastState || match.t0) > AFK_MS;        // parou de mandar estado
-    if (outside || floating) p.zoneHp -= zone.dps * ZONE_DRAIN_X + (floating ? 6 : 0);
-    else if (afk) p.zoneHp -= 25;
-    else p.zoneHp = Math.min(ZONE_HP, p.zoneHp + 8);
-    if (p.zoneHp <= 0) {
-      p.alive = false;
-      p.placement = match.aliveCount;
-      match.lastDead = id;
-      io.emit('playerKilled', {
-        victimId: id, victimNick: p.nick,
-        killerId: null, killerNick: null, killerKills: 0,
-        weapon: 'ZONA', byZone: true, placement: p.placement,
-      });
+    const damage = outside || floating
+      ? zone.dps * ZONE_DRAIN_X + (floating ? 6 : 0)
+      : afk ? 25 : 0;
+    if (damage > 0) {
+      p.health = Math.max(0, p.health - damage);
+      io.to(id).emit('healthSync', { health: p.health, armor: p.armor, source: 'zone' });
+    }
+    if (p.health <= 0) {
+      killBrPlayer(id, { weapon: 'ZONA', byZone: true });
       console.log(`[ZONA] servidor eliminou ${p.nick} (fora=${outside} voando=${floating} afk=${afk})`);
-      broadcastRoster();
-      checkVictory();
       if (match.phase !== 'PLAYING') break; // partida acabou dentro do loop
     }
   }
 }, 1000).unref(); // unref: só relevante pros testes de unidade (listen mantém o processo vivo)
+
+/* O GOLEM é determinístico e seu dano também pertence ao servidor. O cliente
+   só anima o golpe; ignorar playerDamage no DevTools não altera o HP oficial. */
+setInterval(() => {
+  if (match.phase !== 'PLAYING' || !match.plan || match.bossDead || !match.flags.golem) return;
+  const now = Date.now();
+  const bossPos = bossPositionAt((now - match.t0) / 1000);
+  if (!bossPos) return;
+  for (const [id, player] of players) {
+    if (!player.alive || player.spectator || player.arenaRoom || player.pos[1] > 50) continue;
+    if (Math.hypot(player.pos[0] - bossPos[0], player.pos[2] - bossPos[1]) >= 8) continue;
+    if (now - (player.lastBossDamageAt || 0) < 2200) continue;
+    player.lastBossDamageAt = now;
+    player.health = Math.max(0, player.health - 16);
+    io.to(id).emit('healthSync', {
+      health: player.health, armor: player.armor, source: 'boss',
+      fromPos: [bossPos[0], player.pos[1], bossPos[1]],
+    });
+    if (player.health <= 0) {
+      killBrPlayer(id, { weapon: 'GOLEM' });
+      if (match.phase !== 'PLAYING') break;
+    }
+  }
+}, 250).unref();
 
 /* ---------------- conexões ---------------- */
 /* ---------------- arenas: 1v1 e mata-mata ----------------
@@ -637,7 +964,8 @@ function arenaJoinPlayer(socket, room, password) {
   if (p.arenaRoom && p.arenaRoom !== room.id) arenaLeavePlayer(socket.id, false);
   if (!room.members.has(socket.id)) room.members.add(socket.id);
   p.arenaRoom = room.id;
-  p.arena = { score: 0, deaths: 0, health: 100, alive: false, hitWindow: [], dmgWindow: [] };
+  p.arena = { score: 0, deaths: 0, health: 100, alive: false, combat: createCombatState(true) };
+  p.security = createSecurityState();
   p.spectator = true;
   p.alive = false;
   if (hostId === socket.id) hostId = null;
@@ -663,13 +991,16 @@ function arenaStartMatch(room) {
   for (const id of room.members) {
     const p = players.get(id);
     if (!p) continue;
-    p.arena = { score: 0, deaths: 0, health: 100, alive: true, hitWindow: [], dmgWindow: [],
+    p.arena = { score: 0, deaths: 0, health: 100, alive: true, combat: createCombatState(true),
       invulnerableUntil: Date.now() + ARENA_INVULN_MS };
+    p.security = createSecurityState();
+    p.arenaRelevantTo = new Set();
     const spawn = arenaSpawn(room, id);
     p.pos = spawn.slice();
     p.lastArenaState = Date.now();
+    resetMovementBudget(p, p.lastArenaState);
     io.to(id).emit('arenaMatchStart', {
-      room: arenaRoomPublic(room), spawn, serverNow: Date.now(),
+      room: arenaRoomPublic(room), spawn, serverNow: Date.now(), combat: combatPublic(p.arena.combat),
     });
   }
   emitArenaRoom(room);
@@ -704,7 +1035,7 @@ function arenaEndMatch(room, reason) {
     room.phase = 'LOBBY';
     for (const id of room.members) {
       const p = players.get(id);
-      if (p) p.arena = { score: 0, deaths: 0, health: 100, alive: false, hitWindow: [], dmgWindow: [] };
+      if (p) p.arena = { score: 0, deaths: 0, health: 100, alive: false, combat: createCombatState(true) };
     }
     emitArenaRoom(room);
   }, ARENA_RETURN_S * 1000);
@@ -713,20 +1044,25 @@ function arenaEndMatch(room, reason) {
 
 function arenaRespawn(room, id) {
   const p = players.get(id);
-  if (!p || p.arenaRoom !== room.id || room.phase !== 'PLAYING' || !p.arena) return;
+  if (!p || p.arenaRoom !== room.id || room.phase !== 'PLAYING' || !p.arena || p.security.enforced) return;
   p.arena.health = 100;
   p.arena.alive = true;
+  p.arena.combat = createCombatState(true);
+  p.arenaRelevantTo = new Set();
   p.arena.invulnerableUntil = Date.now() + ARENA_INVULN_MS;
   const spawn = arenaSpawn(room, id);
   p.pos = spawn.slice();
   p.lastArenaState = Date.now();
-  io.to(id).emit('arenaRespawn', { spawn, health: 100, invulnerableMs: ARENA_INVULN_MS });
+  resetMovementBudget(p, p.lastArenaState);
+  io.to(id).emit('arenaRespawn', {
+    spawn, health: 100, invulnerableMs: ARENA_INVULN_MS, combat: combatPublic(p.arena.combat),
+  });
   emitArenaRoom(room);
 }
 
-function arenaKill(room, victimId, killerId, weapon) {
+function arenaKill(room, victimId, killerId, weapon, options = {}) {
   const victim = players.get(victimId);
-  if (!victim || !victim.arena || !victim.arena.alive || room.phase !== 'PLAYING') return;
+  if (!victim || !victim.arena || !victim.arena.alive || room.phase !== 'PLAYING') return false;
   const killer = killerId && killerId !== victimId ? players.get(killerId) : null;
   victim.arena.alive = false;
   victim.arena.health = 0;
@@ -737,18 +1073,21 @@ function arenaKill(room, victimId, killerId, weapon) {
     victimId, victimNick: victim.nick,
     killerId: killer ? killerId : null, killerNick: killer ? killer.nick : null,
     killerScore, weapon: cleanSoft(weapon).slice(0, 24) || 'ARMA',
-    respawnIn: room.config.respawn,
+    respawnIn: options.spectator ? null : room.config.respawn,
+    spectator: !!options.spectator,
   });
   emitArenaRoom(room);
   if (killerScore >= room.config.scoreLimit) {
     arenaEndMatch(room, 'score');
-    return;
+    return true;
   }
+  if (options.spectator) return true;
   const round = room.round;
   const timer = setTimeout(() => {
     if (room.round === round) arenaRespawn(room, victimId);
   }, room.config.respawn * 1000);
   if (timer.unref) timer.unref();
+  return true;
 }
 
 setInterval(() => {
@@ -767,7 +1106,10 @@ io.on('connection', socket => {
   players.set(socket.id, {
     nick: 'Recruta', colors: null, kills: 0,
     alive: false, spectator: isMidMatch, placement: 0,
-    pos: [0, 0, 0], lastChat: 0, hitWindow: [], lastState: Date.now(), zoneHp: ZONE_HP, canDrop: true,
+    pos: [0, 0, 0], lastChat: 0, lastState: Date.now(), health: BR_MAX_HEALTH, armor: 0,
+    combat: createCombatState(false), canDrop: true, relevantTo: new Set(),
+    security: createSecurityState(),
+    onShip: false, movementBudget: null, arenaRelevantTo: new Set(),
     arenaRoom: null, arena: null,
   });
 
@@ -785,7 +1127,10 @@ io.on('connection', socket => {
     hostId,
     flags: match.flags,
     cityDestruction: match.cityDestruction,
-    players: roster(true).filter(p => p.id !== socket.id),
+    players: roster().filter(p => p.id !== socket.id),
+    combat: combatPublic(players.get(socket.id).combat),
+    health: players.get(socket.id).health,
+    armor: players.get(socket.id).armor,
     globalTop: topRank(),
     arenaRooms: [...arenaRooms.values()].map(arenaRoomPublic),
   });
@@ -835,6 +1180,14 @@ io.on('connection', socket => {
   // mensagem represada durante o carregamento de GLBs nao desloca a zona.
   socket.on('pingx', cb => {
     if (typeof cb === 'function') cb({ serverNow: Date.now() });
+  });
+
+  socket.on('combatReload', d => {
+    const p = players.get(socket.id);
+    const combat = p && p.arenaRoom && p.arena ? p.arena.combat : p && p.combat;
+    if (!combat || !d || !Number.isInteger(d.weaponId)) return;
+    startCombatReload(combat, d.weaponId);
+    emitCombatState(socket.id, combat);
   });
 
   /* salas competitivas: descoberta, criacao, configuracao e ciclo */
@@ -914,16 +1267,25 @@ io.on('connection', socket => {
     const p = players.get(socket.id);
     const room = p && p.arenaRoom ? arenaRooms.get(p.arenaRoom) : null;
     if (!room || room.phase !== 'PLAYING' || !p.arena || !p.arena.alive || !d || !Array.isArray(d.pos)) return;
-    const pos = d.pos.slice(0, 3).map(Number);
-    if (pos.length !== 3 || !pos.every(Number.isFinite)) return;
+    const pos = finiteVector(d.pos);
+    if (!pos) return;
     const preset = ARENA_MAPS[room.config.map];
-    if (Math.hypot(pos[0] - preset.center[0], pos[2] - preset.center[1]) > preset.radius + 70) return;
-    pos[0] = Math.max(-WORLD, Math.min(WORLD, pos[0]));
-    pos[1] = Math.max(-100, Math.min(400, pos[1]));
-    pos[2] = Math.max(-WORLD, Math.min(WORLD, pos[2]));
+    const now = Date.now();
+    p.lastArenaState = now;
+    if (Math.hypot(pos[0] - preset.center[0], pos[2] - preset.center[1]) > preset.radius + 5 ||
+        pos[1] < -10 || pos[1] > 150) {
+      rejectMovement(socket.id, p, now, 'arena-out-of-bounds', 3);
+      return;
+    }
+    const horizontal = Math.hypot(pos[0] - p.pos[0], pos[2] - p.pos[2]);
+    const vertical = Math.abs(pos[1] - p.pos[1]);
+    if (!acceptsMovement(p, horizontal, vertical, 18, 55, now)) {
+      rejectMovement(socket.id, p, now, 'arena-impossible-speed');
+      return;
+    }
     p.pos = pos;
-    p.lastArenaState = Date.now();
-    socket.to('arena:' + room.id).volatile.emit('arenaPlayerUpdate', {
+    if (Number.isInteger(d.weaponId) && MultiplayerRules.weaponById(d.weaponId)) p.arena.combat.equipped = d.weaponId;
+    broadcastArenaPosition(room, socket.id, p, {
       id: socket.id, pos, rotY: +d.rotY || 0,
       nick: p.nick, colors: p.colors, alive: true,
       ...cleanPlayerAnimation(d),
@@ -944,29 +1306,34 @@ io.on('connection', socket => {
       if (typeof cb === 'function') cb({ ok: false, protected: true });
       return;
     }
-    shooter.arena.hitWindow = shooter.arena.hitWindow.filter(t => now - t < 1000);
-    if (shooter.arena.hitWindow.length >= 15 || Math.hypot(
-      shooter.pos[0] - victim.pos[0], shooter.pos[1] - victim.pos[1], shooter.pos[2] - victim.pos[2]) > 320) {
+    if (Math.hypot(
+      shooter.pos[0] - victim.pos[0],
+      shooter.pos[1] - victim.pos[1],
+      shooter.pos[2] - victim.pos[2],
+    ) > MultiplayerRules.ARENA_INTEREST_RADIUS) {
       if (typeof cb === 'function') cb({ ok: false });
       return;
     }
-    const dmg = Math.min(Math.max(+d.dmg || 0, 0), 95);
-    if (dmg <= 0) { if (typeof cb === 'function') cb({ ok: false }); return; }
-    shooter.arena.dmgWindow = shooter.arena.dmgWindow.filter(e => now - e.t < 1000);
-    if (shooter.arena.dmgWindow.reduce((sum, e) => sum + e.d, 0) + dmg > 650) {
+    const targetKey = 'player:' + d.targetId;
+    const reuse = impossibleShotReuse(shooter.arena.combat, d, targetKey);
+    if (reuse && recordSecuritySignal(socket.id, reuse, 6)) {
+      if (typeof cb === 'function') cb({ ok: false, enforced: true });
+      return;
+    }
+    const shot = authorizeShot(shooter.arena.combat, d, targetKey, false);
+    if (!shot || !validatesAim(shooter, victim, shot.weapon, d)) {
       if (typeof cb === 'function') cb({ ok: false });
       return;
     }
-    shooter.arena.hitWindow.push(now);
-    shooter.arena.dmgWindow.push({ t: now, d: dmg });
+    const dmg = shot.damage;
     victim.arena.health = Math.max(0, victim.arena.health - dmg);
     io.to(d.targetId).emit('arenaDamaged', {
       dmg, health: victim.arena.health, shooterId: socket.id, shooterNick: shooter.nick,
-      weapon: cleanSoft(d.weapon).slice(0, 24) || 'ARMA', fromPos: shooter.pos,
+      weapon: shot.weapon.name, fromPos: shooter.pos,
     });
     io.to(socket.id).emit('arenaHitConfirmed', { targetId: d.targetId, health: victim.arena.health });
     const killed = victim.arena.health <= 0;
-    if (killed) arenaKill(room, d.targetId, socket.id, d.weapon);
+    if (killed) arenaKill(room, d.targetId, socket.id, shot.weapon.name);
     if (typeof cb === 'function') cb({ ok: true, health: victim.arena.health, killed });
   });
 
@@ -1020,48 +1387,73 @@ io.on('connection', socket => {
     const idx = d && Number.isInteger(d.idx) ? d.idx : -1;
     if (match.carOwners[idx] === socket.id) {
       delete match.carOwners[idx];
-      io.emit('carFree', { idx });
+      io.to('br').emit('carFree', { idx });
     }
+  });
+  socket.on('enterHeli', (d, cb) => {
+    if (typeof d === 'function') cb = d;
+    if (typeof cb !== 'function') return;
+    const p = players.get(socket.id);
+    if (!p || !p.alive || match.phase !== 'PLAYING') return cb({ ok: false });
+    if (match.heliOwner && match.heliOwner !== socket.id && players.has(match.heliOwner)) return cb({ ok: false });
+    match.heliOwner = socket.id;
+    socket.to('br').emit('heliTaken', { id: socket.id });
+    cb({ ok: true });
+  });
+  socket.on('leaveHeli', () => {
+    if (match.heliOwner !== socket.id) return;
+    match.heliOwner = null;
+    io.to('br').emit('heliFree', {});
   });
 
   socket.on('state', d => {
     const p = players.get(socket.id);
     if (!p || !d || !Array.isArray(d.pos) || d.pos.length < 3) return;
-    // morto (não-espectador) não pilota avatar durante a partida
-    if (match.phase === 'PLAYING' && !p.alive && !p.spectator) return;
-    const pos = d.pos.slice(0, 3).map(Number);
+    // morto/espectador não publica avatar durante nem depois da rodada.
+    if ((match.phase === 'PLAYING' || match.phase === 'ENDED') && !p.alive) return;
+    const pos = finiteVector(d.pos);
     // NaN/Infinity envenenava a interpolação dos outros clientes e cegava a zona
-    if (!pos.every(Number.isFinite)) return;
-    pos[0] = Math.max(-WORLD, Math.min(WORLD, pos[0]));
-    pos[1] = Math.max(-100, Math.min(600, pos[1]));
-    pos[2] = Math.max(-WORLD, Math.min(WORLD, pos[2]));
+    if (!pos) return;
     const now = Date.now();
 
-    /* ---- anti-cheat: teleporte/speedhack e abuso do flag "ship" ----
-       rejeitado = posição não propaga e lastState não renova (vira AFK pra zona) */
+    /* Snapshots do cliente são candidatos. A âncora, o relógio, a posse de
+       veículo e os limites usados para publicar a posição pertencem ao servidor. */
     if (match.phase === 'PLAYING' && p.alive && !p.spectator && match.plan) {
       const t = (now - match.t0) / 1000;
       if (d.ship) {
         // diz estar na nave: precisa estar NA nave (rota conhecida) e no tempo dela
-        if (t > match.plan.ship.flyTime + 8) { p.strikes = (p.strikes || 0) + 1; return; }
-        const sp = shipPosAt(t);
-        if (Math.hypot(pos[0] - sp[0], pos[2] - sp[2]) > 60) { p.strikes = (p.strikes || 0) + 1; return; }
-      } else if (p.lastPos) {
-        const dt = Math.max((now - p.lastPosT) / 1000, 0.05);
-        const hSpd = Math.hypot(pos[0] - p.lastPos[0], pos[2] - p.lastPos[2]) / dt;
-        const vSpd = Math.abs(pos[1] - p.lastPos[1]) / dt;
-        // carro esportivo ~42 m/s, queda 46 m/s: acima de 90/120 é teleporte
-        if (hSpd > 90 || vSpd > 120) {
-          p.strikes = (p.strikes || 0) + 1;
-          p.rejects = (p.rejects || 0) + 1;
-          if (p.strikes === 20) console.log(`[CHEAT] ${p.nick} (${socket.id}) movimento impossível: ${hSpd.toFixed(0)} m/s`);
-          if (p.strikes > 120) { console.log(`[CHEAT] ${p.nick} expulso por speedhack`); socket.disconnect(true); return; }
-          if (p.rejects <= 10) return; // rejeita; após 10 seguidas re-ancora (lag extremo legítimo)
-          p.rejects = 0;
-        } else {
-          p.rejects = 0;
-          if (hSpd > 55) p.strikes = (p.strikes || 0) + 1; // suspeito, mas passa
+        if (!p.onShip || t > match.plan.ship.flyTime + 8) {
+          rejectMovement(socket.id, p, now, 'invalid-ship-state', 3);
+          return;
         }
+        const sp = shipPosAt(t);
+        if (Math.hypot(pos[0] - sp[0], pos[2] - sp[2]) > 8 || Math.abs(pos[1] - sp[1]) > 5) {
+          rejectMovement(socket.id, p, now, 'invalid-ship-position', 3);
+          return;
+        }
+      } else {
+        if (Math.abs(pos[0]) > POSITION_HORIZONTAL_LIMIT || Math.abs(pos[2]) > POSITION_HORIZONTAL_LIMIT ||
+            pos[1] < POSITION_MIN_Y || pos[1] > POSITION_MAX_Y) {
+          rejectMovement(socket.id, p, now, 'world-out-of-bounds', 3);
+          return;
+        }
+        const car = Number.isInteger(d.car) ? d.car : -1;
+        const ownsCar = car >= 0 && match.carOwners[car] === socket.id;
+        const ownsHeli = d.heli === true && match.heliOwner === socket.id;
+        if ((car >= 0 && !ownsCar) || (d.heli && !ownsHeli)) {
+          rejectMovement(socket.id, p, now, 'unauthorized-vehicle', 3);
+          return;
+        }
+        const horizontal = Math.hypot(pos[0] - p.lastPos[0], pos[2] - p.lastPos[2]);
+        const vertical = Math.abs(pos[1] - p.lastPos[1]);
+        const maxHorizontal = ownsCar ? 70 : ownsHeli ? 80 : d.chute ? 32 : 18;
+        const maxVertical = ownsHeli ? 55 : d.chute ? 65 : 125;
+        if (!acceptsMovement(p, horizontal, vertical, maxHorizontal, maxVertical, now)) {
+          rejectMovement(socket.id, p, now, 'impossible-speed');
+          if (p.strikes > 120) socket.disconnect(true);
+          return;
+        }
+        p.onShip = false;
       }
       p.lastPos = pos;
       p.lastPosT = now;
@@ -1072,99 +1464,76 @@ io.on('connection', socket => {
 
     p.pos = pos;
     p.lastState = now;
-    // armadura reportada pelo cliente: só ABATE dano recebido por ele mesmo,
-    // então clampar em [0,50] (o armorMax do jogo) é suficiente — mentir aqui
-    // no máximo dá uma defesa extra, nunca serve pra atacar/matar outros.
-    if (Number.isFinite(+d.armor)) p.armor = Math.max(0, Math.min(50, +d.armor));
-    socket.volatile.broadcast.emit('playerUpdate', {
+    if (Number.isInteger(d.weaponId)) {
+      const slot = p.combat && p.combat.weapons[d.weaponId];
+      if (slot && slot.unlocked) p.combat.equipped = d.weaponId;
+    }
+    broadcastBrPosition(socket.id, p, {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
-      ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
-      heli: !!d.heli,
+      ship: !!d.ship, chute: !!d.chute,
+      car: Number.isInteger(d.car) && match.carOwners[d.car] === socket.id ? d.car : -1,
+      heli: !!d.heli && match.heliOwner === socket.id,
       nick: p.nick, colors: p.colors,
       ...cleanPlayerAnimation(d),
     });
   });
 
-  socket.on('shotHit', d => {
+  socket.on('shotHit', (d, cb) => {
     const p = players.get(socket.id);
-    if (!p || !d || !players.has(d.targetId) || d.targetId === socket.id) return;
-    // morto/espectador não atira; fora de partida não existe dano
-    if (match.phase !== 'PLAYING' || !p.alive) return;
-    const victim = players.get(d.targetId);
-    if (!victim.alive) return;
-    // anti-cheat CRÍTICO: alcance real entre atirador e vítima. Sem isto, um
-    // cliente adulterado emitia shotHit pra qualquer id do lobby, de qualquer
-    // distância, sem precisar acertar (nem mirar) — matava o mapa inteiro em
-    // menos de 1s. O cliente nunca reporta acerto além de 320 (bala/estilhaço)
-    // ou 5.2 (faca) — ver stepBullets()/__BR_splash() em br-game.js.
-    const MAX_SHOT_RANGE = 340;
-    const dx = p.pos[0] - victim.pos[0], dy = p.pos[1] - victim.pos[1], dz = p.pos[2] - victim.pos[2];
-    if (dx * dx + dy * dy + dz * dz > MAX_SHOT_RANGE * MAX_SHOT_RANGE) {
-      p.strikes = (p.strikes || 0) + 1;
-      if (p.strikes === 15) console.log(`[CHEAT] ${p.nick} (${socket.id}) shotHit fora de alcance repetidas vezes`);
-      if (p.strikes > 60) { console.log(`[CHEAT] ${p.nick} expulso por shotHit fora de alcance`); socket.disconnect(true); }
+    if (!p || !d || d.targetId === socket.id || !players.has(d.targetId)) {
+      if (typeof cb === 'function') cb({ ok: false });
       return;
     }
-    // anti-flood: no máx 12 acertos reportados por segundo por atirador
-    const now = Date.now();
-    p.hitWindow = p.hitWindow.filter(t => now - t < 1000);
-    if (p.hitWindow.length >= 12) return;
-    p.hitWindow.push(now);
-    // anti-cheat: orçamento de dano por atirador (450/s cobre o pior caso
-    // legítimo — fuzil automático mirando na cabeça — e corta dano infinito)
-    const dmgReq = Math.min(Math.max(+d.dmg || 0, 0), 95);
-    if (dmgReq <= 0) return;
-    p.dmgWindow = (p.dmgWindow || []).filter(e => now - e.t < 1000);
-    if (p.dmgWindow.reduce((a, e) => a + e.d, 0) + dmgReq > 450) return;
-    p.dmgWindow.push({ t: now, d: dmgReq });
-    let fromPos = [0, 0, 0];
-    if (Array.isArray(d.fromPos)) {
-      const f = d.fromPos.slice(0, 3).map(Number);
-      if (f.length === 3 && f.every(Number.isFinite)) fromPos = f;
+    // morto/espectador não atira; fora de partida não existe dano
+    if (match.phase !== 'PLAYING' || !p.alive) {
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
     }
+    const victim = players.get(d.targetId);
+    if (!victim.alive || victim.arenaRoom) {
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    const targetKey = 'player:' + d.targetId;
+    const reuse = impossibleShotReuse(p.combat, d, targetKey);
+    if (reuse && recordSecuritySignal(socket.id, reuse, 6)) {
+      if (typeof cb === 'function') cb({ ok: false, enforced: true });
+      return;
+    }
+    const shot = authorizeShot(p.combat, d, targetKey, true);
+    if (!shot || !validatesAim(p, victim, shot.weapon, d)) {
+      emitCombatState(socket.id, p.combat);
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    const absorbed = Math.min(victim.armor || 0, shot.damage * 0.7);
+    victim.armor = Math.max(0, (victim.armor || 0) - absorbed);
+    const damage = Math.min(victim.health, shot.damage - absorbed);
+    victim.health = Math.max(0, victim.health - damage);
+    victim.lastAttacker = { id: socket.id, at: Date.now(), weapon: shot.weapon.name };
     io.to(d.targetId).emit('youWereHit', {
-      dmg: dmgReq,
-      fromPos,
+      dmg: damage,
+      health: victim.health,
+      armor: victim.armor,
+      fromPos: p.pos,
       shooterId: socket.id, shooterNick: p.nick,
-      weapon: cleanSoft(d.weapon).slice(0, 24) || '???',
+      weapon: shot.weapon.name,
     });
-    /* HP-espelho AUTORITATIVO: aplica o dano aqui, com a MESMA fórmula de
-       armadura do cliente (absorve 70% até a armadura quebrar), pra os dois
-       lados baterem. Quando o espelho zera, é o SERVIDOR que declara a morte —
-       não o cliente da vítima. Assim, mesmo um cliente 100% hackeado não vira
-       imortal (o mirror ignora o que ele diz de vida) nem mata mais rápido que
-       o orçamento de dano permite. */
-    if (typeof victim.hp !== 'number') victim.hp = 100;
-    let applied = dmgReq;
-    if (victim.armor > 0) {
-      const absorb = Math.min(victim.armor, applied * 0.7);
-      victim.armor -= absorb;
-      applied -= absorb;
-    }
-    victim.hp = Math.max(0, victim.hp - applied);
-    if (victim.hp <= 0) serverCombatKill(d.targetId, socket.id, d.weapon);
+    emitCombatState(socket.id, p.combat);
+    if (victim.health <= 0) killBrPlayer(d.targetId, { killerId: socket.id, weapon: shot.weapon.name });
+    if (typeof cb === 'function') cb({
+      ok: true, damage, health: victim.health, armor: victim.armor, killed: victim.health <= 0,
+    });
   });
 
-  socket.on('died', (d, cb) => {
+  socket.on('reportDeath', (d, cb) => {
     const victim = players.get(socket.id);
     if (!victim || !victim.alive) { if (typeof cb === 'function') cb({}); return; }
-    victim.alive = false;
-    victim.placement = match.aliveCount; // morreu agora = posição atual
-    match.lastDead = socket.id; // se todos caírem juntos, o último a morrer vence
-    let killer = d && d.killerId ? players.get(d.killerId) : null;
-    if (killer && killer.spectator) killer = null; // espectador não mata ninguém
-    if (killer && d.killerId !== socket.id) killer.kills++;
-    io.emit('playerKilled', {
-      victimId: socket.id, victimNick: victim.nick,
-      killerId: killer ? d.killerId : null, killerNick: killer ? killer.nick : null,
-      killerKills: killer ? killer.kills : 0,
-      weapon: cleanSoft(d && d.weapon).slice(0, 24) || (d && d.byZone ? 'ZONA' : '???'),
-      byZone: !!(d && d.byZone),
-      placement: victim.placement,
+    const recent = victim.lastAttacker && Date.now() - victim.lastAttacker.at <= 10000 ? victim.lastAttacker : null;
+    killBrPlayer(socket.id, {
+      killerId: recent && recent.id,
+      weapon: recent ? recent.weapon : cleanSoft(d && d.cause).slice(0, 24) || 'AMBIENTE',
     });
-    freeCarsOf(socket.id); // motorista morto libera o carro
-    broadcastRoster();
-    checkVictory();
     if (typeof cb === 'function') cb({ placement: victim.placement });
   });
 
@@ -1175,11 +1544,12 @@ io.on('connection', socket => {
     // espectador/morto abrindo baú = grief (queima o loot dos vivos)
     if (!p || !p.alive) return cb({ ok: false });
     if (match.phase !== 'PLAYING' || !d || !d.key) return cb({ ok: false });
+    const key = String(d.key).slice(0, 32);
+    if (!validChestKey(key)) return cb({ ok: false });
     // anti-cheat: ninguém abre 2 baús em menos de 300ms (varredura automatizada)
     const nowC = Date.now();
     if (nowC - (p.lastChest || 0) < 300) return cb({ ok: false });
     p.lastChest = nowC;
-    const key = String(d.key).slice(0, 32);
     if (match.openedChests.has(key)) return cb({ ok: false, opened: true });
     match.openedChests.add(key);
     // baú lendário só existe depois do GOLEM cair — e só se o GOLEM existe na sala
@@ -1188,35 +1558,12 @@ io.on('connection', socket => {
     const items = key === 'boss'
       ? [{ type: 'weapon', rarity: 'lendário', weapon: 4, ammo: 160 }, { type: 'armor', amount: 100 }, { type: 'med' }, { type: 'med' }]
       : rollChest(rng);
-    socket.broadcast.emit('chestOpened', { key });
+    grantCombatItems(p, items);
+    io.to(socket.id).emit('healthSync', { health: p.health, armor: p.armor, source: 'loot' });
+    socket.to('br').emit('chestOpened', { key });
     cb({ ok: true, items });
   });
 
-  /* drop de morte: espalha itens no chão, primeiro a pegar leva */
-  socket.on('deathDrop', d => {
-    const p = players.get(socket.id);
-    if (!p || match.phase !== 'PLAYING') return;
-    if (!p.canDrop) return; // um drop por vida — sem spam de loot
-    if (!d || !Array.isArray(d.pos) || !Array.isArray(d.items)) return;
-    const pos = d.pos.slice(0, 3).map(Number);
-    if (!pos.every(Number.isFinite)) return;
-    p.canDrop = false;
-    const id = 'drop' + (++match.dropSeq);
-    // sanitiza o formato dos itens: só campos conhecidos, com limites
-    const items = d.items.slice(0, 8).map(it => {
-      if (!it || typeof it !== 'object') return null;
-      const o = { type: clean(it.type).slice(0, 8) };
-      if (Number.isInteger(it.weapon) && it.weapon >= 0 && it.weapon <= 5) o.weapon = it.weapon;
-      if (Number.isFinite(+it.ammo)) o.ammo = Math.max(0, Math.min(999, Math.round(+it.ammo)));
-      if (Number.isFinite(+it.amount)) o.amount = Math.max(0, Math.min(200, Math.round(+it.amount)));
-      const rar = clean(it.rarity).slice(0, 12);
-      if (rar) o.rarity = rar;
-      return o.type ? o : null;
-    }).filter(Boolean);
-    if (!items.length) return;
-    match.drops.set(id, { pos, items, taken: false });
-    io.emit('dropSpawn', { id, pos, items });
-  });
   socket.on('takeDrop', (d, cb) => {
     if (typeof cb !== 'function') return;
     const p = players.get(socket.id);
@@ -1226,31 +1573,49 @@ io.on('connection', socket => {
     const dx = p.pos[0] - drop.pos[0], dz = p.pos[2] - drop.pos[2];
     if (dx * dx + dz * dz > 12 * 12) return cb({ ok: false });
     drop.taken = true;
-    io.emit('dropTaken', { id: d.id });
+    grantCombatItems(p, drop.items);
+    io.to(socket.id).emit('healthSync', { health: p.health, armor: p.armor, source: 'loot' });
+    io.to('br').emit('dropTaken', { id: d.id });
     cb({ ok: true, items: drop.items });
   });
 
   /* boss sincronizado: HP mora aqui */
-  socket.on('bossHit', d => {
+  socket.on('bossHit', (d, cb) => {
     const p = players.get(socket.id);
-    if (!p || !p.alive) return;
-    if (match.phase !== 'PLAYING' || match.bossDead) return;
-    // anti-cheat: orçamento de dano no boss (1200/s por jogador)
-    const nowB = Date.now();
-    p.bossWindow = (p.bossWindow || []).filter(e => nowB - e.t < 1000);
-    const dmg = Math.min(Math.max(+((d || {}).dmg) || 0, 0), 150);
-    if (dmg <= 0) return;
-    if (p.bossWindow.reduce((a, e) => a + e.d, 0) + dmg > 1200) return;
-    p.bossWindow.push({ t: nowB, d: dmg });
+    if (!p || !p.alive || match.phase !== 'PLAYING' || match.bossDead) {
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    const shot = authorizeShot(p.combat, d, 'boss', true);
+    if (!shot) {
+      emitCombatState(socket.id, p.combat);
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    const bossPos = finiteVector(d && d.bossPos);
+    const expectedBossPos = bossPositionAt((Date.now() - match.t0) / 1000);
+    const claimError = bossPos && expectedBossPos
+      ? Math.hypot(bossPos[0] - expectedBossPos[0], bossPos[2] - expectedBossPos[1]) : Infinity;
+    const bossDistance = expectedBossPos
+      ? Math.hypot(p.pos[0] - expectedBossPos[0], p.pos[2] - expectedBossPos[1]) : Infinity;
+    if (!bossPos || claimError > 8 || bossDistance > shot.weapon.maxRange + 12) {
+      emitCombatState(socket.id, p.combat);
+      if (typeof cb === 'function') cb({ ok: false });
+      return;
+    }
+    const baseDamage = shot.weapon.rocket ? shot.weapon.rocketSplash.bossMax : shot.weapon.dmg * Math.max(1, shot.weapon.pellets);
+    const dmg = Math.min(150, Math.round(baseDamage));
     match.bossHp = Math.max(0, match.bossHp - dmg);
+    emitCombatState(socket.id, p.combat);
     if (match.bossHp <= 0) {
       match.bossDead = true;
       const p = players.get(socket.id);
-      io.emit('bossDead', { by: p ? p.nick : '???', tMatch: (Date.now() - match.t0) / 1000 });
+      io.to('br').emit('bossDead', { by: p ? p.nick : '???', tMatch: (Date.now() - match.t0) / 1000 });
       sysChat(`💀 O GOLEM caiu para ${p ? p.nick : '???'} — loot lendário no local!`);
     } else {
-      io.volatile.emit('bossHp', { hp: match.bossHp, max: match.bossMaxHp });
+      io.to('br').volatile.emit('bossHp', { hp: match.bossHp, max: match.bossMaxHp });
     }
+    if (typeof cb === 'function') cb({ ok: true, damage: dmg, health: match.bossHp });
   });
 
   socket.on('chat', d => {
@@ -1270,6 +1635,8 @@ io.on('connection', socket => {
     // host não migra pra gente aleatória: fica vago até alguém dar o código de novo
     if (hostId === socket.id) hostId = null;
     freeCarsOf(socket.id);
+    if (match.heliOwner === socket.id) match.heliOwner = null;
+    for (const player of players.values()) if (player.relevantTo instanceof Set) player.relevantTo.delete(socket.id);
     if (players.size === 0) { // sala vazia: sessão volta ao estado de fábrica
       match.flags = { golem: true, animais: true, zumbis: false, bots: 0, ciclo: 'auto', cidade: true };
       match.cityDestruction = { eventId: null, seed: null, state: 'intact', cinematicStartedAt: null, impactAt: null };
