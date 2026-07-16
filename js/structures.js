@@ -5,6 +5,7 @@
    ================================================================ */
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import * as CityLayout from './citylayout.js';
 
 export function createStructures(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
@@ -180,41 +181,75 @@ export function createStructures(deps) {
   const chestSpots = [];    // baús
   let heliSpot, bazookaSpot, towerTopY;
 
-  // fachada: texturas de janela geradas por canvas (lit à noite via emissiveMap)
+  // fachada: parede + janelas com moldura/peitoril geradas por canvas. Só o VIDRO
+  // vai pro emissiveMap (janelas acendem à noite; a parede fica apagada).
+  // A grade e o consumo de Math.random (janela acesa/cor) são os MESMOS de antes
+  // — preserva a ordem do rand seedado (invariante do worldgen).
   function facadeTex() {
     const c1 = document.createElement('canvas'); c1.width = 64; c1.height = 128;
     const c2 = document.createElement('canvas'); c2.width = 64; c2.height = 128;
     const a = c1.getContext('2d'), b = c2.getContext('2d');
-    a.fillStyle = '#454c57'; a.fillRect(0, 0, 64, 128);
+    a.fillStyle = '#5b626d'; a.fillRect(0, 0, 64, 128);      // concreto claro
     b.fillStyle = '#000'; b.fillRect(0, 0, 64, 128);
     const warm = ['#ffd27a', '#ffe9b0', '#bcd8ff', '#ffc2a0'];
-    for (let wy = 5; wy < 122; wy += 13) for (let wx = 5; wx < 58; wx += 13) {
-      const lit = Math.random() < 0.4;
-      a.fillStyle = lit ? '#2a2e36' : '#14181f';
-      a.fillRect(wx, wy, 9, 8);
-      if (lit) { b.fillStyle = warm[(Math.random() * warm.length) | 0]; b.fillRect(wx, wy, 9, 8); }
+    for (let wy = 5; wy < 122; wy += 13) {
+      a.fillStyle = '#6b727d'; a.fillRect(0, wy - 3, 64, 2); // faixa de laje entre andares
+      for (let wx = 5; wx < 58; wx += 13) {
+        const lit = Math.random() < 0.4;
+        a.fillStyle = '#39404a'; a.fillRect(wx - 1, wy - 1, 11, 10);        // moldura recuada
+        a.fillStyle = lit ? '#2f3a48' : '#161b22'; a.fillRect(wx, wy, 9, 8); // vidro
+        a.fillStyle = '#7a828d'; a.fillRect(wx - 1, wy + 8, 11, 1.5);       // peitoril
+        if (lit) { b.fillStyle = warm[(Math.random() * warm.length) | 0]; b.fillRect(wx, wy, 9, 8); }
+      }
     }
     const t1 = new THREE.CanvasTexture(c1); t1.colorSpace = THREE.SRGBColorSpace;
     const t2 = new THREE.CanvasTexture(c2); t2.colorSpace = THREE.SRGBColorSpace;
     t1.wrapS = t1.wrapT = t2.wrapS = t2.wrapT = THREE.RepeatWrapping;
+    t1.anisotropy = 4;
     return [t1, t2];
   }
   const [fMap, fEmis] = facadeTex();
+  // vertexColors: tint por prédio multiplica o map (variação de cor, 1 draw call).
   const cityMat = csmMat(new THREE.MeshStandardMaterial({
-    map: fMap, emissiveMap: fEmis, emissive: 0xffffff, emissiveIntensity: 0.25, roughness: 0.8, metalness: 0.1 }));
+    map: fMap, emissiveMap: fEmis, emissive: 0xffffff, emissiveIntensity: 0.25,
+    roughness: 0.75, metalness: 0.12, vertexColors: true }));
   const cityGeos = [];
+  const cityTrimGeos = [];        // detalhes urbanos vertex-color (some no evento)
+  const cityProps = new THREE.Group(); cityProps.name = 'cityProps';
+  // PRNG independente pro detalhe arquitetônico: determinístico em todos os
+  // clientes (seed constante) e NÃO consome o rand seedado do worldgen.
+  let _bs = 0xB111D5;
+  const bp = () => (_bs = (_bs * 1664525 + 1013904223) >>> 0) / 4294967296;
+  const brand = (a = 1, b) => (b === undefined ? bp() * a : a + bp() * (b - a));
   let emCidade = false; // marca walls/platforms urbanos p/ Structures.city
-  function cityBox(w, h, d, x, y, z, solid = true) { // caixa texturizada (UV ~ por andar)
+  const _white = new THREE.Color(1, 1, 1);
+  function cityBox(w, h, d, x, y, z, tint, solid = true) { // caixa texturizada (UV ~ por andar)
     const g = new THREE.BoxGeometry(w, h, d);
     const uv = g.attributes.uv;
     for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * Math.max(w, d) / 9, uv.getY(i) * h / 7);
     g.translate(x, y, z);
+    paintGeometry(g, tint || _white); // tint por prédio (vertexColors * map)
     cityGeos.push(g);
     if (solid) {
       walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
       // telhado pisável: pousar de paraquedas/pular em prédio da cidade funciona
       platforms.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2, y: y + h / 2, city: true });
     }
+  }
+  // trim urbano vertex-color: some no evento (vai pro cityTrimMesh). Decorativo
+  // por padrão (sem colisão) — não cria parede invisível.
+  function trimBox(w, h, d, x, y, z, hex, solid = false) {
+    const g = new THREE.BoxGeometry(w, h, d);
+    g.translate(x, y, z);
+    paintGeometry(g, _sc.setHex(hex));
+    cityTrimGeos.push(g);
+    if (solid) walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2, city: true });
+  }
+  function trimCyl(r, h, x, y, z, hex, seg = 10) {
+    const g = new THREE.CylinderGeometry(r, r, h, seg);
+    g.translate(x, y, z);
+    paintGeometry(g, _sc.setHex(hex));
+    cityTrimGeos.push(g);
   }
   function floorSlab(w, d, x, y, z) { // andar: pisável + bloqueia bala, sem empurrar player
     sbox(w, 0.25, d, x, y - 0.13, z, 0x8b9099, false);
@@ -225,23 +260,136 @@ export function createStructures(deps) {
     const cx = CITY.x, cz = CITY.z, gy = heightAt(cx, cz);
     emCidade = true;
     sites.push({ x: cx, z: cz, r: 88, type: 'cidade' });
-    // ruas cruzadas + praça
-    sbox(110, 0.12, 9, cx, gy + 0.02, cz + 26, 0x2b2e33, false);
-    sbox(9, 0.12, 110, cx + 26, gy + 0.02, cz, 0x2b2e33, false);
-    // prédios da cidade ao redor da torre
-    const lots = [[-34, -28, 11, 22], [-16, -34, 12, 16], [4, -30, 10, 26], [38, -26, 13, 18],
-      [-40, -2, 10, 14], [-38, 44, 12, 20], [-14, 42, 11, 24], [8, 44, 12, 15],
-      [40, 8, 11, 19], [42, 42, 13, 28], [-44, 18, 9, 12], [16, -8, 9, 13]];
-    for (const [ox, oz, w, h] of lots) {
-      cityBox(w, h, w * rand(0.8, 1.1), cx + ox, gy + h / 2, cz + oz);
-      // cobertura
-      sbox(w * 0.4, 1, w * 0.3, cx + ox, gy + h + 0.5, cz + oz, 0x3a3f48, false);
+    /* ---------- PAVIMENTO: praça, ruas, calçadas, meio-fio, faixas ----------
+       Geometria plana vertex-color no cityTrimMesh (some no evento de destruição,
+       revelando o solo escurecido das ruínas). Camadas em alturas ligeiramente
+       diferentes (0.03→0.10) evitam z-fighting. */
+    const SW = CityLayout.CITY_CONST.SIDEWALK_W;
+    const paveRect = (lx0, lx1, lz0, lz1, dy, hex) =>
+      trimBox(lx1 - lx0, 0.12, lz1 - lz0, cx + (lx0 + lx1) / 2, gy + dy, cz + (lz0 + lz1) / 2, hex);
+    { // praça pavimentada (disco) ao redor da torre — acesso desobstruído
+      const pg = new THREE.CylinderGeometry(CityLayout.PLAZA.r, CityLayout.PLAZA.r, 0.1, 40);
+      pg.translate(cx, gy + 0.03, cz);
+      paintGeometry(pg, _sc.setHex(0x565b63));
+      cityTrimGeos.push(pg);
     }
+    for (const r of CityLayout.ROADS) {
+      paveRect(r.x0 - SW, r.x1 + SW, r.z0 - SW, r.z1 + SW, 0.05, 0x6b7079); // calçada
+      paveRect(r.x0, r.x1, r.z0, r.z1, 0.08, 0x23252a);                     // asfalto
+      // meio-fio (lip decorativo baixo nas bordas longas; sem física)
+      if (r.x1 - r.x0 > r.z1 - r.z0) {
+        trimBox(r.x1 - r.x0 + SW * 2, 0.18, 0.22, cx + (r.x0 + r.x1) / 2, gy + 0.15, cz + r.z0 - 0.11, 0x585d65);
+        trimBox(r.x1 - r.x0 + SW * 2, 0.18, 0.22, cx + (r.x0 + r.x1) / 2, gy + 0.15, cz + r.z1 + 0.11, 0x585d65);
+      } else {
+        trimBox(0.22, 0.18, r.z1 - r.z0 + SW * 2, cx + r.x0 - 0.11, gy + 0.15, cz + (r.z0 + r.z1) / 2, 0x585d65);
+        trimBox(0.22, 0.18, r.z1 - r.z0 + SW * 2, cx + r.x1 + 0.11, gy + 0.15, cz + (r.z0 + r.z1) / 2, 0x585d65);
+      }
+    }
+    const av = CityLayout.ROADS[0], cr = CityLayout.ROADS[1];
+    const avz = (av.z0 + av.z1) / 2, crx = (cr.x0 + cr.x1) / 2;
+    for (let x = av.x0 + 3; x < av.x1 - 2; x += 6) paveRect(x, x + 2.6, avz - 0.22, avz + 0.22, 0.1, 0xcfd3d8);
+    for (let z = cr.z0 + 3; z < cr.z1 - 2; z += 6) paveRect(crx - 0.22, crx + 0.22, z, z + 2.6, 0.1, 0xcfd3d8);
+    // faixas de pedestres junto do cruzamento
+    for (let i = 0; i < 5; i++) { const x = cr.x0 - 5 + i; paveRect(x, x + 0.55, av.z0 + 0.4, av.z1 - 0.4, 0.1, 0xdfe3e8); }
+    for (let i = 0; i < 5; i++) { const z = av.z0 - 5 + i; paveRect(cr.x0 + 0.4, cr.x1 - 0.4, z, z + 0.55, 0.1, 0xdfe3e8); }
+
+    /* ---------- PRÉDIOS: arquétipos com térreo, entrada, cobertura ---------- */
+    function faceOffset(face, w, d) {
+      if (face === 'S') return { ox: 0, oz: d / 2, nx: 0, nz: 1, axis: 'x' };
+      if (face === 'N') return { ox: 0, oz: -d / 2, nx: 0, nz: -1, axis: 'x' };
+      if (face === 'E') return { ox: w / 2, oz: 0, nx: 1, nz: 0, axis: 'z' };
+      return { ox: -w / 2, oz: 0, nx: -1, nz: 0, axis: 'z' };
+    }
+    function roofUnits(bx, bz, w, d, py, arch) {
+      const mh = brand(1.5, 2.4), mw = w * brand(0.32, 0.44), md = d * brand(0.32, 0.44);
+      trimBox(mw, mh, md, bx + brand(-w * 0.12, w * 0.12), py + mh / 2, bz + brand(-d * 0.12, d * 0.12), 0x2e323a); // casa de máquinas
+      if (brand() < 0.65) { const tr = brand(0.7, 1.05), th = brand(1.4, 2.1);
+        trimCyl(tr, th, bx + brand(-w * 0.22, w * 0.22), py + th / 2, bz + brand(-d * 0.22, d * 0.22), 0x8f9aa2, 12); } // caixa d'água
+      for (let i = 0; i < 2; i++) // caixas de ar-condicionado
+        trimBox(brand(0.6, 1.1), brand(0.4, 0.8), brand(0.6, 1.1), bx + brand(-w * 0.3, w * 0.3), py + 0.4, bz + brand(-d * 0.3, d * 0.3), 0x474c55);
+      if (arch === 'office' || arch === 'corner') { const ah = brand(2.6, 4.2); // antena
+        trimBox(0.13, ah, 0.13, bx + brand(-w * 0.2, w * 0.2), py + ah / 2, bz + brand(-d * 0.2, d * 0.2), 0x20242a); }
+    }
+    function building(lot) {
+      const { w, h, arch, face } = lot;
+      const bx = cx + lot.ox, bz = cz + lot.oz, d = CityLayout.lotDepth(lot);
+      const _s = rand(0.8, 1.1); void _s;              // PRESERVA o rand seedado (1 call/lote)
+      const hue = arch === 'resid' ? 0.07 : arch === 'commerc' ? 0.55 : 0.6;
+      const tint = new THREE.Color().setHSL(hue + brand(-0.02, 0.02), 0.06 + brand(0, 0.05), 0.6 + brand(-0.05, 0.12));
+      cityBox(w, h, d, bx, gy + h / 2, bz, tint);       // volume principal (fachada + colisor + telhado)
+      const gfH = Math.min(3.4, h * 0.33);
+      trimBox(w + 0.5, gfH, d + 0.5, bx, gy + gfH / 2, bz, arch === 'commerc' ? 0x2b2f36 : 0x4a4f58); // térreo/podium
+      trimBox(w + 0.7, 0.28, d + 0.7, bx, gy + gfH, bz, 0x6c727b);                                    // cornija do térreo
+      const fo = faceOffset(face, w, d);
+      const doorW = Math.min(2.8, w * 0.42), doorH = 2.3;
+      const fx = bx + fo.ox, fz = bz + fo.oz;
+      if (fo.axis === 'x') {
+        trimBox(doorW + 0.7, doorH + 0.4, 0.22, fx, gy + (doorH + 0.4) / 2, fz + fo.nz * 0.02, 0x8a909a);  // moldura
+        trimBox(doorW, doorH, 0.16, fx, gy + doorH / 2, fz + fo.nz * 0.1, 0x14161a);                       // vão recuado
+        if (arch === 'commerc' || arch === 'corner')
+          trimBox(doorW + 1.6, 0.16, 1.2, fx, gy + doorH + 0.35, fz + fo.nz * 0.55, 0x2c3038);             // marquise
+      } else {
+        trimBox(0.22, doorH + 0.4, doorW + 0.7, fx + fo.nx * 0.02, gy + (doorH + 0.4) / 2, fz, 0x8a909a);
+        trimBox(0.16, doorH, doorW, fx + fo.nx * 0.1, gy + doorH / 2, fz, 0x14161a);
+        if (arch === 'commerc' || arch === 'corner')
+          trimBox(1.2, 0.16, doorW + 1.6, fx + fo.nx * 0.55, gy + doorH + 0.35, fz, 0x2c3038);
+      }
+      // pilastras de canto (quebram as janelas nos cantos)
+      for (const sx of [-1, 1]) for (const sz of [-1, 1])
+        trimBox(0.5, h - gfH, 0.5, bx + sx * (w / 2 - 0.05), gy + gfH + (h - gfH) / 2, bz + sz * (d / 2 - 0.05), 0x565c66);
+      // parapeito: 4 murinhos na borda do telhado (o telhado segue pisável)
+      const py = gy + h;
+      trimBox(w + 0.4, 0.7, 0.3, bx, py + 0.35, bz - d / 2, 0x3a3f48);
+      trimBox(w + 0.4, 0.7, 0.3, bx, py + 0.35, bz + d / 2, 0x3a3f48);
+      trimBox(0.3, 0.7, d + 0.4, bx - w / 2, py + 0.35, bz, 0x3a3f48);
+      trimBox(0.3, 0.7, d + 0.4, bx + w / 2, py + 0.35, bz, 0x3a3f48);
+      roofUnits(bx, bz, w, d, py, arch);
+    }
+    for (const lot of CityLayout.LOTS) building(lot);
+
     // vagas de carros esportivos na rua
     carSpots.push({ x: cx + 14, z: cz + 26, ry: 0, type: 'sport' });          // de frente pra avenida
     carSpots.push({ x: cx - 8, z: cz + 26, ry: Math.PI, type: 'sport2' });
     carSpots.push({ x: cx + 26, z: cz - 16, ry: -Math.PI / 2, type: 'sport' });
     chestSpots.push({ x: cx + 21.5, z: cz + 18 });
+
+    /* ---------- PROPS urbanos (postes instanciados + mobiliário) ---------- */
+    const lampPos = [], eo = SW + 0.5;
+    const addLamps = (r) => {
+      if (r.x1 - r.x0 > r.z1 - r.z0) {
+        for (let x = r.x0 + 4; x < r.x1 - 2; x += 13) {
+          lampPos.push({ x, z: r.z0 - eo, hz: 0.7, hx: 0 });
+          lampPos.push({ x, z: r.z1 + eo, hz: -0.7, hx: 0 });
+        }
+      } else {
+        for (let z = r.z0 + 4; z < r.z1 - 2; z += 13) {
+          lampPos.push({ x: r.x0 - eo, z, hx: 0.7, hz: 0 });
+          lampPos.push({ x: r.x1 + eo, z, hx: -0.7, hz: 0 });
+        }
+      }
+    };
+    addLamps(av); addLamps(cr);
+    const NL = lampPos.length;
+    const poles = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.1, 0.13, 4.2, 6),
+      csmMat(new THREE.MeshStandardMaterial({ color: 0x3a3e44, roughness: 0.7, metalness: 0.5 })), NL);
+    const heads = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.22, 0.9),
+      new THREE.MeshStandardMaterial({ color: 0x2a2d33, emissive: 0xffd98a, emissiveIntensity: 1.0, roughness: 0.5 }), NL);
+    const _o = new THREE.Object3D();
+    for (let i = 0; i < NL; i++) {
+      const L = lampPos[i], wx = cx + L.x, wz = cz + L.z;
+      _o.position.set(wx, gy + 2.1, wz); _o.rotation.set(0, 0, 0); _o.scale.set(1, 1, 1); _o.updateMatrix();
+      poles.setMatrixAt(i, _o.matrix);
+      _o.position.set(wx + L.hx, gy + 4.15, wz + L.hz); _o.updateMatrix();
+      heads.setMatrixAt(i, _o.matrix);
+    }
+    poles.castShadow = heads.castShadow = false;
+    cityProps.add(poles, heads);
+    // mobiliário da praça (trim: some no evento junto com os prédios)
+    trimBox(2.4, 0.45, 0.6, cx - 6, gy + 0.32, cz + 12, 0x6b5a3a);   // banco
+    trimBox(2.4, 0.45, 0.6, cx + 6, gy + 0.32, cz + 12, 0x6b5a3a);
+    trimBox(1.0, 0.5, 1.0, cx - 11, gy + 0.3, cz + 7, 0x2f6b3a);     // floreira (verde)
+    trimCyl(0.26, 1.0, cx + 10, gy + 0.5, cz - 8, 0xb23a2a);          // hidrante
+    trimBox(0.6, 0.9, 0.6, cx + 14, gy + 0.45, cz + 6, 0x33383f);    // lixeira
 
     /* ---- TORRE NEXUS: 10 andares + escadaria + heliponto ---- */
     const W = 18, fh = 3.4, NF = 10;
@@ -253,6 +401,18 @@ export function createStructures(deps) {
     cityBox(W / 2 - 2, NF * fh + 1, 0.5, cx - W / 4 - 1, gy + (NF * fh + 1) / 2, cz + W / 2); // sul-esq
     cityBox(W / 2 - 2, NF * fh + 1, 0.5, cx + W / 4 + 1, gy + (NF * fh + 1) / 2, cz + W / 2); // sul-dir
     cityBox(4.2, NF * fh + 1 - 3, 0.5, cx, gy + 3 + (NF * fh - 2) / 2, cz + W / 2);    // acima da porta
+    // ---- trim externo da torre (decorativo, sem colisão): pilares de canto,
+    //      moldura de entrada e marquise. Não bloqueia porta nem navegação. ----
+    for (const sx of [-1, 1]) for (const sz of [-1, 1])
+      trimBox(0.8, NF * fh + 1, 0.8, cx + sx * W / 2, gy + (NF * fh + 1) / 2, cz + sz * W / 2, 0x474d57); // pilar de canto
+    trimBox(0.4, 3.4, 0.4, cx - 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a);  // jamba esq da porta
+    trimBox(0.4, 3.4, 0.4, cx + 2, gy + 1.7, cz + W / 2 + 0.05, 0x8a909a);  // jamba dir
+    trimBox(5, 0.4, 0.5, cx, gy + 3.3, cz + W / 2 + 0.05, 0x8a909a);        // verga
+    trimBox(6.4, 0.2, 1.8, cx, gy + 3.7, cz + W / 2 + 0.85, 0x2c3038);      // marquise de entrada
+    // faixa/cornija do térreo (só o perímetro, não fecha o interior)
+    trimBox(W + 0.6, 0.5, 0.4, cx, gy + 3.0, cz - W / 2, 0x5a616b);
+    trimBox(0.4, 0.5, W + 0.6, cx - W / 2, gy + 3.0, cz, 0x5a616b);
+    trimBox(0.4, 0.5, W + 0.6, cx + W / 2, gy + 3.0, cz, 0x5a616b);
     // andares com poço de escada a oeste-norte
     for (let k = 1; k <= NF; k++) {
       const fy = gy + k * fh;
@@ -285,6 +445,9 @@ export function createStructures(deps) {
     sbox(3.4, 0.06, 0.7, cx, towerTopY + 0.12, cz, 0xe8eef4, false); // H
     sbox(0.7, 0.06, 2.6, cx - 1.35, towerTopY + 0.12, cz, 0xe8eef4, false);
     sbox(0.7, 0.06, 2.6, cx + 1.35, towerTopY + 0.12, cz, 0xe8eef4, false);
+    // mastro/antena de cobertura no canto (longe do heliponto e da bazuca)
+    trimBox(0.16, 5.5, 0.16, cx - W / 2 + 1.6, towerTopY + 2.75, cz - W / 2 + 1.6, 0x20242a);
+    trimBox(1.6, 0.5, 1.6, cx - W / 2 + 1.6, towerTopY + 0.25, cz - W / 2 + 1.6, 0x2e323a); // casa de máquinas
     heliSpot = { x: cx, y: towerTopY, z: cz };
     bazookaSpot = { x: cx + 6.5, y: towerTopY, z: cz + 6.5 };
     sbox(1.2, 0.7, 0.7, bazookaSpot.x, towerTopY + 0.35, bazookaSpot.z, 0x4a5240); // caixa da bazuca
@@ -330,6 +493,15 @@ export function createStructures(deps) {
   const cityMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityGeos), cityMat);
   cityMesh.castShadow = cityMesh.receiveShadow = true;
   scene.add(cityMesh);
+  // trim urbano (térreos, entradas, parapeitos, coberturas, mobiliário): mesh
+  // vertex-color própria pra sumir junto no evento de destruição.
+  const cityTrimMat = csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.05 }));
+  const cityTrimMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityTrimGeos), cityTrimMat);
+  cityTrimMesh.castShadow = cityTrimMesh.receiveShadow = true;
+  scene.add(cityTrimMesh);
+  scene.add(cityProps);
+  // visuais urbanos escondidos/mostrados atomicamente no evento
+  const cityVisual = [cityMesh, cityTrimMesh, cityProps];
 
   /* ---- raio vs AABBs (slab test, sem alocação) ---- */
   function rayHit(o, d, maxDist) {
@@ -485,7 +657,7 @@ export function createStructures(deps) {
     destroy() {
       if (this._state === 'destroyed') return;
       this._state = 'destroyed';
-      cityMesh.visible = false;
+      for (const m of cityVisual) m.visible = false;
       cityRuins.visible = true;
       // colisão: paredes/plataformas urbanas saem dos arrays COMPARTILHADOS
       this._savedWalls = walls.filter(w => w.city);
@@ -498,7 +670,7 @@ export function createStructures(deps) {
     restore() {
       if (this._state === 'intact') return;
       this._state = 'intact';
-      cityMesh.visible = true;
+      for (const m of cityVisual) m.visible = true;
       cityRuins.visible = false;
       for (let i = walls.length - 1; i >= 0; i--) if (walls[i].cityRuin) walls.splice(i, 1);
       for (const w of this._savedWalls) walls.push(w);

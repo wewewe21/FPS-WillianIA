@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 
 export function createGrass(deps) {
-  const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings = [] } = deps;
+  const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings = [],
+    cityGrassFactor = null } = deps;
   const N = CFG.GRASS_CHUNKS;                       // grade NxN
   const SIZE = CFG.GRASS_CHUNK_SIZE;
   const PER_CHUNK = Math.floor(CFG.GRASS_TOTAL / (N * N));
@@ -159,9 +160,14 @@ export function createGrass(deps) {
       // deserto: quase sem grama (lâminas colapsam) e mais baixa nas bordas
       if (desert > 0.05) s *= Math.random() < desert * 0.85 ? 0.02 : (1 - desert * 0.45);
       if (y < WATER_LEVEL + 0.25) s = 0.015; // nada de grama dentro dos lagos
-      // distrito urbano é asfalto: grama não brota no perímetro da cidade
-      // (escala ~zero: até lâmina de 1,5cm pontilhava verde no chão claro)
-      if (CITY && Math.hypot(wx + lx - CITY.x, wz + lz - CITY.z) < 92) s = 0.0001;
+      // distrito urbano: máscara espacial (ruas/calçadas/praça/footprints = sem
+      // grama; canteiros verdes = cheia; borda volta suave). Barato: só retângulos.
+      if (cityGrassFactor) {
+        const gf = cityGrassFactor(wx + lx, wz + lz);
+        if (gf < 0.999) s = gf < 0.02 ? 0.0001 : s * gf;
+      } else if (CITY && Math.hypot(wx + lx - CITY.x, wz + lz - CITY.z) < 92) {
+        s = 0.0001; // fallback antigo se a máscara não for injetada
+      }
       // cone do vulcão é rocha nua: grama não brota na encosta
       if (VOLCANO && Math.hypot(wx + lx - VOLCANO.x, wz + lz - VOLCANO.z) < VOLCANO.r * 0.95) s = 0.0001;
       // clareiras (vagas de veículos): grama embaixo do carro fazia ele

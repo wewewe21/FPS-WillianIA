@@ -14,6 +14,7 @@ import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } f
 import { createTerrain } from './js/terrain.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
+import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
 import { createWeapons } from './js/weapons.js';
@@ -201,6 +202,7 @@ const COL_DIRT    = new THREE.Color(0x9a7e54);
 const COL_FOREST  = new THREE.Color(0x3e7a31);
 const COL_SNOW    = new THREE.Color(0xe8eef4);
 const COL_BASALT  = new THREE.Color(0x241d1a); // rocha vulcânica escura
+const COL_CITY_GROUND = new THREE.Color(0x34373d); // base escura sob o distrito (asfalto/terra batida)
 
 let terrainMesh;
 {
@@ -228,8 +230,18 @@ let terrainMesh;
     const dVol = Math.hypot(x - VOLCANO.x, z - VOLCANO.z);
     if (dVol < VOLCANO.r * 1.15)
       c.lerp(COL_BASALT, 0.9 * (1 - THREE.MathUtils.smoothstep(dVol, VOLCANO.r * 0.8, VOLCANO.r * 1.15)));
+    // distrito urbano: base escura sob ruas/prédios (a geometria da rua cobre por
+    // cima); canteiros verdes mantêm grama; borda esmaece de volta ao terreno
     const dCity = Math.hypot(x - CITY.x, z - CITY.z);
-    if (dCity < 62) c.lerp(COL_ROCK, 0.55).multiplyScalar(0.55);                       // asfalto urbano
+    if (dCity < CityLayout.GRASS_FADE1 + 4) {
+      const cat = CityLayout.cityCategory(x, z);
+      if (cat === 'green') { /* canteiro: mantém verde */ }
+      else if (cat) c.lerp(COL_CITY_GROUND, 0.85);
+      else {
+        const k = 1 - THREE.MathUtils.smoothstep(dCity, CityLayout.CORE_RADIUS, CityLayout.GRASS_FADE1);
+        c.lerp(COL_CITY_GROUND, 0.85 * k);
+      }
+    }
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
   }
   g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -252,7 +264,7 @@ const Water = createWater({ CFG, WATER_LEVEL, scene, sunDir });
    A criação da Grass NÃO pode mudar de lugar: ela consome o rand seedado e
    qualquer reordenação muda o layout do mundo inteiro pra mesma seed. */
 const grassClearings = [];
-const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings: grassClearings });
+const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings: grassClearings, cityGrassFactor: CityLayout.cityGrassFactor });
 
 /* ================================================================
    VEGETAÇÃO — árvores (2 LODs), pedras e flores, tudo InstancedMesh

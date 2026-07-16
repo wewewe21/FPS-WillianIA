@@ -25,51 +25,60 @@ export function createRockets(deps) {
     r.live = true; r.m.visible = true;
     r.m.position.copy(from);
     r.vel.copy(dir).multiplyScalar(34);
+    r.smokeAcc = 0;            // RESET: item reutilizado do pool não herda o acumulador
     r.m.lookAt(_v1.copy(from).add(dir));
   }
-  function update(dt, t) {
+  function detonate(r) {
+    r.live = false; r.m.visible = false;
+    Grenades.explode(r.m.position, 'BAZUCA'); // UMA explosão por foguete (live=false já feito)
+  }
+  // espoletas de proximidade (inimigos, bosses, alvos extras, players remotos)
+  function proximityHit(pos) {
+    for (const e of Enemies.list) if (e.alive && e.group.position.distanceToSquared(pos) < 2.3) return true;
+    if (Boss.alive && Boss.pos().distanceTo(pos) < 2.6) return true;
+    for (const b of Bosses) if (b !== Boss && b.alive && b.pos().distanceTo(pos) < 2.6) return true;
+    for (const a of extraTargets) if (a.alive && a.enabled !== false && a.pos().distanceToSquared(pos) < 2.3) return true;
+    const rps = typeof window !== 'undefined' && window.__MP_remotePlayers;
+    if (rps) for (const rp of rps) if (rp.alive && rp.group.position.distanceToSquared(pos) < 4) return true;
+    return false;
+  }
+  // integra UM passo de tempo pequeno: gravidade + varredura de segmento contra
+  // terreno/estruturas (sem atravessar parede) + espoletas. Explode no 1º impacto.
+  function stepRocket(r, h) {
+    r.vel.y -= 2.5 * h;
+    _prevR.copy(r.m.position);                 // posição anterior (checa parede no caminho)
+    r.m.position.addScaledVector(r.vel, h);
+    r.smokeAcc += h;
+    if (r.smokeAcc > 0.03) {
+      r.smokeAcc = 0;
+      FX.spawnParticle(r.m.position, _v2.set(rand(-0.5, 0.5), rand(0.2, 0.8), rand(-0.5, 0.5)), 0x9b958c, 0.16, 0.5, -0.3);
+    }
+    let boom = r.m.position.y < heightAt(r.m.position.x, r.m.position.z) + 0.2; // terreno
+    if (!boom && Structures.segBlocked(_prevR, r.m.position)) {                  // parede/telhado/laje
+      _segR.copy(r.m.position).sub(_prevR);
+      const segLen = _segR.length();
+      if (segLen > 1e-5 && typeof Structures.rayHit === 'function') {
+        _segR.multiplyScalar(1 / segLen);
+        const hitD = Structures.rayHit(_prevR, _segR, segLen);
+        if (Number.isFinite(hitD)) r.m.position.copy(_prevR).addScaledVector(_segR, Math.max(0, Math.min(segLen, hitD) - 0.04));
+        else r.m.position.copy(_prevR);       // exatamente no ponto de impacto
+      } else r.m.position.copy(_prevR);
+      boom = true;
+    }
+    if (!boom) boom = proximityHit(r.m.position);
+    if (boom || r.m.position.distanceTo(player.pos) > 340) detonate(r);
+  }
+  function update(dt) {
+    const STEP = 1 / 120; // passo fixo: resultado estável entre 30/60/120 FPS e sem tunneling
     for (const r of pool) {
       if (!r.live) continue;
-      r.vel.y -= 2.5 * dt;
-      _prevR.copy(r.m.position); // posição anterior (checa parede no caminho)
-      r.m.position.addScaledVector(r.vel, dt);
-      r.m.lookAt(_v1.copy(r.m.position).add(r.vel));
-      r.smokeAcc += dt;
-      if (r.smokeAcc > 0.03) {
-        r.smokeAcc = 0;
-        FX.spawnParticle(r.m.position, _v2.set(rand(-0.5, 0.5), rand(0.2, 0.8), rand(-0.5, 0.5)), 0x9b958c, 0.16, 0.5, -0.3);
+      let remaining = Math.min(dt, 0.25); // clamp anti-“spiral of death” em travadas
+      while (remaining > 1e-6 && r.live) {
+        const h = Math.min(STEP, remaining);
+        remaining -= h;
+        stepRocket(r, h);
       }
-      let boom = r.m.position.y < heightAt(r.m.position.x, r.m.position.z) + 0.2;
-      if (!boom && Structures.segBlocked(_prevR, r.m.position)) {
-        _segR.copy(r.m.position).sub(_prevR);
-        const segLen = _segR.length();
-        if (segLen > 1e-5 && typeof Structures.rayHit === 'function') {
-          _segR.multiplyScalar(1 / segLen);
-          const hitD = Structures.rayHit(_prevR, _segR, segLen);
-          if (Number.isFinite(hitD)) {
-            r.m.position.copy(_prevR).addScaledVector(_segR, Math.max(0, Math.min(segLen, hitD) - 0.04));
-          } else r.m.position.copy(_prevR);
-        } else r.m.position.copy(_prevR);
-        boom = true;
-      }
-      if (!boom) for (const e of Enemies.list) if (e.alive && e.group.position.distanceToSquared(r.m.position) < 2.3) { boom = true; break; }
-      if (!boom && Boss.alive && Boss.pos().distanceTo(r.m.position) < 2.6) boom = true;
-      if (!boom) for (const b of Bosses) {
-        if (b !== Boss && b.alive && b.pos().distanceTo(r.m.position) < 2.6) { boom = true; break; }
-      }
-      if (!boom) for (const a of extraTargets) {
-        if (a.alive && a.enabled !== false && a.pos().distanceToSquared(r.m.position) < 2.3) {
-          boom = true;
-          break;
-        }
-      }
-      // espoleta de proximidade também pros jogadores remotos (BR)
-      if (!boom && window.__MP_remotePlayers) for (const rp of window.__MP_remotePlayers)
-        if (rp.alive && rp.group.position.distanceToSquared(r.m.position) < 4) { boom = true; break; }
-      if (boom || r.m.position.distanceTo(player.pos) > 340) {
-        r.live = false; r.m.visible = false;
-        Grenades.explode(r.m.position, 'BAZUCA');
-      }
+      if (r.live) r.m.lookAt(_v1.copy(r.m.position).add(r.vel)); // aponta na direção da velocidade
     }
   }
   return { fire, update };
