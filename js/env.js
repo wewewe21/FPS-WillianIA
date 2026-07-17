@@ -134,12 +134,16 @@ export function createEnv(deps) {
     if (flashT > 0) hemiLight.intensity += 2.8 * camExposure; // relâmpago não pisca dentro de casa
 
     const cp = camera.position;
-    // gota/floco que renasceria DEBAIXO de um teto fica oculto (escala 0) —
-    // checagem só no respawn (poucas por frame), nunca raycast por gota
+    // gota/floco em posição coberta fica oculto (escala 0) — consulta O(1)
+    // na grade de telhados, nunca raycast por gota
     const dropCovered = (px, py, pz) => coverAt ? coverAt(px, py, pz).covered : false;
-    const showRain = weather === 'chuva' && weatherK > 0.04 && camExposure > 0.02;
+    // malha de chuva SEMPRE ativa quando chove: quem esconde gota é a
+    // POSIÇÃO dela (coberta ⇒ escala 0), não a exposição da câmera —
+    // pela porta/janela a chuva de fora continua visível. camExposure
+    // segue mandando só em som, relâmpago e transição (acima).
+    const showRain = weather === 'chuva' && weatherK > 0.04;
     rainMesh.visible = showRain;
-    rainMesh.material.opacity = 0.42 * camExposure;
+    rainMesh.material.opacity = 0.42;
     if (showRain) {
       rainMesh.count = Math.max(1, Math.floor(RN * weatherK));
       for (let i = 0; i < rainMesh.count; i++) {
@@ -148,18 +152,20 @@ export function createEnv(deps) {
         if (p.y < -2) {
           p.y = 24; p.x = rand(-22, 22); p.z = rand(-22, 22);
           p.spd = rand(0, 7); p.len = rand(0.7, 1.25); // hastes variadas, nada de "macarrão" idêntico
-          p.hidden = dropCovered(cp.x + p.x, cp.y + p.y - 8, cp.z + p.z);
         }
+        // classificação POR FRAME e por gota: consulta O(1) na grade de
+        // telhados (~450/frame), zero raycast; pega gota que ATRAVESSA teto
+        const hidden = dropCovered(cp.x + p.x, cp.y + p.y - 8, cp.z + p.z);
         _dummy2.position.set(cp.x + p.x, cp.y + p.y - 8, cp.z + p.z);
         // inclinação segue o VENTO compartilhado (mesma direção da grama)
         _dummy2.rotation.set(wind.dirZ * 0.09, 0, -wind.dirX * 0.09);
-        _dummy2.scale.set(1, p.hidden ? 0 : (p.len || 1), 1);
+        _dummy2.scale.set(1, hidden ? 0 : (p.len || 1), 1);
         _dummy2.updateMatrix();
         rainMesh.setMatrixAt(i, _dummy2.matrix);
       }
       rainMesh.instanceMatrix.needsUpdate = true;
     }
-    const showSnow = weather === 'neve' && weatherK > 0.04 && camExposure > 0.02;
+    const showSnow = weather === 'neve' && weatherK > 0.04;
     snowMesh.visible = showSnow;
     if (showSnow) {
       // flocos sempre de frente pra câmera: girar no yaw deixava o quad de lado (invisível/riscado)
@@ -171,14 +177,19 @@ export function createEnv(deps) {
         p.y -= 2.6 * dt; p.ph += dt;
         if (p.y < -2) {
           p.y = 16; p.x = rand(-20, 20); p.z = rand(-20, 20);
-          p.hidden = dropCovered(cp.x + p.x, cp.y + p.y - 6, cp.z + p.z);
         }
+        // mesma posição FINAL do floco (deriva + vento) — classificar em
+        // outra coordenada deixaria floco "nevando" dentro de teto
+        const hidden = dropCovered(
+          cp.x + p.x + Math.sin(p.ph) * 0.9 + wind.dirX * p.ph * 0.02,
+          cp.y + p.y - 6,
+          cp.z + p.z + Math.cos(p.ph * 0.8) * 0.9 + wind.dirZ * p.ph * 0.02);
         _dummy2.position.set(
           cp.x + p.x + Math.sin(p.ph) * 0.9 + wind.dirX * p.ph * 0.02,
           cp.y + p.y - 6,
           cp.z + p.z + Math.cos(p.ph * 0.8) * 0.9 + wind.dirZ * p.ph * 0.02);
         _dummy2.rotation.set(0, camYaw, p.ph); // encara a câmera, rodopia no próprio plano
-        _dummy2.scale.setScalar(p.hidden ? 0 : 1);
+        _dummy2.scale.setScalar(hidden ? 0 : 1);
         _dummy2.updateMatrix();
         snowMesh.setMatrixAt(i, _dummy2.matrix);
       }

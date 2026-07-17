@@ -15,12 +15,16 @@ describe('Cobertura de chuva (Chrome headless)', { skip: !CHROME && 'Chrome não
   before(async () => { h = await bootGame({ port: 3234 }); });
   after(async () => { if (h) await h.close(); });
 
-  /* conta gotas visíveis (escala>0.01) num raio da câmera, ao longo de N frames */
+  /* conta gotas visíveis (escala>0.01) num raio da câmera e quantas delas
+     estão em posição COBERTA (bug: chuva "dentro" de teto).
+     Leitura DIRETA das colunas da matriz — no three r185, matriz de gota
+     oculta (escala 0) é singular e decompose() devolve escala (1,1,1),
+     contando gota invisível como visível. */
   const countScript = () => {
     const G = window.QA.G, MP = window.QA.MP, THREE = MP.THREE;
-    const m4 = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    const m4 = new THREE.Matrix4(), p = new THREE.Vector3();
     window.__QA_countDrops = (frames, radius) => {
-      let seen = 0;
+      let vis = 0, cobertas = 0;
       const rain = MP.scene.getObjectByName('rainFx');
       for (let f = 0; f < frames; f++) {
         window.QA.tick(1);
@@ -28,11 +32,15 @@ describe('Cobertura de chuva (Chrome headless)', { skip: !CHROME && 'Chrome não
         const cam = G.camera.getWorldPosition(new THREE.Vector3());
         for (let i = 0; i < rain.count; i++) {
           rain.getMatrixAt(i, m4);
-          m4.decompose(p, q, s);
-          if (s.y > 0.01 && p.distanceTo(cam) < radius) seen++;
+          const e = m4.elements;
+          const sy = Math.hypot(e[4], e[5], e[6]); // escala Y real (coluna 1)
+          p.set(e[12], e[13], e[14]);
+          if (sy <= 0.01 || p.distanceTo(cam) >= radius) continue;
+          vis++;
+          if (G.Cover.coverAt(p.x, p.y, p.z).covered) cobertas++;
         }
       }
-      return seen;
+      return { vis, cobertas };
     };
   };
 
@@ -43,7 +51,7 @@ describe('Cobertura de chuva (Chrome headless)', { skip: !CHROME && 'Chrome não
       window.QA.reset();
       G.Env.weather = 'chuva';
       window.QA.tick(400); // weatherK + exposure assentam
-      const fora = window.__QA_countDrops(60, 40);
+      const fora = window.__QA_countDrops(60, 40).vis;
       return { fora, nivel: G.SFX ? null : null,
         rainLevel: window.QA.MP.SFX ? window.QA.MP.SFX.rainLevel() : null,
         exposure: G.Env.camExposure, weatherK: G.Env.weatherK };
@@ -66,13 +74,14 @@ describe('Cobertura de chuva (Chrome headless)', { skip: !CHROME && 'Chrome não
       MP.player.vel.set(0, 0, 0);
       G.Env.weather = 'chuva';
       window.QA.tick(400);
-      const dentro = window.__QA_countDrops(300, 30);
-      return { dentro, exposure: G.Env.camExposure, nivel: MP.SFX.rainLevel(),
+      const d = window.__QA_countDrops(300, 30);
+      return { d, exposure: G.Env.camExposure, nivel: MP.SFX.rainLevel(),
         cobertura: G.Cover.coverAt(x, G.groundAt(x, z, 5) + 1.6, z) };
     });
     assert.equal(r.cobertura.covered, true, 'coverAt não detecta o prédio: ' + JSON.stringify(r.cobertura));
     assert.ok(r.exposure < 0.1, `exposure alto dentro do prédio: ${r.exposure}`);
-    assert.equal(r.dentro, 0, `${r.dentro} gotas observáveis DENTRO do prédio`);
+    assert.equal(r.d.cobertas, 0, `${r.d.cobertas} gotas DENTRO de volume coberto`);
+    assert.ok(r.d.vis > 50, `chuva lá fora sumiu com a câmera coberta (vis ${r.d.vis}) — regressão do "some inteira"`);
     assert.ok(r.nivel <= 0.05 * 0.3 + 1e-9, `som interno alto: ${r.nivel} (externo ~0.05)`);
   });
 
