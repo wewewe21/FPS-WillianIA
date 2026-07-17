@@ -88,10 +88,10 @@ export function createEnv(deps) {
     const u = sky.material.uniforms;
     // fim de tarde: céu quente (sol baixo + rayleigh/mie extras dão o
     // gradiente pêssego/rosa/lilás do horizonte — referência Vice City)
-    u.rayleigh.value = lerp(0.55, 1.15, dayK) + gk * 1.4;
-    u.mieCoefficient.value = 0.0008 + weatherK * 0.0035 + gk * 0.004;
+    u.rayleigh.value = lerp(0.55, 1.15, dayK) + gk * 2.6;
+    u.mieCoefficient.value = 0.0008 + weatherK * 0.0035 + gk * 0.007;
     if (u.cloudCoverage) u.cloudCoverage.value = 0.38 + weatherK * 0.45;
-    _f.copy(FOG_DAY).lerp(FOG_NIGHT, nightK).lerp(FOG_RAIN, weatherK * 0.7 * dayK).lerp(COL_GOLD_FOG, gk * 0.45);
+    _f.copy(FOG_DAY).lerp(FOG_NIGHT, nightK).lerp(FOG_RAIN, weatherK * 0.7 * dayK).lerp(COL_GOLD_FOG, gk * 0.6);
     scene.fog.color.copy(_f);
     scene.fog.near = CFG.VIEW_DIST * (0.5 - weatherK * 0.28); // golden NÃO encobre o mapa
     stars.material.opacity = nightK * (1 - weatherK) * 0.9;
