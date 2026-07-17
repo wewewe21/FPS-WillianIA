@@ -276,3 +276,43 @@ phases(tod) => { dayK, nightK }  // curva atual do Env extraída
 
 - Cobertura: Fase A→T0, B→T1, C→T2, D→T3, E→T6, F→T7, G→T4+T5, H→T8; testes 6.1→T1, 6.2→T3, 6.3→T7, 6.4→T4/T5, 6.5→T6, 6.6→T8-S4; visual→T0/T8; perf→T1-S6/T8-S2; debug→T0/T6.
 - Riscos declarados: (1) burn do stream tem que ser byte-idêntico — validado por testes de layout existentes (city/collision) que quebram alto se errar; (2) DAY_LEN 420→480 muda ritmo do SOLO (+14% de ciclo) — decisão documentada, BR intacto; (3) structures.js precisa expor retângulos de telhado — mudança aditiva mínima; (4) traversal pode não reproduzir o bug relatado — o teste vira a rede de segurança e o relatório declara "não reproduzido" com dados; (5) goldenHour mexe em tone/fog — screenshots A/B decidem os coeficientes finais.
+
+---
+
+## Execution log (2026-07-17)
+
+**Baseline:** suítes do escopo 40/40; suíte completa 403 → 400 pass + grama-na-
+cidade (pré-existente) + 2 flakes. Capturas `output/terrain-baseline/` (19).
+Reprodução do "carro travando": 30/30 corredores com perda de rodas; 5 casos
+>1,5 s parado (pior 3,77 s) — telemetria em `output/stuck-probe.json`.
+
+**Causas-raiz comprovadas (com dados):**
+1. `heightAt` público bilinear 2,5 m ≠ malha/Cannon triangulares 5 m — até
+   **78,5 cm** de divergência (red/green no terrain-physics novo caso).
+2. 3ª oitava do fbm médio (λ~15 m) → cristas < entre-eixos → rodas dianteiras
+   `hit:false` com suspensão no máximo → rastejo a ~0,1 m/s com acelerador.
+3. Círculo de fricção do RaycastVehicle: `maxImpulse = grip×suspensão×dt`
+   consumido pelo LATERAL em rampas — buggy(1.4)/caminhão(1.6) estolavam
+   parados onde o esportivo (2.2) subia. → grip 1.9/2.0.
+4. Grama INOCENTADA: zero corpos/obstáculos dela; corredores de teste eram
+   gramados; colisor atingido sempre `terreno`.
+
+**Desvios/decisões:**
+- DAY_LEN canônico = 480 (o do BR); solo +14% de ciclo.
+- Corredores de teste ≤12° ("hill-start confortável"; caminhão parado não
+  arranca a 14-16° — limitação real registrada); contrato mundial driveable=20°.
+- Convenção descoberta: veículos olham **+X** — testes que assumirem −Z validam
+  o corredor perpendicular ao percurso.
+- Teste "grama na cidade" reescrito pro contrato real do citylayout (zero em
+  rua/prédio/núcleo<56 fora de canteiro; anel de fade parcial é design) — era
+  insatisfazível desde o rework da cidade; **agora passa**.
+- Lotes da cidade são caixas sólidas (player não entra) — interior de verdade =
+  torre; testes de exposure usam a torre.
+- Cenários de tiro (weapon-aim/br-pve) escolhem linha com LOS livre — tiro
+  rasteiro bloqueado por árvore/cacto é mecânica pré-existente correta.
+
+**Fechamento:** suíte completa **433/433, 0 skip** (inclui a ex-falha da grama).
+Bench tick: 1,22–1,28 ms vs 1,26–1,30 pré-terreno (sem regressão; gate <15%).
+Segurança: server.js intocado; limites 55/90/120 intactos; cliente não envia
+weather/biome/surface; posse de veículo/anti-cheat preservados (suítes verdes).
+GLBs e js/carwheels.js: **zero mudanças**.
