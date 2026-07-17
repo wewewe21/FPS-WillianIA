@@ -42,7 +42,11 @@ function volcanoHeightMap(x, z) {
 }
 function heightAnalytic(x, z) {
   let h = fbm(x, z, 4, 0.0042, 9.5);          // colinas largas
-  h += fbm(x + 310, z - 170, 3, 0.016, 2.1);  // detalhe médio
+  // detalhe médio: 2 oitavas (λ ~62/31 m). A 3ª oitava (λ ~15 m, ±0.5 m)
+  // criava cristas mais curtas que o entre-eixos: rodas dianteiras perdiam
+  // o raycast no topo e o carro encalhava com acelerador — medido em
+  // test/car-terrain-traversal (telemetria por roda). Colinas/biomas intactos.
+  h += fbm(x + 310, z - 170, 2, 0.016, 2.1);
   h += Math.max(0, fbm(x - 800, z + 530, 2, 0.0021, 14)) * 1.25; // morros ocasionais
   // platô gramado na área de spawn (acampamento inicial / carro)
   const d0 = Math.hypot(x, z);

@@ -285,13 +285,16 @@ export function createCar(deps) {
   const CFG_BUGGY = { name: 'BUGGY', mass: 280, half: [1.8, 0.38, 0.85],
     wheelsVis: [[1.147, -0.993, 0.612], [1.147, -0.993, -0.612], [-0.814, -0.993, 0.612], [-0.814, -0.993, -0.612]],
     wheelRVis: 0.207, wheelWVis: 0.16, groundOffset: -1.2, suspStiff: 24, comDrop: 0.65,
-    force: 1650, steer: 0.55, brake: 32, maxKmh: 72, engine: 'normal',
+    // grip 1.9: com 1.4 o círculo de fricção (maxImpulse = grip×suspensão×dt)
+    // era consumido pelo LATERAL em rampas ≥12° e o forward saturava em ~zero —
+    // buggy estolava parado em corredor dirigível (test/car-terrain-traversal)
+    force: 1650, steer: 0.55, brake: 32, maxKmh: 72, grip: 1.9, engine: 'normal',
     modelUrl: '/assets/models/Veículos/gumball-car.optimized.glb', modelYaw: Math.PI / 2,
     build: () => buildPlaceholder([1.8, 0.38, 0.85], 0xe8562a) };
   const CFG_TRUCK = { name: 'CAMINHÃO MILITAR', mass: 680, half: [2.7, 0.55, 1.05],
     wheelsVis: [[1.673, -0.387, 0.916], [1.673, -0.387, -0.916], [-0.812, -0.343, 0.916], [-0.812, -0.343, -0.916]],
     wheelRVis: [0.437, 0.437, 0.481, 0.481], wheelWVis: 0.22, groundOffset: -1.47, suspStiff: 20, comDrop: 0.3,
-    force: 3600, steer: 0.45, brake: 55, maxKmh: 84, grip: 1.6, engine: 'truck',
+    force: 3600, steer: 0.45, brake: 55, maxKmh: 84, grip: 2.0, engine: 'truck', // idem buggy: 1.6 estolava em hill-start ≥14°
     modelUrl: '/assets/models/Veículos/truck-drifter.optimized.glb', modelYaw: 0,
     build: () => buildPlaceholder([2.7, 0.55, 1.05], 0x46523a) };
   const mkSport = c => ({ name: 'ESPORTIVO GT', mass: 420, half: [1.9, 0.32, 0.88],
