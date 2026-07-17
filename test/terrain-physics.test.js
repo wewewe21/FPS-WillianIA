@@ -100,4 +100,53 @@ describe('Heightfield físico = malha visual do terreno', { skip: !CHROME && 'Ch
     assert.ok(r.worst <= 0.02,
       `física diverge do visual em até ${(r.worst * 100).toFixed(1)}cm — ex.: ${JSON.stringify(r.piores)}`);
   });
+
+  it('dado heightAt() PÚBLICO (pós-init), então coincide com a malha visual em ambos os lados da diagonal', async () => {
+    // no código antigo o buildHeightGrid tardio trocava heightAt pra bilinear
+    // de 2,5 m — divergia da malha/física trianguladas de 5 m DENTRO das células
+    const r = await h.play(() => {
+      const MP = window.QA.MP, G = window.QA.G;
+      const geo = G.terrainMesh.geometry;
+      const pos = geo.attributes.position, idx = geo.getIndex();
+      const segs = MP.CFG.TERRAIN_SEGS, size = MP.CFG.WORLD_SIZE, half = size / 2, cell = size / segs;
+      function visualY(x, z) {
+        const ix = Math.min(segs - 1, Math.floor((x + half) / cell));
+        const iz = Math.min(segs - 1, Math.floor((z + half) / cell));
+        const quad = (iz * segs + ix) * 6;
+        for (let t = 0; t < 2; t++) {
+          const a = idx.getX(quad + t * 3), b = idx.getX(quad + t * 3 + 1), c = idx.getX(quad + t * 3 + 2);
+          const ax = pos.getX(a), az = pos.getZ(a);
+          const bx = pos.getX(b), bz = pos.getZ(b);
+          const cx = pos.getX(c), cz = pos.getZ(c);
+          const det = (bx - ax) * (cz - az) - (cx - ax) * (bz - az);
+          if (Math.abs(det) < 1e-9) continue;
+          const w1 = ((x - ax) * (cz - az) - (cx - ax) * (z - az)) / det;
+          const w2 = ((bx - ax) * (z - az) - (x - ax) * (bz - az)) / det;
+          if (w1 < -1e-6 || w2 < -1e-6 || w1 + w2 > 1 + 1e-6) continue;
+          return pos.getY(a) + w1 * (pos.getY(b) - pos.getY(a)) + w2 * (pos.getY(c) - pos.getY(a));
+        }
+        return null;
+      }
+      const offsets = [[0.2, 0.2], [0.7, 0.7], [0.15, 0.6], [0.6, 0.15], [0.45, 0.45]];
+      let worst = 0, testados = 0;
+      const piores = [];
+      for (let i = 3; i < segs - 3; i += 13) {
+        for (let j = 5; j < segs - 3; j += 11) {
+          for (const [ox, oz] of offsets) {
+            const x = -half + (i + ox) * cell, z = -half + (j + oz) * cell;
+            const vy = visualY(x, z);
+            if (vy === null) continue;
+            const d = Math.abs(vy - G.heightAt(x, z));
+            testados++;
+            if (d > worst) worst = d;
+            if (d > 0.02 && piores.length < 5) piores.push({ x: +x.toFixed(1), z: +z.toFixed(1), d: +d.toFixed(3) });
+          }
+        }
+      }
+      return { testados, worst, piores };
+    });
+    assert.ok(r.testados > 800, `amostragem insuficiente (${r.testados})`);
+    assert.ok(r.worst <= 0.02,
+      `heightAt público diverge da malha em até ${(r.worst * 100).toFixed(1)}cm — ex.: ${JSON.stringify(r.piores)}`);
+  });
 });

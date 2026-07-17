@@ -12,6 +12,7 @@ import { CSM } from 'three/addons/csm/CSM.js';
 import { CFG, SETTINGS, persistSettings } from './js/config.js';
 import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
+import { createBiomes } from './js/biomes.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
 import * as CityLayout from './js/citylayout.js';
@@ -70,7 +71,18 @@ if (window.io) {
 
 
 const { simplex, heightAt, buildHeightGrid, groundAt, slopeAt, terrainNormal, biomeAt,
+  sampleAt, geometricNormalAt, slopeDegreesAt, surfaceAt, setBiomes,
   platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY, VOLCANO } = createTerrain({ lerp, clamp });
+// grade CANÔNICA construída AQUI, antes de QUALQUER consumidor: malha visual,
+// heightfield do Cannon, grama, spawns e consultas leem a MESMA superfície
+// triangulada — a semântica de heightAt nunca troca durante a execução.
+buildHeightGrid(CFG.WORLD_SIZE);
+// biomas centralizados: pesos/limiar únicos p/ cores, grama, clima e debug
+const Biomes = createBiomes({ simplex, heightAt, slopeAt,
+  WATER_LEVEL, CITY, VOLCANO, cityCategory: CityLayout.cityCategory,
+  smoothstep: THREE.MathUtils.smoothstep,
+  GRASS_FADE1: CityLayout.GRASS_FADE1, CORE_RADIUS: CityLayout.CORE_RADIUS });
+setBiomes(Biomes.classifyAt);
 
 const SFX = createSFX({ SETTINGS, clamp, rand });
 
@@ -224,9 +236,10 @@ let terrainMesh;
     const slope = slopeAt(x, z);
     const nVar = simplex.noise(x * 0.02, z * 0.02) * 0.5 + 0.5;
     c.copy(COL_GRASS_A).lerp(COL_GRASS_B, nVar);
-    const bio = biomeAt(x, z);
-    if (bio < -0.18) c.lerp(COL_SAND, THREE.MathUtils.smoothstep(-bio, 0.18, 0.45));  // bioma deserto
-    if (bio > 0.34) c.lerp(COL_FOREST, THREE.MathUtils.smoothstep(bio, 0.34, 0.62));  // bioma floresta
+    // fatores de bioma da fonte CENTRAL (js/biomes.js) — mesmos limiares de antes
+    const cls = Biomes.classifyAt(x, z);
+    c.lerp(COL_SAND, cls.desertK);    // bioma deserto
+    c.lerp(COL_FOREST, cls.forestK);  // bioma floresta
     if (h < 0.9) c.lerp(COL_SAND, THREE.MathUtils.smoothstep(0.9 - h, 0, 1.4));       // baixadas arenosas
     if (slope > 0.45) c.lerp(COL_DIRT, THREE.MathUtils.smoothstep(slope, 0.45, 0.75)); // barranco
     if (slope > 0.7) c.lerp(COL_ROCK, THREE.MathUtils.smoothstep(slope, 0.7, 1.05));   // rocha
@@ -2083,6 +2096,7 @@ window.__game = {
   platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)
   terrainMesh, // hook de QA: superfície visual p/ comparar com o heightfield físico
   heightAt, biomeAt, groundAt, obstaclesNear,
+  surfaceAt, slopeDegreesAt, geometricNormalAt, sampleAt, // superfície canônica (QA)
   forceStart() { startGame(false); },
   teleportToCar() {
     player.pos.set(Car.group.position.x + 3, heightAt(Car.group.position.x + 3, Car.group.position.z), Car.group.position.z);
@@ -2126,6 +2140,5 @@ window.__MP = {
   socket: __mpSocket, spawn: __mpSpawn,
 };
 
-buildHeightGrid(CFG.WORLD_SIZE); // PERF: consultas de altura via grade bilinear daqui em diante
 rebucketTrees(0, 0);
 animate();

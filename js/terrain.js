@@ -62,29 +62,84 @@ function heightAnalytic(x, z) {
   }
   return h;
 }
-/* PERF: depois que o mundo é gerado, a altura vem de uma grade pré-computada
-   com interpolação bilinear (~20x mais rápido que 9 chamadas de simplex por
-   consulta). A geração do mundo usa a analítica na ordem original, então o
-   determinismo multiplayer não muda. A grade é idêntica em todos os clientes. */
-let hGrid = null, hGridN = 0, hGridHalf = 0, hGridCell = 0;
-function buildHeightGrid(worldSize, cells = 440) {
-  const n = cells + 1;
-  const g = new Float32Array(n * n);
-  const half = worldSize / 2, step = worldSize / cells;
+/* Grade CANÔNICA do terreno: as MESMAS (SEGS+1)² amostras alimentam a malha
+   visual, o CANNON.Heightfield e heightAt() — que interpola o TRIÂNGULO REAL
+   da célula (diagonal b–d do PlaneGeometry, a mesma do Cannon). É construída
+   UMA vez, ANTES de qualquer consumidor, e nunca troca de semântica: física,
+   render e consultas descrevem exatamente a mesma superfície.
+   (Também é ~20x mais rápida que a analítica; a GERAÇÃO do mundo continua
+   usando a analítica na ordem original — determinismo multiplayer intacto.) */
+let S = null; // { n, half, cell, data: Float32Array }
+function buildHeightGrid(worldSize, segs = Math.round(worldSize / 5)) {
+  if (S) return; // imutável: reconstruir mudaria a semântica no meio do jogo
+  const n = segs + 1, half = worldSize / 2, cell = worldSize / segs;
+  const data = new Float32Array(n * n);
   for (let j = 0; j < n; j++)
     for (let i = 0; i < n; i++)
-      g[j * n + i] = heightAnalytic(-half + i * step, -half + j * step);
-  hGrid = g; hGridN = n; hGridHalf = half; hGridCell = step;
+      data[j * n + i] = heightAnalytic(-half + i * cell, -half + j * cell);
+  S = { n, half, cell, data };
+}
+function sampleAt(i, j) { return S.data[j * S.n + i]; }
+/* localiza a célula e devolve os 4 cantos + coords locais (tx,tz) */
+function cellAt(x, z) {
+  const fx = (x + S.half) / S.cell, fz = (z + S.half) / S.cell;
+  const i = Math.min(fx | 0, S.n - 2), j = Math.min(fz | 0, S.n - 2);
+  const r0 = j * S.n + i;
+  return { tx: fx - i, tz: fz - j, ha: S.data[r0], hd: S.data[r0 + 1], hb: S.data[r0 + S.n], hc: S.data[r0 + S.n + 1] };
 }
 function heightAt(x, z) {
-  if (!hGrid || x < -hGridHalf || x >= hGridHalf || z < -hGridHalf || z >= hGridHalf)
+  if (!S || x < -S.half || x >= S.half || z < -S.half || z >= S.half)
     return heightAnalytic(x, z);
-  const fx = (x + hGridHalf) / hGridCell, fz = (z + hGridHalf) / hGridCell;
-  const i = fx | 0, j = fz | 0, tx = fx - i, tz = fz - j;
-  const r0 = j * hGridN + i, r1 = r0 + hGridN;
-  const a = hGrid[r0] + (hGrid[r0 + 1] - hGrid[r0]) * tx;
-  const b = hGrid[r1] + (hGrid[r1 + 1] - hGrid[r1]) * tx;
-  return a + (b - a) * tz;
+  const c = cellAt(x, z);
+  // diagonal b–d (mesma do PlaneGeometry): tri(a,b,d) se tx+tz≤1, senão tri(b,c,d)
+  return (c.tx + c.tz <= 1)
+    ? c.ha + (c.hd - c.ha) * c.tx + (c.hb - c.ha) * c.tz
+    : c.hc + (c.hb - c.hc) * (1 - c.tx) + (c.hd - c.hc) * (1 - c.tz);
+}
+/* normal GEOMÉTRICA do triângulo real (física/dirigibilidade). A visual
+   suavizada continua em terrainNormal() — são propositalmente diferentes. */
+function geometricNormalAt(x, z, out) {
+  if (!S || x < -S.half || x >= S.half || z < -S.half || z >= S.half) {
+    // fora da grade: gradiente analítico central (borda do mundo)
+    const e = 0.6;
+    const dx = heightAnalytic(x + e, z) - heightAnalytic(x - e, z);
+    const dz = heightAnalytic(x, z + e) - heightAnalytic(x, z - e);
+    const l = Math.hypot(dx / (2 * e), 1, dz / (2 * e));
+    return out.set(-dx / (2 * e) / l, 1 / l, -dz / (2 * e) / l);
+  }
+  const c = cellAt(x, z);
+  // gradiente constante por triângulo: dh/dx e dh/dz do plano
+  let gx, gz;
+  if (c.tx + c.tz <= 1) { gx = (c.hd - c.ha) / S.cell; gz = (c.hb - c.ha) / S.cell; }
+  else { gx = (c.hc - c.hb) / S.cell; gz = (c.hc - c.hd) / S.cell; }
+  const l = Math.hypot(gx, 1, gz);
+  return out.set(-gx / l, 1 / l, -gz / l);
+}
+const _gn = { x: 0, y: 1, z: 0, set(a, b, c) { this.x = a; this.y = b; this.z = c; return this; } };
+function slopeDegreesAt(x, z) {
+  geometricNormalAt(x, z, _gn);
+  return Math.acos(Math.min(1, _gn.y)) * 180 / Math.PI;
+}
+/* contrato único de consulta da superfície (biomas entram via setBiomes) */
+let biomesClassify = null;
+function setBiomes(fn) { biomesClassify = fn; }
+function surfaceAt(x, z) {
+  const height = heightAt(x, z);
+  const slopeDegrees = slopeDegreesAt(x, z);
+  const out = {
+    height, slopeDegrees,
+    waterDepth: Math.max(0, WATER_LEVEL - height),
+    biomeId: 'prairie', biomeWeights: null, surfaceType: 'terrain',
+    driveable: height > WATER_LEVEL && slopeDegrees <= 20,
+    vegetationFactor: height > WATER_LEVEL + 0.25 ? 1 : 0,
+  };
+  if (biomesClassify) {
+    const b = biomesClassify(x, z, out);
+    out.biomeId = b.id; out.biomeWeights = b.weights;
+    out.surfaceType = b.surfaceType; out.vegetationFactor = b.vegetationFactor;
+    out.driveable = out.driveable && b.driveable;
+  }
+  return out;
 }
 /* plataformas pisáveis (andares e rampas de prédios) além do terreno */
 const platforms = []; // {x0,x1,z0,z1, y} | rampa: {ramp:true, axis:'x'|'z', y0, y1}
@@ -140,5 +195,6 @@ function obstaclesNear(x, z) {
 }
   return { simplex, fbm, heightAt, heightAnalytic, buildHeightGrid, groundAt,
     slopeAt, terrainNormal, biomeAt,
+    sampleAt, geometricNormalAt, slopeDegreesAt, surfaceAt, setBiomes,
     platforms, WATER_LEVEL, addObstacle, obstaclesNear, CITY, VOLCANO };
 }

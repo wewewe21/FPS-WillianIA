@@ -53,19 +53,26 @@ describe('Terreno (js/terrain.js)', () => {
     assert.ok(dif > 40, 'terrenos iguais com seeds diferentes?');
   });
 
-  it('dada a grade de altura (PERF), então ela casa com a analítica no mundo todo', () => {
+  it('dada a grade CANÔNICA, então é exata nos vértices e limitada entre eles', () => {
+    // contrato novo: a verdade é a MALHA triangulada de 5 m (mesma da física);
+    // a analítica é só o GERADOR das amostras. Nos vértices: idêntica (f32).
+    // Entre vértices: o microdetalhe analítico que a malha nunca mostrou pode
+    // desviar — limitado pra pegar grade quebrada/deslocada, não pra exigir
+    // um detalhe que física e visual não têm.
     const r = seedRandom(777);
     const t = createTerrain({ lerp, clamp });
     r();
     t.buildHeightGrid(1100);
-    let worst = 0;
-    for (let i = 0; i < 800; i++) {
-      const x = (Math.sin(i * 12.9898) * 43758.5453 % 1) * 1000 - 500;
-      const z = (Math.sin(i * 78.233) * 12543.21 % 1) * 1000 - 500;
-      const d = Math.abs(t.heightAt(x, z) - t.heightAnalytic(x, z));
-      if (d > worst) worst = d;
+    const CELL = 5, HALF = 550;
+    let worstV = 0, worstM = 0;
+    for (let i = 0; i < 400; i++) {
+      const gi = (i * 37) % 220, gj = (i * 61) % 220;
+      const vx = -HALF + gi * CELL, vz = -HALF + gj * CELL;
+      worstV = Math.max(worstV, Math.abs(t.heightAt(vx, vz) - t.heightAnalytic(vx, vz)));
+      worstM = Math.max(worstM, Math.abs(t.heightAt(vx + 2.1, vz + 1.7) - t.heightAnalytic(vx + 2.1, vz + 1.7)));
     }
-    assert.ok(worst < 0.75, `grade desvia ${worst.toFixed(3)}m da analítica`);
+    assert.ok(worstV < 1e-4, `vértice desvia ${worstV}m da amostra analítica`);
+    assert.ok(worstM < 2.0, `interior da célula desvia ${worstM.toFixed(3)}m — grade quebrada/deslocada`);
   });
 
   it('dada uma plataforma, então groundAt sobe até ela só quando alcançável', () => {
