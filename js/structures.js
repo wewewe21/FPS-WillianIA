@@ -10,6 +10,7 @@ import * as CityLayout from './citylayout.js';
 export function createStructures(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
   const sites = [];      // {x, z, r, type}
+  const fieldRoofs = []; // telhados do CAMPO p/ o clima (js/cover.js) — metadado puro
   const walls = [];      // AABBs sólidas {x0,x1,y0,y1,z0,z1}
   const geos = [];
   const smokeSpots = []; // topos de chaminé (fumaça ambiente)
@@ -49,6 +50,7 @@ export function createStructures(deps) {
     sbox(0.2, 0.2, 3.4, cx - 1.4, y + 3.6, cz, 0x8a6238, false);
     sbox(0.2, 0.2, 3.4, cx + 1.4, y + 3.6, cz, 0x8a6238, false);
     sbox(3.7, 0.28, 3.7, cx, y + H, cz, 0x8a6238);
+    fieldRoofs.push({ x0: cx - 1.85, x1: cx + 1.85, z0: cz - 1.85, z1: cz + 1.85, roofY: y + H + 0.14 });
     sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz - 1.78, 0x6b4a2e, false);
     sbox(3.7, 0.5, 0.14, cx, y + H + 0.5, cz + 1.78, 0x6b4a2e, false);
     sbox(0.14, 0.5, 3.7, cx - 1.78, y + H + 0.5, cz, 0x6b4a2e, false);
@@ -69,6 +71,8 @@ export function createStructures(deps) {
     sbox(segW, H, 0.26, cx + (doorW + segW) / 2, y + H / 2 + 0.15, cz + D / 2, 0x8a6238);
     sbox(doorW + 0.3, 0.45, 0.3, cx, y + H + 0.05, cz + D / 2, 0x6b4a2e, false);
     sbox(W + 0.8, 0.18, D + 0.8, cx, y + H + 0.35, cz, 0x6b4a2e);             // forro
+    fieldRoofs.push({ x0: cx - (W + 0.8) / 2, x1: cx + (W + 0.8) / 2,
+      z0: cz - (D + 0.8) / 2, z1: cz + (D + 0.8) / 2, roofY: y + H + 0.44 });
     const r1 = new THREE.BoxGeometry(W + 1.1, 0.15, D * 0.64);
     r1.rotateX(0.48); r1.translate(cx, y + H + 0.92, cz - D * 0.26);
     paintGeometry(r1, _sc.setHex(0xa84f35)); geos.push(r1);
@@ -817,5 +821,6 @@ export function createStructures(deps) {
   };
 
   return { sites, walls, rayHit, segBlocked, collide, FORT_POS, flames, smokeSpots, flags, city,
-    cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY, NEXUS_INTERIOR };
+    cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY, NEXUS_INTERIOR,
+    fieldRoofs };
 }

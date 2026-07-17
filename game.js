@@ -1757,6 +1757,10 @@ function buildCityCover() {
   });
 }
 buildCityCover();
+// estruturas do CAMPO (torres/cabanas): telhado climático próprio — o evento
+// da cidade remove só o source 'city'; 'campo' fica de pé
+for (const r of Structures.fieldRoofs)
+  Cover.addRoofRect({ x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1, roofY: r.roofY, sourceId: 'campo' });
 for (const p of platforms) {
   if (p.ramp) continue;
   if ((p.x1 - p.x0) * (p.z1 - p.z0) < 6) continue; // só lajes com área de teto

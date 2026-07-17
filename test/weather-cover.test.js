@@ -139,6 +139,28 @@ describe('Cobertura de chuva (Chrome headless)', { skip: !CHROME && 'Chrome não
     assert.equal(r.depois, true, 'cobertura não voltou no restore');
   });
 
+  it('dado o CAMPO (cabana/torre/ruína), então telhado climático certo — e imune ao evento da cidade', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G;
+      const at = s => G.Cover.coverAt(s.x, G.heightAt(s.x, s.z) + 1.6, s.z);
+      const cab = G.Structures.sites.find(s => s.type === 'cabana');
+      const tor = G.Structures.sites.find(s => s.type === 'torre');
+      const rui = G.Structures.sites.find(s => s.type === 'ruína');
+      const antes = at(cab);
+      G.Structures.city.destroy();
+      const durante = at(cab);
+      G.Structures.city.restore();
+      return { antes, durante, torre: at(tor), ruina: at(rui),
+        sobreLaje: G.Cover.coverAt(cab.x, G.heightAt(cab.x, cab.z) + 8, cab.z).covered };
+    });
+    assert.equal(r.antes.covered, true, 'cabana sem telhado climático: ' + JSON.stringify(r.antes));
+    assert.equal(r.antes.sourceId, 'campo');
+    assert.equal(r.torre.covered, true, 'embaixo da laje da torre sem cobertura');
+    assert.equal(r.ruina.covered, false, 'ruína é ABERTA — cobertura fantasma');
+    assert.equal(r.sobreLaje, false, 'acima do telhado tem que ser céu aberto');
+    assert.equal(r.durante.covered, true, 'evento da cidade derrubou o telhado do CAMPO');
+  });
+
   it('rede de segurança: nenhum pageerror nos cenários de clima', () => {
     assert.deepEqual(h.pageErrors, [], 'erros: ' + h.pageErrors.join(' | '));
   });
