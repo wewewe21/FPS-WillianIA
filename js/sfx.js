@@ -5,8 +5,12 @@ export function createSFX(deps) {
   // motor do carro (2 osciladores dessintonizados + sub + escape com ruído)
   let engineOsc = null, engineOsc2 = null, engineSub = null, engineGain = null, engineFilter = null, engineLfo = null, exhGain = null;
   let heliGain = null, heliLfo = null;
-  // sem música/vento: só a camada de chuva reage ao clima
-  let musicOn = false, rainGain = null, rainAmt = 0;
+  // sem música/vento: só a camada de chuva reage ao clima.
+  // Mixagem da chuva: ganho-teto MUITO abaixo do antigo 0.13 (mascarava passos/
+  // tiros) + low-pass por exposição — dentro de prédio/nave vira chuva "lá fora".
+  const RAIN_GAIN_BASE = 0.05;  // externo, intensidade máxima
+  const RAIN_GAIN_CAP = 0.07;   // teto duro (não subir sem A/B de mix)
+  let musicOn = false, rainGain = null, rainLp = null, rainAmt = 0, rainExposure = 1;
   function init() {
     if (ctx) return;
     try {
@@ -177,14 +181,28 @@ export function createSFX(deps) {
       musicOn = true;
       const r = ctx.createBufferSource(); r.buffer = noiseBuf; r.loop = true;
       const rF = ctx.createBiquadFilter(); rF.type = 'bandpass'; rF.frequency.value = 2800; rF.Q.value = 0.25;
+      // low-pass de INTERIOR: aberto (12 kHz) lá fora, ~900 Hz coberto
+      rainLp = ctx.createBiquadFilter(); rainLp.type = 'lowpass'; rainLp.frequency.value = 12000;
       rainGain = ctx.createGain(); rainGain.gain.value = 0;
-      r.connect(rF); rF.connect(rainGain); rainGain.connect(master);
+      r.connect(rF); rF.connect(rainLp); rainLp.connect(rainGain); rainGain.connect(master);
       r.start();
     },
     musicUpdate() {
       if (!ctx || !musicOn || !rainGain) return;
-      rainGain.gain.setTargetAtTime(rainAmt * 0.13, ctx.currentTime, 1.5);
+      // interior: −85% de volume e timbre abafado; transições sem clique
+      const g = Math.min(RAIN_GAIN_CAP, rainAmt * RAIN_GAIN_BASE) * (0.15 + 0.85 * rainExposure);
+      rainGain.gain.setTargetAtTime(g, ctx.currentTime, 1.2);
+      rainLp.frequency.setTargetAtTime(900 + 11100 * rainExposure, ctx.currentTime, 0.5);
     },
-    setRain(k) { rainAmt = k; },
+    // aceita número (compat) OU { intensity, exposure }
+    setRain(k) {
+      if (typeof k === 'object' && k !== null) {
+        rainAmt = k.intensity || 0;
+        rainExposure = k.exposure === undefined ? 1 : Math.max(0, Math.min(1, k.exposure));
+      } else rainAmt = k || 0;
+    },
+    rainLevel() { // QA: nível-alvo atual da chuva (sem tocar o grafo de áudio)
+      return Math.min(RAIN_GAIN_CAP, rainAmt * RAIN_GAIN_BASE) * (0.15 + 0.85 * rainExposure);
+    },
   };
 }

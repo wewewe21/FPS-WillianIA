@@ -9,7 +9,10 @@ import { todStep, weatherAt, windAt, goldenHourK } from './climate.js';
 
 export function createEnv(deps) {
   const { CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler,
-    worldSeed = 424242 } = deps;
+    worldSeed = 424242, coverAt = null } = deps;
+  let camExposure = 1;      // 1 = céu aberto, 0 = coberto (suavizado)
+  let camTargetExposure = 1;
+  let coverAcc = 9;         // consulta de cobertura em ~7 Hz, não por frame
   const _dummy2 = new THREE.Object3D();
   let elapsed = 0;          // relógio da SESSÃO (clima do solo deriva daqui)
   let tod = 0.33;           // 0 = meia-noite, 0.5 = meio-dia (setter de QA/BR ajusta)
@@ -36,6 +39,7 @@ export function createEnv(deps) {
   const rainMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.015, 0.85, 0.015),
     new THREE.MeshBasicMaterial({ color: 0x9fc2e8, transparent: true, opacity: 0.42, depthWrite: false }), RN);
   rainMesh.visible = false; rainMesh.frustumCulled = false;
+  rainMesh.name = 'rainFx'; // QA localiza por nome
   scene.add(rainMesh);
   const rainP = [];
   for (let i = 0; i < RN; i++) rainP.push({ x: rand(-22, 22), y: rand(0, 26), z: rand(-22, 22) });
@@ -44,6 +48,7 @@ export function createEnv(deps) {
   const snowMesh = new THREE.InstancedMesh(new THREE.CircleGeometry(0.055, 6),
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide }), SN);
   snowMesh.visible = false; snowMesh.frustumCulled = false;
+  snowMesh.name = 'snowFx';
   scene.add(snowMesh);
   const snowP = [];
   for (let i = 0; i < SN; i++) snowP.push({ x: rand(-20, 20), y: rand(0, 18), z: rand(-20, 20), ph: rand(TAU) });
@@ -108,7 +113,15 @@ export function createEnv(deps) {
     weather = weatherOverride !== null ? weatherOverride
       : weatherAt(worldSeed, elapsed).type;
     weatherK = damp(weatherK, weather === 'limpo' ? 0 : 1, 0.4, dt);
-    SFX.setRain(weather === 'chuva' ? weatherK : 0);
+    // exposição ao céu: dentro de prédio/torre/nave a chuva some e abafa.
+    // Consulta barata (grade de telhados) em ~7 Hz + transição suave.
+    coverAcc += dt;
+    if (coverAt && coverAcc > 0.15) {
+      coverAcc = 0;
+      camTargetExposure = coverAt(camera.position.x, camera.position.y, camera.position.z).covered ? 0 : 1;
+    }
+    camExposure = damp(camExposure, camTargetExposure, 4, dt);
+    SFX.setRain({ intensity: weather === 'chuva' ? weatherK : 0, exposure: camExposure });
     // vento compartilhado: grama, chuva e neve seguem a MESMA direção
     const wind = windAt(worldSeed, elapsed);
     Grass.material.uniforms.uWindDir.value.set(wind.dirX, wind.dirZ);
@@ -118,25 +131,35 @@ export function createEnv(deps) {
       if (thunderT <= 0) { thunderT = rand(18, 40); SFX.thunder(); flashT = 0.13; }
     }
     flashT = Math.max(0, flashT - dt);
-    if (flashT > 0) hemiLight.intensity += 2.8; // relâmpago
+    if (flashT > 0) hemiLight.intensity += 2.8 * camExposure; // relâmpago não pisca dentro de casa
 
     const cp = camera.position;
-    const showRain = weather === 'chuva' && weatherK > 0.04;
+    // gota/floco que renasceria DEBAIXO de um teto fica oculto (escala 0) —
+    // checagem só no respawn (poucas por frame), nunca raycast por gota
+    const dropCovered = (px, py, pz) => coverAt ? coverAt(px, py, pz).covered : false;
+    const showRain = weather === 'chuva' && weatherK > 0.04 && camExposure > 0.02;
     rainMesh.visible = showRain;
+    rainMesh.material.opacity = 0.42 * camExposure;
     if (showRain) {
       rainMesh.count = Math.max(1, Math.floor(RN * weatherK));
       for (let i = 0; i < rainMesh.count; i++) {
         const p = rainP[i];
-        p.y -= 36 * dt;
-        if (p.y < -2) { p.y = 24; p.x = rand(-22, 22); p.z = rand(-22, 22); }
+        p.y -= (34 + (p.spd || 0)) * dt;
+        if (p.y < -2) {
+          p.y = 24; p.x = rand(-22, 22); p.z = rand(-22, 22);
+          p.spd = rand(0, 7); p.len = rand(0.7, 1.25); // hastes variadas, nada de "macarrão" idêntico
+          p.hidden = dropCovered(cp.x + p.x, cp.y + p.y - 8, cp.z + p.z);
+        }
         _dummy2.position.set(cp.x + p.x, cp.y + p.y - 8, cp.z + p.z);
-        _dummy2.rotation.set(0.07, 0, 0.05);
+        // inclinação segue o VENTO compartilhado (mesma direção da grama)
+        _dummy2.rotation.set(wind.dirZ * 0.09, 0, -wind.dirX * 0.09);
+        _dummy2.scale.set(1, p.hidden ? 0 : (p.len || 1), 1);
         _dummy2.updateMatrix();
         rainMesh.setMatrixAt(i, _dummy2.matrix);
       }
       rainMesh.instanceMatrix.needsUpdate = true;
     }
-    const showSnow = weather === 'neve' && weatherK > 0.04;
+    const showSnow = weather === 'neve' && weatherK > 0.04 && camExposure > 0.02;
     snowMesh.visible = showSnow;
     if (showSnow) {
       // flocos sempre de frente pra câmera: girar no yaw deixava o quad de lado (invisível/riscado)
@@ -146,9 +169,16 @@ export function createEnv(deps) {
       for (let i = 0; i < snowMesh.count; i++) {
         const p = snowP[i];
         p.y -= 2.6 * dt; p.ph += dt;
-        if (p.y < -2) { p.y = 16; p.x = rand(-20, 20); p.z = rand(-20, 20); }
-        _dummy2.position.set(cp.x + p.x + Math.sin(p.ph) * 0.9, cp.y + p.y - 6, cp.z + p.z + Math.cos(p.ph * 0.8) * 0.9);
+        if (p.y < -2) {
+          p.y = 16; p.x = rand(-20, 20); p.z = rand(-20, 20);
+          p.hidden = dropCovered(cp.x + p.x, cp.y + p.y - 6, cp.z + p.z);
+        }
+        _dummy2.position.set(
+          cp.x + p.x + Math.sin(p.ph) * 0.9 + wind.dirX * p.ph * 0.02,
+          cp.y + p.y - 6,
+          cp.z + p.z + Math.cos(p.ph * 0.8) * 0.9 + wind.dirZ * p.ph * 0.02);
         _dummy2.rotation.set(0, camYaw, p.ph); // encara a câmera, rodopia no próprio plano
+        _dummy2.scale.setScalar(p.hidden ? 0 : 1);
         _dummy2.updateMatrix();
         snowMesh.setMatrixAt(i, _dummy2.matrix);
       }
@@ -159,6 +189,7 @@ export function createEnv(deps) {
     update,
     get nightK() { return nightK; },
     get goldenK() { return goldenK; },
+    get camExposure() { return camExposure; },
     get tod() { return tod; }, set tod(v) { tod = v; },
     // setter = override (BR sincronizado / QA); null volta pra agenda do clima
     get weather() { return weather; }, set weather(w) { weatherOverride = w; weather = w === null ? weather : w; },

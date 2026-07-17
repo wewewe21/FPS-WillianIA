@@ -14,6 +14,7 @@ import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } f
 import { createTerrain } from './js/terrain.js';
 import { createBiomes } from './js/biomes.js';
 import * as Climate from './js/climate.js';
+import { createCover } from './js/cover.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
 import * as CityLayout from './js/citylayout.js';
@@ -1735,8 +1736,41 @@ const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, SFX, FX, s
 /* Rockets criado APOS o Boss (dependencia declarada) — só é usado em runtime */
 const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses, extraTargets });
 
+/* Cobertura de céu: chuva/neve não caem dentro de prédios/torre/nave e o som
+   fica abafado. Fontes: footprints×altura dos lotes da cidade + TODAS as lajes
+   caminháveis (andares da torre, plataformas) — zero raycast por gota. */
+const Cover = createCover();
+function buildCityCover() {
+  const cityY = 3.2; // platô urbano
+  CityLayout.LOTS.forEach((lot, i) => {
+    const r = CityLayout.footprintRect(lot, 0.4);
+    Cover.addRoofRect({ x0: CITY.x + r.x0, x1: CITY.x + r.x1, z0: CITY.z + r.z0, z1: CITY.z + r.z1,
+      roofY: cityY + lot.h, sourceId: 'city' });
+  });
+}
+buildCityCover();
+for (const p of platforms) {
+  if (p.ramp) continue;
+  if ((p.x1 - p.x0) * (p.z1 - p.z0) < 6) continue; // só lajes com área de teto
+  Cover.addRoofRect({ x0: p.x0, x1: p.x1, z0: p.z0, z1: p.z1, y: 0, roofY: p.y,
+    sourceId: p.city ? 'city' : 'slab' });
+}
+// cidade destruída = telhado climático some junto (e volta no restore)
+Structures.city.onStateChange = st => {
+  Cover.removeBySource('city');
+  if (st === 'intact') {
+    buildCityCover();
+    for (const p of platforms) {
+      if (p.ramp || !p.city) continue;
+      if ((p.x1 - p.x0) * (p.z1 - p.z0) < 6) continue;
+      Cover.addRoofRect({ x0: p.x0, x1: p.x1, z0: p.z0, z1: p.z1, roofY: p.y, sourceId: 'city' });
+    }
+  }
+};
+
 const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler,
-  worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242 });
+  worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242,
+  coverAt: (x, y, z) => Cover.coverAt(x, y, z) });
 
 /* ================================================================
    VIDA AMBIENTE — borboletas, pássaros, pólen, fogueira, fumaça,
@@ -2090,7 +2124,7 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
-  WeaponModels, FpBody, WeaponRig, Climate,
+  WeaponModels, FpBody, WeaponRig, Climate, Cover,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
   get fps() { return fpsVal; },

@@ -791,6 +791,7 @@ export function createStructures(deps) {
     destroy() {
       if (this._state === 'destroyed') return;
       this._state = 'destroyed';
+      if (this.onStateChange) this.onStateChange('destroyed'); // ex.: cobertura de chuva cai junto
       for (const m of cityVisual) m.visible = false;
       cityRuins.visible = true;
       // colisão: paredes/plataformas urbanas saem dos arrays COMPARTILHADOS
@@ -804,6 +805,7 @@ export function createStructures(deps) {
     restore() {
       if (this._state === 'intact') return;
       this._state = 'intact';
+      if (this.onStateChange) this.onStateChange('intact');
       for (const m of cityVisual) m.visible = true;
       cityRuins.visible = false;
       for (let i = walls.length - 1; i >= 0; i--) if (walls[i].cityRuin) walls.splice(i, 1);
