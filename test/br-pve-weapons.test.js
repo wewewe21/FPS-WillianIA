@@ -43,11 +43,18 @@ describe('BR — armas também atingem alvos PvE', { skip: !CHROME && 'Chrome n�
       const target = G.Skeletons.list[0];
       const origin = MP.player.pos.clone();
       origin.y += 1.05;
-      target.pos().set(origin.x, MP.heightAt(origin.x, origin.z - 8), origin.z - 8);
+      // LOS LIVRE: varre um ângulo cuja linha de 8 m não cruza terreno nem
+      // árvore/cacto (tiro baixo perto do chão é bloqueável por design)
+      let dir = new MP.THREE.Vector3(0, 0, -1);
+      for (let a = 0; a < Math.PI * 2; a += 0.25) {
+        const d = new MP.THREE.Vector3(Math.sin(a), 0, -Math.cos(a));
+        if (MP.rayBlockedAt(origin, d, 8.5) >= 8.4) { dir = d; break; }
+      }
+      target.pos().set(origin.x + dir.x * 8, MP.heightAt(origin.x + dir.x * 8, origin.z + dir.z * 8), origin.z + dir.z * 8);
       target.hp = 90;
       target.alive = true;
       target.group.visible = true;
-      window.__BR_ballistics(origin, new MP.THREE.Vector3(0, 0, -1),
+      window.__BR_ballistics(origin, dir,
         { projSpeed: 120, projDrop: 0.01, dmg: 22, laser: false });
       return target.hp;
     });

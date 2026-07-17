@@ -33,10 +33,19 @@ describe('Mira e balística visual (Chrome headless)', { skip: !CHROME && 'Chrom
         G.arsenal[i].locked = false;
         G.switchWeapon(i);
         window.QA.tick(40);
-        // alvo: primeiro inimigo, plantado a 25m na frente da câmera parada
+        // alvo: primeiro inimigo, plantado a 25m numa DIREÇÃO com LOS livre
+        // (árvore/cacto bloqueia tiro baixo por design — o teste escolhe a linha)
         const e = G.Enemies.list.find(x => x.alive);
         const P = window.QA.MP.player.pos;
-        e.group.position.set(P.x, G.heightAt(P.x, P.z - 25), P.z - 25);
+        const THREE = window.QA.MP.THREE;
+        const eye = new THREE.Vector3(P.x, P.y + 1.62, P.z);
+        let ang = 0;
+        for (let a = 0; a < Math.PI * 2; a += 0.2) {
+          const d = new THREE.Vector3(Math.sin(a), 0, -Math.cos(a));
+          if (window.QA.MP.rayBlockedAt(eye, d, 26) >= 25.5) { ang = a; break; }
+        }
+        const tx = P.x + Math.sin(ang) * 25, tz = P.z - Math.cos(ang) * 25;
+        e.group.position.set(tx, G.heightAt(tx, tz), tz);
         const core = e.hitSpheres()[0];
         window.QA.aimAt(core.c.x, core.c.y, core.c.z);
         G.mouse.aiming = true;
