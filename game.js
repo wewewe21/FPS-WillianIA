@@ -18,6 +18,7 @@ import * as CityLayout from './js/citylayout.js';
 import { createFX } from './js/fx.js';
 import { createDmgNums } from './js/dmgnums.js';
 import { createWeapons } from './js/weapons.js';
+import { createWeaponRig } from './js/weaponrig.js';
 import { createWeaponModels } from './js/weaponmodels.js';
 import { createFpBody } from './js/fpbody.js';
 import { createCharModels } from './js/charmodels.js';
@@ -744,6 +745,7 @@ const DmgNums = createDmgNums({ rand, _v1, camera });
 scene.add(camera); // necessário p/ renderizar filhos da câmera (a arma)
 
 const { weaponRoot, weaponKick, arsenal, knuckleMat } = createWeapons({ camera });
+const WeaponRig = createWeaponRig({ arsenal, camera, weaponRoot });
 function unlockWeapon(i, msg) {
   if (!arsenal[i].locked) return;
   arsenal[i].locked = false;
@@ -763,6 +765,7 @@ const muzzleMatFlash = new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparen
   const f1 = new THREE.Mesh(q, muzzleMatFlash);
   const f2 = new THREE.Mesh(q, muzzleMatFlash); f2.rotation.y = Math.PI / 2;
   const f3 = new THREE.Mesh(q, muzzleMatFlash); f3.rotation.x = Math.PI / 2;
+  for (const f of [f1, f2, f3]) f.userData.weaponFx = true; // FX transparente: não conta como corpo da arma
   muzzle.add(f1, f2, f3);
 }
 const muzzleLight = new THREE.PointLight(0xffc274, 0, 11, 2.2);
@@ -889,6 +892,9 @@ const GRAVITY = 22, JUMP_VEL = 8.4;
 /* modelos 3D reais: armas GLB nas mãos + corpo rigado em primeira pessoa
    (as âncoras procedurais viram alvos de IK — coreografia de recarga intacta) */
 const WeaponModels = createWeaponModels({ arsenal });
+// com os GLBs resolvidos (ready OU fallback), o rig constrói miras/mecanismos
+// calibrados por cima — também pro fallback procedural (perfil fb)
+WeaponModels.ready.then(() => { for (const g of arsenal) WeaponRig.attachComplements(g); });
 const FpBody = createFpBody({ camera, player, state, getGun: () => gun, weaponRoot, arsenal });
 
 let fovCur = 75;
@@ -1041,6 +1047,8 @@ function playerUpdate(dt, t) {
    CÂMERA FPS + ARMA POR FRAME — sway, bob, ADS, recoil, screen shake
    ================================================================ */
 const _euler = new THREE.Euler(0, 0, 0, 'YXZ');
+const _poseEuler = new THREE.Euler(); // sway/sprint/tilt compostos SOBRE a pose do rig
+const _poseQ = new THREE.Quaternion();
 let csmDirty = false;
 let leanRoll = 0;
 let dmgDirT = 0;
@@ -1063,8 +1071,10 @@ function applyFpsCamera(dt, t) {
   recoil.kickZ = damp(recoil.kickZ, 0, 13, dt);
   recoil.kickRot = damp(recoil.kickRot, 0, 11, dt);
 
-  // luneta (zoom forte, ex.: DMR): 0..1 quando quase totalmente mirado
-  const scopedK = gun.adsFov < 32 ? clamp((adsT - 0.7) / 0.3, 0, 1) : 0;
+  // overlay de luneta: só miras tipo 'overlay' (DMR/snipers/luneta 2x),
+  // e só quando o ADS está quase completo — o jogador nunca fica sem referência
+  const activeSight = WeaponRig.activeSight(gun);
+  const scopedK = (activeSight && activeSight.reticle === 'overlay') ? clamp((adsT - 0.7) / 0.3, 0, 1) : 0;
   const breath = (Math.sin(t * 1.5) * 0.0011 + Math.sin(t * 0.83) * 0.0007) * scopedK;
 
   // aplica delta do recoil + respiração na rotação da câmera (compatível com PointerLock)
@@ -1107,42 +1117,50 @@ function applyFpsCamera(dt, t) {
   const ads = adsT * adsT * (3 - 2 * adsT); // smoothstep
   const lower = 1 - switchAnim;
   const sprintPose = sprintT * (1 - ads) * (gun.reloading ? 0.25 : 1);
-  // hip um tico mais alto/perto: as MÃOS do rig entram no quadro (ADS intacto)
-  _v3.copy(gun.hipV); _v3.y += 0.05; _v3.z += 0.06;
-  weaponRoot.position.lerpVectors(_v3, gun.adsV, ads);
-  weaponRoot.position.x += (bobX * 0.55 + swayPos.x) * bobScale - sprintPose * 0.055;
-  weaponRoot.position.y += (bobY + swayPos.y) * bobScale + Math.sin(t * 1.7) * 0.0035 * (1 - adsT)
-                         - lower * 0.3 - sprintPose * 0.02;
-  weaponRoot.position.z += sprintPose * 0.07;
-  weaponRoot.rotation.set(
-    swayRot.x + sprintPose * 0.55 - lower * 0.7,
-    swayRot.y + sprintPose * 0.24,
-    swayRot.y * 0.6 + leanRoll * 2.2 + sprintPose * 0.2
-  );
 
   // ---- recarga em fases: inclina -> tira o pente -> encaixa -> tapa -> ferrolho ----
-  let slap = 0, boltK = 0;
+  // (fases calculadas ANTES da pose: a inclinação compõe com o quaternion de ADS)
+  let slap = 0, boltK = 0, tilt = 0, reloadK = 0;
   if (gun.reloading) {
-    const k = clamp(1 - (gun.reloadEnd - t) / gun.reloadTime, 0, 1);
-    const tilt = THREE.MathUtils.smoothstep(k, 0, 0.16) * (1 - THREE.MathUtils.smoothstep(k, 0.8, 0.97));
-    const magOut = THREE.MathUtils.smoothstep(k, 0.14, 0.3);
-    const magIn = THREE.MathUtils.smoothstep(k, 0.48, 0.66);
+    reloadK = clamp(1 - (gun.reloadEnd - t) / gun.reloadTime, 0, 1);
+    tilt = THREE.MathUtils.smoothstep(reloadK, 0, 0.16) * (1 - THREE.MathUtils.smoothstep(reloadK, 0.8, 0.97));
+    slap = Math.sin(clamp((reloadK - 0.66) / 0.12, 0, 1) * Math.PI);
+    boltK = Math.sin(clamp((reloadK - 0.82) / 0.15, 0, 1) * Math.PI);
+  }
+
+  // pose hip↔ADS: posição E rotação vêm do rig — a mira ativa define o eixo
+  // óptico que precisa terminar no -Z da câmera (slerp, não Euler solto)
+  const hipPose = WeaponRig.hipPose(gun);
+  const adsPose = WeaponRig.adsPose(gun);
+  weaponRoot.position.lerpVectors(hipPose.pos, adsPose.pos, ads);
+  weaponRoot.quaternion.slerpQuaternions(hipPose.quat, adsPose.quat, ads);
+  weaponRoot.position.x += (bobX * 0.55 + swayPos.x) * bobScale - sprintPose * 0.055;
+  weaponRoot.position.y += (bobY + swayPos.y) * bobScale + Math.sin(t * 1.7) * 0.0035 * (1 - adsT)
+                         - lower * 0.3 - sprintPose * 0.02 - tilt * 0.07;
+  weaponRoot.position.z += sprintPose * 0.07;
+  _poseEuler.set(
+    swayRot.x + sprintPose * 0.55 - lower * 0.7 + tilt * 0.32,
+    swayRot.y + sprintPose * 0.24,
+    swayRot.y * 0.6 + leanRoll * 2.2 + sprintPose * 0.2 - tilt * 0.38);
+  weaponRoot.quaternion.multiply(_poseQ.setFromEuler(_poseEuler));
+
+  // âncoras com authority 'clip' pertencem ao AnimationMixer do GLB (sniper
+  // Agulha): a coreografia procedural NÃO pode escrever nelas
+  const magProc = gun.parts.mag && gun.parts.mag.userData.authority !== 'clip';
+  if (gun.reloading) {
+    const magOut = THREE.MathUtils.smoothstep(reloadK, 0.14, 0.3);
+    const magIn = THREE.MathUtils.smoothstep(reloadK, 0.48, 0.66);
     const magDrop = magOut * (1 - magIn);
-    slap = Math.sin(clamp((k - 0.66) / 0.12, 0, 1) * Math.PI);
-    boltK = Math.sin(clamp((k - 0.82) / 0.15, 0, 1) * Math.PI);
-    weaponRoot.rotation.x += tilt * 0.32;
-    weaponRoot.rotation.z -= tilt * 0.38;
-    weaponRoot.position.y -= tilt * 0.07;
-    if (gun.parts.mag) {
+    if (magProc) {
       const b = gun.parts.mag.userData.base;
       gun.parts.mag.position.y = b.y - magDrop * 0.19;
       gun.parts.mag.rotation.x = b.rx - magDrop * 0.55;
     }
     if (gun.parts.pump) { // escopeta: bombeia durante a recarga
-      const cyc = (k > 0.25 && k < 0.95) ? Math.max(0, Math.sin(k * Math.PI * 4)) : 0;
+      const cyc = (reloadK > 0.25 && reloadK < 0.95) ? Math.max(0, Math.sin(reloadK * Math.PI * 4)) : 0;
       gun.parts.pump.position.z = gun.parts.pump.userData.z0 + cyc * 0.085;
     }
-  } else if (gun.parts.mag) {
+  } else if (magProc) {
     const b = gun.parts.mag.userData.base;
     gun.parts.mag.position.y = b.y;
     gun.parts.mag.rotation.x = b.rx;
@@ -1151,15 +1169,14 @@ function applyFpsCamera(dt, t) {
   if (gun.parts.handL) {
     const hb = gun.parts.handL.userData.base;
     if (gun.reloading) {
-      const k = clamp(1 - (gun.reloadEnd - t) / gun.reloadTime, 0, 1);
       if (gun.parts.mag) {
-        const grab = THREE.MathUtils.smoothstep(k, 0.06, 0.18) * (1 - THREE.MathUtils.smoothstep(k, 0.72, 0.85));
+        const grab = THREE.MathUtils.smoothstep(reloadK, 0.06, 0.18) * (1 - THREE.MathUtils.smoothstep(reloadK, 0.72, 0.85));
         _v1.copy(gun.parts.mag.position); _v1.y -= 0.08; _v1.z += 0.03;
         gun.parts.handL.position.lerpVectors(hb.p, _v1, grab);
         gun.parts.handL.rotation.x = hb.rx + grab * 0.5;
       } else { // escopeta: mão vai à porta de carregamento inserindo cartuchos
-        const grab = THREE.MathUtils.smoothstep(k, 0.15, 0.3) * (1 - THREE.MathUtils.smoothstep(k, 0.85, 0.95));
-        const bob = Math.abs(Math.sin(k * Math.PI * 5)) * 0.025;
+        const grab = THREE.MathUtils.smoothstep(reloadK, 0.15, 0.3) * (1 - THREE.MathUtils.smoothstep(reloadK, 0.85, 0.95));
+        const bob = Math.abs(Math.sin(reloadK * Math.PI * 5)) * 0.025;
         gun.parts.handL.position.set(lerp(hb.p.x, 0.05, grab), lerp(hb.p.y, -0.05 + bob, grab), lerp(hb.p.z, 0.06, grab));
       }
     } else {
@@ -1180,14 +1197,16 @@ function applyFpsCamera(dt, t) {
     ui.healFx.style.opacity = '0';
   }
 
-  // ciclo pós-tiro (bomba da escopeta / ferrolho do DMR)
+  // ciclo pós-tiro (bomba da escopeta / ferrolho) — a fase usa a duração REAL
+  // do ciclo desta arma (cadência), não um valor fixo
   gun.cycleT = Math.max(0, gun.cycleT - dt);
+  const cycleDur = gun.cycleDur || (gun.pellets > 1 ? 0.55 : 0.32);
   if (gun.parts.pump && !gun.reloading) {
-    const ph = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / 0.55) * Math.PI) : 0;
+    const ph = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / cycleDur) * Math.PI) : 0;
     gun.parts.pump.position.z = gun.parts.pump.userData.z0 + ph * 0.09;
   }
-  if (gun.parts.bolt) {
-    const ph = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / 0.32) * Math.PI) : 0;
+  if (gun.parts.bolt && gun.parts.bolt.userData.authority !== 'clip') {
+    const ph = gun.cycleT > 0 ? Math.sin((1 - gun.cycleT / cycleDur) * Math.PI) : 0;
     gun.parts.bolt.position.z = gun.parts.bolt.userData.z0 + (ph + boltK) * 0.05;
   }
 
@@ -1196,8 +1215,9 @@ function applyFpsCamera(dt, t) {
   weaponKick.rotation.x = recoil.kickRot + slap * 0.07;
   weaponRoot.visible = !state.driving && !state.flying && scopedK < 0.85; // na luneta, vê só o retículo
 
-  // modelos GLB: animações embutidas da arma + corpo/braços rigados (IK)
+  // modelos GLB: animações embutidas da arma + rig de miras/mecanismos + IK
   WeaponModels.update(dt);
+  WeaponRig.update(dt, t, gun, adsT);
   FpBody.update(dt, t);
 
   // ---- flash do cano ----
@@ -1211,7 +1231,8 @@ function applyFpsCamera(dt, t) {
   controls.pointerSpeed = lerp(1, gun.adsFov < 40 ? 0.36 : 0.75, ads);
 
   // ---- FOV: 75 base, 85 correndo, ADS por arma (55 / 62 / 26) ----
-  let fovTarget = state.driving ? 72 : lerp(lerp(75, 85, sprintT), gun.adsFov, ads);
+  // faca: botão direito é pose de guarda, sem zoom de arma de fogo
+  let fovTarget = state.driving ? 72 : lerp(lerp(75, 85, sprintT), gun.melee ? 75 : gun.adsFov, ads);
   const newFov = damp(fovCur, fovTarget, 11, dt);
   if (Math.abs(newFov - fovCur) > 0.001) {
     fovCur = newFov;
@@ -1224,7 +1245,8 @@ function applyFpsCamera(dt, t) {
   const spd = Math.hypot(player.vel.x, player.vel.z);
   const gap = 7 + spd * 1.4 + trauma * 18 + (player.onGround ? 0 : 9);
   ui.crosshair.style.setProperty('--gap', gap.toFixed(1) + 'px');
-  ui.crosshair.style.opacity = (adsT > 0.55 || state.driving) ? '0' : '1';
+  // só some quando existe uma referência ADS válida na tela (faca: nunca some)
+  ui.crosshair.style.opacity = (state.driving || WeaponRig.sightRefK(gun, adsT) > 0.5) ? '0' : '1';
 
   // flash de dano decai + indicador de direção
   flashT = Math.max(0, flashT - dt * 1.4);
@@ -1314,7 +1336,7 @@ const _missEnd = new THREE.Vector3();
 function fire(t) {
   // faca (melee): golpe curto, sem munição/flash/som de tiro
   if (gun.melee) {
-    gun.cycleT = 0.34;
+    gun.cycleT = 0.34; gun.cycleDur = 0.34;
     addTrauma(0.06);
     recoil.kickZ += 0.12; recoil.kickRot += 0.1;
     SFX.melee();
@@ -1331,7 +1353,11 @@ function fire(t) {
   addTrauma(0.08 + gun.kick * 1.1);
   lastShotInfo.pos.copy(player.pos);
   lastShotInfo.t = t;
-  if (!gun.auto) gun.cycleT = gun.pellets > 1 ? 0.55 : 0.32; // anima bomba/ferrolho
+  // ciclo visual (bomba/ferrolho) em TODO disparo — automáticas também —
+  // nunca mais longo que o intervalo real de cadência da arma
+  gun.cycleDur = Math.min(gun.pellets > 1 ? 0.55 : 0.32, (60 / gun.rpm) * 0.92);
+  gun.cycleT = gun.cycleDur;
+  WeaponRig.ejectShell(gun); // estojo poolado (só perfis balísticos com shellPort)
 
   // bazuca: dispara foguete físico em vez de hitscan
   if (gun.rocket) {
@@ -1340,10 +1366,17 @@ function fire(t) {
     recoil.pitchVel += 2.3;
     recoil.kickZ += 0.28;
     recoil.kickRot += 0.2;
+    camera.getWorldPosition(_rayOrig);
     camera.getWorldDirection(_rayDir);
     muzzle.getWorldPosition(_v3);
     // voando, o tiro sai do HELICÓPTERO, não da câmera de perseguição (10m atrás)
-    if (state.flying) { _v3.copy(Heli.group.position); _v3.y += 1.6; }
+    if (state.flying) { _v3.copy(Heli.group.position); _v3.y += 1.6; _rayOrig.copy(_v3); }
+    // convergência: o foguete nasce na BOCA REAL do tubo mas voa até o ponto
+    // mirado na linha central (primeiro obstáculo ou zero de 120 m). Parede
+    // colada na boca continua sendo atingida — a colisão parte do muzzle.
+    const zeroD = Math.max(4, Math.min(rayBlockedAt(_rayOrig, _rayDir, 240), 120));
+    _v1.copy(_rayOrig).addScaledVector(_rayDir, zeroD);
+    _rayDir.copy(_v1).sub(_v3).normalize();
     Rockets.fire(_v3, _rayDir);
     return;
   }
@@ -1495,15 +1528,14 @@ function shootUpdate(dt, t) {
     ui.invPanel.classList.toggle('open', open);
     if (open) Interact.renderInv();
   }
-  if (justPressed.has('KeyT') && gun.parts.sights) { // troca o acessório de mira
-    gun.sightIdx = ((gun.sightIdx || 0) + 1) % gun.parts.sights.length;
-    for (const s of gun.parts.sights) if (s.mesh) s.mesh.visible = false;
-    const s = gun.parts.sights[gun.sightIdx];
-    if (s.mesh) s.mesh.visible = true;
-    gun.adsFov = s.fov;
-    gun.adsV.set(...s.ads);
-    centerMsg('Mira: ' + s.name, 1100);
-    SFX.switchW();
+  if (justPressed.has('KeyT')) { // troca o acessório de mira (só armas com 2+ miras)
+    const s = WeaponRig.cycleSight(gun);
+    if (s) {
+      gun.adsFov = s.fov;
+      WeaponRig.applySightVisibility(gun);
+      centerMsg('Mira: ' + s.label, 1100);
+      SFX.switchW();
+    }
   }
   // no helicóptero PODE atirar (porta aberta); dirigindo não — as mãos estão no volante
   if (state.driving || state.paused || player.dead || window.__BR_freeze || state.cinematic) { mouse.clicked = false; return; }
@@ -2042,7 +2074,7 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
-  WeaponModels, FpBody,
+  WeaponModels, FpBody, WeaponRig,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
   get fps() { return fpsVal; },

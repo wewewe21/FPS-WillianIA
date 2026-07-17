@@ -28,21 +28,27 @@ export function createWeaponModels(deps) {
     { idx: 1, url: '/assets/models/Armas/shotgun_Shotgun_lenta_forte.glb',
       len: 1.06, pos: [0, 0.01, 0.04], muzzle: [0, 0.045, -0.5],
       strip: /^(Light|Camera)$/ },
+    // ("Magazine_2" deste GLB é na verdade a mira frontal — fica onde está;
+    //  o pente visível da recarga é complemento do weaponrig na âncora mag)
     { idx: 2, url: '/assets/models/Armas/low-poly_Sniper_lenta_forte.glb',
       len: 1.28, pos: [0, -0.005, 0.06], muzzle: [0, 0.03, -0.6] },
     { idx: 3, url: '/assets/models/Armas/bazooka.optimized.glb',
-      len: 1.3, pos: [0, 0.02, 0.05], muzzle: [0, 0.02, -0.62] },
+      len: 1.3, pos: [0, 0.02, 0.05], muzzle: [-0.058, 0.06, -0.6],
+      sightGlass: /glass/i }, // vidro do scope lateral: a mira olha ATRAVÉS dele
     { idx: 4, url: '/assets/models/Armas/low-poly_Arma_do_Alien.glb',
       len: 0.92, pos: [0, -0.01, 0.02], muzzle: [0, 0.01, -0.44],
       glow: 0x2ee6c8 },
     // armas NOVAS (índices 6/7 do arsenal): sniper leve com animações embutidas
-    // e escopeta de rajada — os modelos "rápida fraca" da pasta de assets
+    // e escopeta de rajada — os modelos "rápida fraca" da pasta de assets.
+    // Sniper: mag_4/bolt_6 são controlados pelos CLIPS ("reload"/"bolt_slide");
+    // reparentar quebraria o PropertyBinding do mixer (raiz = root do GLB) e a
+    // pose dos tracks — clipOwned marca as âncoras procedurais como cedidas.
     { idx: 6, url: '/assets/models/Armas/low-poly_sniper_Rápida_Fraca.glb',
       len: 1.16, pos: [0, -0.005, 0.04], muzzle: [0, 0.028, -0.55],
-      bind: { mag: /^(mag_4|magazine)/i, bolt: /^bolt/i }, anims: true },
+      clipOwned: ['mag', 'bolt'], anims: true },
     { idx: 7, url: '/assets/models/Armas/low-poly_Shotgun_rápida_fraca.glb',
       len: 0.96, pos: [0, 0.005, 0.03], muzzle: [0, 0.03, -0.45],
-      strip: /^Lamp/ },
+      strip: /^Lamp/, bind: { pump: /^Cube010$/ } }, // guarda-mão REAL vira a bomba
   ];
 
   function tuneMaterials(root, def) {
@@ -52,6 +58,18 @@ export function createWeaponModels(deps) {
       obj.receiveShadow = false;
       obj.frustumCulled = false; // arma na câmera: culling erra com bounding do modelo
       obj.userData.importedWeaponModel = true;
+      if (def.sightGlass) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        if (mats.some(m => m && def.sightGlass.test(m.name || ''))) {
+          obj.userData.sightGlass = true;
+          // a mira olha ATRAVÉS deste vidro: opaco viraria um buraco preto no ADS
+          for (const m of mats) {
+            m.transparent = true;
+            m.opacity = 0.25;
+            m.depthWrite = false;
+          }
+        }
+      }
       for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) {
         if (!m || !m.isMeshStandardMaterial) continue;
         if (!m.map) {
@@ -126,7 +144,8 @@ export function createWeaponModels(deps) {
       gun.modelRoot = root;
       gun.modelStatus = 'ready';
 
-      // religa nós reais do GLB nas âncoras animadas (pente sai de verdade)
+      // religa nós reais do GLB nas âncoras animadas (pente sai de verdade) —
+      // SÓ em modelos sem clips; nós de clip ficam sob a raiz do mixer
       if (def.bind) {
         for (const [part, re] of Object.entries(def.bind)) {
           const anchor = gun.parts[part];
@@ -135,6 +154,11 @@ export function createWeaponModels(deps) {
             anchor.attach(node); // preserva a pose mundial
             node.visible = true;
           }
+        }
+      }
+      if (def.clipOwned) {
+        for (const part of def.clipOwned) {
+          if (gun.parts[part]) gun.parts[part].userData.authority = 'clip';
         }
       }
       // boca do cano na ponta real do modelo

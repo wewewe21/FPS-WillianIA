@@ -57,6 +57,60 @@
     }
 
     /* boneco voxel low-poly: cabeça, tronco, braços, pernas + visor */
+    /* silhuetas LEVES por classe de arma remota: geometrias e materiais criados
+       UMA vez; cada jogador recebe um clone (clone compartilha geometria).
+       Estado 100% visual — heldWeapon continua sanitizado por weaponCode() e
+       nunca vira autoridade de dano. */
+    const SIL = (() => {
+      const mDark = new THREE.MeshStandardMaterial({ color: 0x2b2f36, roughness: 0.6, metalness: 0.35 });
+      const mWood = new THREE.MeshStandardMaterial({ color: 0x6e4c2c, roughness: 0.7 });
+      const mTeal = new THREE.MeshStandardMaterial({ color: 0x05201f, emissive: 0x2ee6c8, emissiveIntensity: 1.2 });
+      const mAmber = new THREE.MeshStandardMaterial({ color: 0x2a1500, emissive: 0xff9a2e, emissiveIntensity: 1.2 });
+      const box = (parent, m, w, h, d, x, y, z, rx = 0) => {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+        b.position.set(x, y, z); b.rotation.x = rx; parent.add(b); return b;
+      };
+      const cyl = (parent, m, r, len, x, y, z) => {
+        const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), m);
+        c.rotation.x = Math.PI / 2; c.position.set(x, y, z); parent.add(c); return c;
+      };
+      const t = {};
+      t.FUZIL = new THREE.Group();
+      box(t.FUZIL, mDark, 0.16, 0.15, 0.5, 0, 0, -0.2);
+      cyl(t.FUZIL, mDark, 0.03, 0.38, 0, 0.01, -0.62);
+      box(t.FUZIL, mDark, 0.08, 0.18, 0.1, 0, -0.14, -0.12, 0.2);
+      t.ESCOPETA = new THREE.Group();
+      box(t.ESCOPETA, mWood, 0.16, 0.16, 0.44, 0, 0, -0.16);
+      cyl(t.ESCOPETA, mDark, 0.045, 0.42, 0, 0.03, -0.58);
+      box(t.ESCOPETA, mWood, 0.1, 0.09, 0.16, 0, -0.05, -0.5);
+      t.DMR = new THREE.Group();
+      box(t.DMR, mDark, 0.14, 0.14, 0.55, 0, 0, -0.22);
+      cyl(t.DMR, mDark, 0.025, 0.55, 0, 0.01, -0.75);
+      cyl(t.DMR, mDark, 0.045, 0.24, 0, 0.13, -0.18);
+      t.SNIPER = t.DMR; // mesma família visual (cano longo + luneta)
+      t.BAZUCA = new THREE.Group();
+      cyl(t.BAZUCA, mDark, 0.09, 1.0, 0, 0.09, -0.3);
+      const tip = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.16, 8), mAmber);
+      tip.rotation.x = -Math.PI / 2; tip.position.set(0, 0.09, -0.86); t.BAZUCA.add(tip);
+      box(t.BAZUCA, mDark, 0.08, 0.14, 0.08, 0, -0.06, -0.1);
+      t.PLASMA = new THREE.Group();
+      box(t.PLASMA, mDark, 0.18, 0.18, 0.5, 0, 0, -0.18);
+      box(t.PLASMA, mTeal, 0.19, 0.03, 0.36, 0, 0.06, -0.2);
+      cyl(t.PLASMA, mTeal, 0.035, 0.2, 0, 0, -0.53);
+      const MUZZLE_Z = { FUZIL: -0.9, ESCOPETA: -0.82, DMR: -1.05, SNIPER: -1.05, BAZUCA: -0.98, PLASMA: -0.68 };
+      return { t, MUZZLE_Z };
+    })();
+    function applyRemoteWeapon(rp) {
+      const code = rp.heldWeapon;
+      const w = rp.body.weapon;
+      if (w.userData.weaponClass === code) return;
+      w.userData.weaponClass = code;
+      for (const c of [...w.children]) if (c !== rp.body.muzzle) w.remove(c);
+      const tpl = SIL.t[code];
+      if (tpl) w.add(tpl.clone());
+      rp.body.muzzle.position.z = SIL.MUZZLE_Z[code] || -0.9;
+    }
+
     function buildVoxelBody(colors) {
       const [cBody, cCloth, cDetail, cVisor] = (colors || ['#4da6ff', '#2b3a4d', '#8a5a2b', '#ffd76a'])
         .map(c => new THREE.Color(c));
@@ -86,11 +140,10 @@
       box(mBody, 0.4, 0.38, 0.38, 0, 1.66, 0);            // cabeça
       box(mVisor, 0.3, 0.09, 0.06, 0, 1.7, -0.21);        // visor
       box(mDetail, 0.44, 0.08, 0.42, 0, 1.87, 0);         // "capacete"
-      // arma remota simples: o estado de rede escolhe quando ela aparece.
+      // arma remota por CLASSE (silhueta SIL aplicada por applyRemoteWeapon);
+      // o estado de rede escolhe quando ela aparece.
       const weapon = new THREE.Group();
       weapon.position.set(0, -0.18, -0.18);
-      box(mDetail, 0.18, 0.17, 0.56, 0, 0, -0.2, weapon);
-      box(mCloth, 0.07, 0.07, 0.4, 0, 0.01, -0.65, weapon);
       const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 4), mVisor.clone());
       muzzle.material.color.setHex(0xffb347);
       muzzle.material.emissive.setHex(0xff7a18);
@@ -1307,6 +1360,7 @@
       rp.heli = !!d.heli;
       rp.bot = !!d.bot;
       rp.heldWeapon = d.heldWeapon ? weaponCode(d.heldWeapon) : rp.heldWeapon;
+      applyRemoteWeapon(rp);
       rp.body.weapon.visible = rp.heldWeapon !== 'FACA' && !rp.ship && !rp.fall;
     });
     socket.on('playerFired', d => {
@@ -1314,6 +1368,7 @@
       if (!rp) return;
       rp.fireT = 0.16;
       rp.heldWeapon = d.weapon ? weaponCode(d.weapon) : rp.heldWeapon;
+      applyRemoteWeapon(rp);
       if (rp.heldWeapon !== 'FACA' && Array.isArray(d.fromPos) && Array.isArray(d.toPos)) {
         const from = new THREE.Vector3(d.fromPos[0], d.fromPos[1], d.fromPos[2]);
         const to = new THREE.Vector3(d.toPos[0], d.toPos[1] + 1, d.toPos[2]);

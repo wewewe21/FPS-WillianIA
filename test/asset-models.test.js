@@ -79,18 +79,25 @@ describe('Integração viva dos modelos', { skip: !CHROME && 'Chrome não encont
     assert.deepEqual(h.pageErrors, [], 'erros de página: ' + h.pageErrors.join(' | '));
   });
 
-  it('dado um tiro com a sniper nova, então mag/bolt do GLB estão religados nas âncoras', async () => {
+  it('dada a sniper nova, então mag/bolt ficam com o MIXER (clips) e as âncoras cedidas', async () => {
+    // a prova de movimento real dos clips vive em test/weapon-mechanisms.test.js;
+    // aqui só o contrato: nós sob a raiz do mixer + âncoras marcadas 'clip'
     const r = await h.play(() => {
       const G = window.QA.G;
       G.arsenal[6].locked = false;
       G.switchWeapon(6);
       const gun = G.gun;
-      const magNode = gun.parts.mag && gun.parts.mag.children.some(c => /mag/i.test(c.name));
-      const boltNode = gun.parts.bolt && gun.parts.bolt.children.some(c => /bolt/i.test(c.name));
-      return { nome: gun.name, magNode, boltNode, temAnims: !!G.WeaponModels.status().find(s => s.idx === 6) };
+      const root = gun.modelRoot;
+      const find = re => { let n = null; root.traverse(o => { if (!n && re.test(o.name)) n = o; }); return n; };
+      const under = n => { for (let p = n; p; p = p.parent) if (p === root) return true; return false; };
+      const mag = find(/^mag_4$/), bolt = find(/^bolt_6$/);
+      return { nome: gun.name, magUnder: !!mag && under(mag), boltUnder: !!bolt && under(bolt),
+        magAuth: gun.parts.mag.userData.authority, boltAuth: gun.parts.bolt.userData.authority };
     });
     assert.equal(r.nome, 'SNIPER "AGULHA"');
-    assert.ok(r.magNode, 'pente do GLB não foi religado na âncora animada');
-    assert.ok(r.boltNode, 'ferrolho do GLB não foi religado na âncora animada');
+    assert.ok(r.magUnder, 'mag_4 saiu da raiz do mixer');
+    assert.ok(r.boltUnder, 'bolt_6 saiu da raiz do mixer');
+    assert.equal(r.magAuth, 'clip', 'âncora mag sem autoridade cedida ao clip');
+    assert.equal(r.boltAuth, 'clip', 'âncora bolt sem autoridade cedida ao clip');
   });
 });

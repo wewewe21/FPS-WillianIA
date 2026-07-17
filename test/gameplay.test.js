@@ -419,16 +419,19 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
     assert.ok(r.health > 45, `não curou comendo: ${r.health}`);
   });
 
-  it('dado T, então o acessório da mira troca (aviso na tela)', async t => {
+  it('dado T, então o acessório da mira troca (aviso + mira ativa do rig)', async t => {
     const r = await play(() => {
       const QA = window.QA;
       QA.reset();
       QA.G.switchWeapon(0);
+      const antes = QA.G.WeaponRig.activeSight(QA.G.gun).id;
       QA.MP.justPressed.add('KeyT');
       QA.tick(1);
-      return { msg: document.getElementById('centerMsg').textContent };
+      return { msg: document.getElementById('centerMsg').textContent,
+        antes, depois: QA.G.WeaponRig.activeSight(QA.G.gun).id };
     });
     assert.ok(/mira/i.test(r.msg), `sem aviso de troca de mira: "${r.msg}"`);
+    assert.notEqual(r.antes, r.depois, 'T não trocou a mira ativa do rig');
   });
 
   it('dado TAB, então o painel de inventário abre — e fecha no segundo toque', async t => {

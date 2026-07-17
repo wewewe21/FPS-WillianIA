@@ -16,6 +16,7 @@ export function createRockets(deps) {
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.13, 8), new THREE.MeshStandardMaterial({ color: 0xc8581e, roughness: 0.4 }));
     tip.rotation.x = -Math.PI / 2; tip.position.z = -0.22; m.add(tip);
     m.visible = false;
+    m.userData.__rocket = true; // marcador de leitura p/ QA (trajetória nos testes)
     scene.add(m);
     pool.push({ m, vel: new THREE.Vector3(), live: false, smokeAcc: 0 });
   }

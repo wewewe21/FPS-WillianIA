@@ -64,26 +64,7 @@ function buildRifle() {
   wbox(g, wm.black, 0.064, 0.115, 0.03, 0, -0.015, 0.49, { r: 0.3 });       // soleira
   wbox(g, wm.wood, 0.05, 0.03, 0.14, 0, 0.045, 0.36, { r: 0.4 });           // apoio de face
   wbox(g, wm.amber, 0.074, 0.01, 0.14, 0, 0.038, -0.18);                    // faixa luminosa
-  // acessórios de mira intercambiáveis (tecla T)
-  const reddot = new THREE.Group();
-  wbox(reddot, wm.black, 0.05, 0.05, 0.07, 0, 0.1, -0.06, { r: 0.2 });
-  const rdRing = new THREE.Mesh(new THREE.TorusGeometry(0.026, 0.006, 8, 14), wm.black);
-  rdRing.position.set(0, 0.131, -0.06); reddot.add(rdRing);
-  const rdDot = new THREE.Mesh(new THREE.SphereGeometry(0.006, 6, 5),
-    new THREE.MeshStandardMaterial({ color: 0x200000, emissive: 0xff2222, emissiveIntensity: 4 }));
-  rdDot.position.set(0, 0.131, -0.063); reddot.add(rdDot);
-  reddot.visible = false; g.add(reddot);
-  const scopeAtt = new THREE.Group();
-  wbox(scopeAtt, wm.black, 0.026, 0.05, 0.04, 0, 0.095, -0.02);
-  wcyl(scopeAtt, wm.black, 0.028, 0.028, 0.22, 0, 0.137, -0.05, { open: true });
-  const sr1 = new THREE.Mesh(new THREE.TorusGeometry(0.034, 0.006, 8, 14), wm.black);
-  sr1.position.set(0, 0.137, -0.16); scopeAtt.add(sr1);
-  scopeAtt.visible = false; g.add(scopeAtt);
-  parts.sights = [
-    { name: 'Alça de ferro', fov: 55, ads: [0, -0.0915, -0.3] },
-    { name: 'Red Dot', fov: 48, mesh: reddot, ads: [0, -0.131, -0.3] },
-    { name: 'Luneta 2x', fov: 36, mesh: scopeAtt, ads: [0, -0.137, -0.24] },
-  ];
+  // acessórios de mira (tecla T) agora vêm do js/weaponrig.js, calibrados no GLB
   addHands(parts, g, [0.02, -0.1, 0.17], [0.32, 0, -1.5], g, [0, -0.078, -0.38], [0.15, 0, Math.PI]);
   const muzzleAnchor = new THREE.Group();
   muzzleAnchor.position.set(0, 0.028, -0.94);
@@ -272,37 +253,37 @@ function makeWeapon(def, buildFn) {
   if (parts.bolt) parts.bolt.userData.z0 = parts.bolt.position.z;
   if (parts.pump) parts.pump.userData.z0 = parts.pump.position.z;
   return { ...def, group, parts, muzzleAnchor,
-    hipV: new THREE.Vector3(...def.hip), adsV: new THREE.Vector3(...def.ads),
+    hipV: new THREE.Vector3(...def.hip), // pose de ADS: js/weaponrig.js (perfil por mira)
     mag: def.magSize, reserve: def.reserveStart, reloading: false, reloadEnd: 0, lastShot: -9, cycleT: 0 };
 }
 const arsenal = [
   makeWeapon({ name: 'FUZIL "VAGALUME"', auto: true, rpm: 690, dmg: 26, pellets: 1, magSize: 30, reserveStart: 150,
     reloadTime: 1.55, spreadHip: 0.014, spreadAds: 0.0022, recoilP: 0.62, recoilY: 0.16, kick: 0.055,
-    adsFov: 55, hip: [0.26, -0.235, -0.5], ads: [0, -0.0915, -0.3] }, buildRifle),
+    adsFov: 55, hip: [0.26, -0.235, -0.5] }, buildRifle),
   makeWeapon({ name: 'ESCOPETA "TROVÃO"', auto: false, rpm: 78, dmg: 11, pellets: 8, magSize: 6, reserveStart: 30,
     reloadTime: 2.3, spreadHip: 0.05, spreadAds: 0.032, recoilP: 1.9, recoilY: 0.3, kick: 0.15,
-    adsFov: 62, hip: [0.27, -0.24, -0.46], ads: [0, -0.075, -0.36] }, buildShotgun),
+    adsFov: 62, hip: [0.27, -0.24, -0.46] }, buildShotgun),
   makeWeapon({ name: 'DMR "FALCÃO"', auto: false, rpm: 150, dmg: 72, pellets: 1, magSize: 8, reserveStart: 32,
     reloadTime: 1.9, spreadHip: 0.02, spreadAds: 0.0005, recoilP: 1.5, recoilY: 0.22, kick: 0.11,
-    adsFov: 26, hip: [0.25, -0.23, -0.42], ads: [0, -0.115, -0.2] }, buildDMR),
+    adsFov: 26, hip: [0.25, -0.23, -0.42] }, buildDMR),
   makeWeapon({ name: 'BAZUCA "TROVOADA"', auto: false, rpm: 30, dmg: 0, pellets: 1, magSize: 1, reserveStart: 4,
     reloadTime: 2.8, spreadHip: 0.02, spreadAds: 0.01, recoilP: 2.4, recoilY: 0.3, kick: 0.3,
-    adsFov: 60, hip: [0.3, -0.2, -0.42], ads: [0.1, -0.07, -0.34], rocket: true, locked: true }, buildBazooka),
+    adsFov: 60, hip: [0.3, -0.2, -0.42], rocket: true, locked: true }, buildBazooka),
   makeWeapon({ name: 'PLASMA "VISITANTE"', auto: true, rpm: 430, dmg: 38, pellets: 1, magSize: 42, reserveStart: 210,
     reloadTime: 1.7, spreadHip: 0.012, spreadAds: 0.003, recoilP: 0.4, recoilY: 0.1, kick: 0.04,
-    adsFov: 58, hip: [0.26, -0.235, -0.48], ads: [0, -0.083, -0.3], laser: true, locked: true }, buildPlasma),
+    adsFov: 58, hip: [0.26, -0.235, -0.48], laser: true, locked: true }, buildPlasma),
   makeWeapon({ name: 'FACA "AURORA"', auto: false, rpm: 130, dmg: 34, pellets: 1, magSize: 1, reserveStart: 0,
     reloadTime: 0.8, spreadHip: 0, spreadAds: 0, recoilP: 0.3, recoilY: 0.06, kick: 0.07,
-    adsFov: 66, hip: [0.3, -0.25, -0.48], ads: [0.16, -0.19, -0.4], melee: true, locked: true }, buildKnife),
+    adsFov: 66, hip: [0.3, -0.25, -0.48], melee: true, locked: true }, buildKnife),
   // armas novas dos assets 3D: sniper leve (ferrolho rápido, dano menor) e
   // escopeta de rajada (cadência alta, chumbo fraco) — visual vem do GLB;
   // o modelo procedural (DMR/escopeta) fica só de fallback de rede
   makeWeapon({ name: 'SNIPER "AGULHA"', auto: false, rpm: 235, dmg: 46, pellets: 1, magSize: 10, reserveStart: 40,
     reloadTime: 1.6, spreadHip: 0.018, spreadAds: 0.0008, recoilP: 1.1, recoilY: 0.18, kick: 0.09,
-    adsFov: 30, hip: [0.25, -0.23, -0.42], ads: [0, -0.112, -0.22], locked: true }, buildDMR),
+    adsFov: 30, hip: [0.25, -0.23, -0.42], locked: true }, buildDMR),
   makeWeapon({ name: 'ESCOPETA "RAJADA"', auto: true, rpm: 175, dmg: 7, pellets: 7, magSize: 9, reserveStart: 36,
     reloadTime: 2.1, spreadHip: 0.055, spreadAds: 0.04, recoilP: 1.3, recoilY: 0.24, kick: 0.11,
-    adsFov: 62, hip: [0.27, -0.24, -0.46], ads: [0, -0.075, -0.36], locked: true }, buildShotgun),
+    adsFov: 62, hip: [0.27, -0.24, -0.46], locked: true }, buildShotgun),
 ];
   return { wm, weaponRoot, weaponKick, arsenal, knuckleMat };
 }
