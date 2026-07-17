@@ -283,7 +283,8 @@ const Water = createWater({ CFG, WATER_LEVEL, scene, sunDir });
    A criação da Grass NÃO pode mudar de lugar: ela consome o rand seedado e
    qualquer reordenação muda o layout do mundo inteiro pra mesma seed. */
 const grassClearings = [];
-const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings: grassClearings, cityGrassFactor: CityLayout.cityGrassFactor });
+const Grass = createGrass({ CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings: grassClearings, cityGrassFactor: CityLayout.cityGrassFactor,
+  worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242, surfaceAt });
 
 /* ================================================================
    VEGETAÇÃO — árvores (2 LODs), pedras e flores, tudo InstancedMesh

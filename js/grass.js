@@ -3,7 +3,20 @@ import * as THREE from 'three';
 
 export function createGrass(deps) {
   const { CFG, rand, TAU, heightAt, biomeAt, WATER_LEVEL, simplex, scene, sunDir, CITY, VOLCANO, clearings = [],
-    cityGrassFactor = null } = deps;
+    cityGrassFactor = null, worldSeed = 424242, surfaceAt = null } = deps;
+  /* RNG LOCAL por chunk: (seed, cx, cz) → mesmo conteúdo SEMPRE — preencher,
+     reciclar, sair e voltar produz exatamente as mesmas matrizes/fases/cores,
+     sem depender da ordem global do Math.random. */
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const chunkRng = (cx, cz) =>
+    mulberry32((worldSeed ^ Math.imul(cx + 31337, 0x9E3779B1) ^ Math.imul(cz + 7331, 0x85EBCA77)) >>> 0);
   const N = CFG.GRASS_CHUNKS;                       // grade NxN
   const SIZE = CFG.GRASS_CHUNK_SIZE;
   const PER_CHUNK = Math.floor(CFG.GRASS_TOTAL / (N * N));
@@ -29,6 +42,7 @@ export function createGrass(deps) {
     uPlayerPos:   { value: new THREE.Vector3(0, -999, 0) },
     uCarPos:      { value: new THREE.Vector3(0, -999, 0) },
     uWind:        { value: CFG.WIND_STRENGTH },
+    uWindDir:     { value: new THREE.Vector2(0.72, 0.45).normalize() }, // clima escreve aqui
     uSunDir:      { value: sunDir.clone().normalize() },
     uSunColor:    { value: new THREE.Color(0xfff0d4).multiplyScalar(1.12) },
     uSkyColor:    { value: new THREE.Color(0xbfd9ff) },
@@ -50,6 +64,7 @@ export function createGrass(deps) {
       uniform vec3  uPlayerPos;
       uniform vec3  uCarPos;
       uniform float uWind;
+      uniform vec2  uWindDir;
       uniform float uPatchRadius;
       attribute float aPhase;
       attribute vec3  aTint;
@@ -95,7 +110,7 @@ export function createGrass(deps) {
         float w2 = vnoise(wpos.xz * 0.33 - vec2(uTime * 1.6, uTime * 0.2));
         float wind = (w1 - 0.5) * 1.7 + (w2 - 0.5) * 0.55;
         float sway = sin(uTime * 2.3 + aPhase * 6.2831) * 0.055;
-        vec2 windDir = normalize(vec2(0.72, 0.45));
+        vec2 windDir = normalize(uWindDir);
         wpos.x += windDir.x * (wind * uWind + sway) * hh;
         wpos.z += windDir.y * (wind * uWind + sway) * hh;
         wpos.y -= abs(wind) * uWind * hh * 0.16;
@@ -140,25 +155,51 @@ export function createGrass(deps) {
   const dummy = new THREE.Object3D();
   const tintCol = new THREE.Color();
 
+  /* CONTRATO DO STREAM SEEDADO: a criação inicial da grade consumia o
+     Math.random global numa ordem fixa — tudo que é gerado DEPOIS da grama
+     (árvores, estruturas, inimigos) depende dessa contagem. Esta função
+     replica o consumo antigo EXATAMENTE (mesmas chamadas, mesmos branches)
+     descartando os resultados, para o layout do mundo não mudar por seed.
+     O conteúdo REAL dos chunks vem do RNG local determinístico. */
+  function legacyConsume(cx, cz) {
+    const wx = cx * SIZE, wz = cz * SIZE;
+    for (let i = 0; i < PER_CHUNK; i++) {
+      const lx = rand(-SIZE / 2, SIZE / 2);
+      const lz = rand(-SIZE / 2, SIZE / 2);
+      const bio = biomeAt(wx + lx, wz + lz);
+      const desert = THREE.MathUtils.smoothstep(-bio, 0.18, 0.45);
+      rand(-0.13, 0.13); rand(TAU); rand(-0.13, 0.13); // rotação
+      rand(0.65, 1.4);                                  // altura s
+      if (desert > 0.05) Math.random();                 // colapso no deserto
+      rand(0.8, 1.25);                                  // escala x
+      Math.random();                                    // fase do vento
+      rand(-0.06, 0.06);                                // luminosidade do tint
+    }
+  }
+
   function fillChunk(chunk, cx, cz) {
     chunk.cx = cx; chunk.cz = cz;
     const wx = cx * SIZE, wz = cz * SIZE;
     chunk.mesh.position.set(wx, 0, wz);
     const phase = chunk.mesh.geometry.attributes.aPhase;
     const tint = chunk.mesh.geometry.attributes.aTint;
+    const rng = chunkRng(cx, cz);                      // determinístico por chunk
+    const r = (a, b) => a + rng() * (b - a);
     let minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < PER_CHUNK; i++) {
-      const lx = rand(-SIZE / 2, SIZE / 2);
-      const lz = rand(-SIZE / 2, SIZE / 2);
-      const y = heightAt(wx + lx, wz + lz);
+      const lx = r(-SIZE / 2, SIZE / 2);
+      const lz = r(-SIZE / 2, SIZE / 2);
+      // raiz na superfície CANÔNICA (a mesma da malha/física) + fatores centrais
+      const su = surfaceAt ? surfaceAt(wx + lx, wz + lz) : null;
+      const y = su ? su.height : heightAt(wx + lx, wz + lz);
       minY = Math.min(minY, y); maxY = Math.max(maxY, y);
-      const bio = biomeAt(wx + lx, wz + lz);
-      const desert = THREE.MathUtils.smoothstep(-bio, 0.18, 0.45);
+      const desert = su ? (su.desertK || 0) : THREE.MathUtils.smoothstep(-biomeAt(wx + lx, wz + lz), 0.18, 0.45);
+      const forest = su ? (su.forestK || 0) : 0;
       dummy.position.set(lx, y, lz);
-      dummy.rotation.set(rand(-0.13, 0.13), rand(TAU), rand(-0.13, 0.13));
-      let s = rand(0.65, 1.4) * CFG.GRASS_HEIGHT;
+      dummy.rotation.set(r(-0.13, 0.13), r(0, TAU), r(-0.13, 0.13));
+      let s = r(0.65, 1.4) * CFG.GRASS_HEIGHT;
       // deserto: quase sem grama (lâminas colapsam) e mais baixa nas bordas
-      if (desert > 0.05) s *= Math.random() < desert * 0.85 ? 0.02 : (1 - desert * 0.45);
+      if (desert > 0.05) s *= rng() < desert * 0.85 ? 0.02 : (1 - desert * 0.45);
       if (y < WATER_LEVEL + 0.25) s = 0.015; // nada de grama dentro dos lagos
       // distrito urbano: máscara espacial (ruas/calçadas/praça/footprints = sem
       // grama; canteiros verdes = cheia; borda volta suave). Barato: só retângulos.
@@ -175,17 +216,16 @@ export function createGrass(deps) {
       for (const c of clearings) {
         if (Math.hypot(wx + lx - c.x, wz + lz - c.z) < (c.r || 4.5)) { s = 0.0001; break; }
       }
-      dummy.scale.set(rand(0.8, 1.25), s, 1);
+      dummy.scale.set(r(0.8, 1.25), s, 1);
       dummy.updateMatrix();
       chunk.mesh.setMatrixAt(i, dummy.matrix);
-      phase.setX(i, Math.random());
+      phase.setX(i, rng());
       // variacao sutil de cor por lamina, casando com terreno e bioma
       const v = simplex.noise((wx + lx) * 0.03, (wz + lz) * 0.03) * 0.5 + 0.5;
-      const forest = THREE.MathUtils.smoothstep(bio, 0.34, 0.62);
       tintCol.setHSL(
         0.26 + v * 0.035 - 0.018 - desert * 0.09 + forest * 0.015,
         0.58 - desert * 0.2,
-        0.5 + rand(-0.06, 0.06) - forest * 0.07);
+        0.5 + r(-0.06, 0.06) - forest * 0.07);
       tint.setXYZ(i, 0.7 + tintCol.r * 0.5, 0.7 + tintCol.g * 0.5, 0.7 + tintCol.b * 0.5);
     }
     phase.needsUpdate = true;
@@ -205,6 +245,7 @@ export function createGrass(deps) {
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = true;   // culling por chunk
     const chunk = { mesh, cx: 99999, cz: 99999 };
+    legacyConsume(cx, cz); // preserva o consumo do stream seedado (ver comentário)
     fillChunk(chunk, cx, cz);
     scene.add(mesh);
     return chunk;
@@ -253,5 +294,32 @@ export function createGrass(deps) {
     for (const ch of chunks) fillChunk(ch, ch.cx, ch.cz);
   }
 
-  return { update, material, PATCH_RADIUS, refreshAll };
+  /* QA: decodifica as N primeiras lâminas do chunk que contém (x,z) —
+     posição mundial da raiz + escala Y. Só leitura. */
+  function debugSample(x = 0, z = 0, n = 200) {
+    const cx = Math.round(x / SIZE), cz = Math.round(z / SIZE);
+    const ch = chunks.find(c => c.cx === cx && c.cz === cz);
+    if (!ch) return null;
+    const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    const out = [];
+    for (let i = 0; i < Math.min(n, PER_CHUNK); i++) {
+      ch.mesh.getMatrixAt(i, m);
+      m.decompose(p, q, s);
+      out.push({ x: p.x + ch.mesh.position.x, y: p.y, z: p.z + ch.mesh.position.z, sy: s.y });
+    }
+    return out;
+  }
+  /* QA: bytes do chunk (matriz+fase+tint) p/ prova de determinismo */
+  function debugChunkBytes(cx, cz) {
+    const ch = chunks.find(c => c.cx === cx && c.cz === cz);
+    if (!ch) return null;
+    const g = ch.mesh.geometry;
+    return {
+      m: Array.from(ch.mesh.instanceMatrix.array.slice(0, 64)),
+      ph: Array.from(g.attributes.aPhase.array.slice(0, 16)),
+      ti: Array.from(g.attributes.aTint.array.slice(0, 16)),
+    };
+  }
+
+  return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes };
 }

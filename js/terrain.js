@@ -138,6 +138,7 @@ function surfaceAt(x, z) {
     out.biomeId = b.id; out.biomeWeights = b.weights;
     out.surfaceType = b.surfaceType; out.vegetationFactor = b.vegetationFactor;
     out.driveable = out.driveable && b.driveable;
+    out.desertK = b.desertK; out.forestK = b.forestK; // curvas cruas p/ grama/cores
   }
   return out;
 }

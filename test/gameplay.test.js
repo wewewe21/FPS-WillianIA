@@ -584,7 +584,10 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
       for (let i = 0; i < 150; i++) G.Grass.update(MP.player.pos, MP.player.pos, 1);
       const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(),
         q = new THREE.Quaternion(), sc = new THREE.Vector3();
-      let dentroAltas = 0, dentroTotal = 0, foraAltas = 0, foraTotal = 0;
+      // contrato do citylayout: NÚCLEO (d<GRASS_FADE0) e superfícies urbanas
+      // (rua/calçada/praça/footprint) = zero; anel de fade (56..82) volta
+      // GRADUALMENTE (parcial é design, não bug); canteiros 'green' têm grama.
+      let nucleoAltas = 0, urbanoAltas = 0, dentroTotal = 0, foraAltas = 0, foraTotal = 0;
       MP.scene.traverse(o => {
         if (!o.isInstancedMesh || !o.geometry.attributes.aPhase) return; // só chunks de grama
         for (let i = 0; i < o.count; i++) {
@@ -592,14 +595,23 @@ describe('Jogabilidade (Chrome headless + tick manual)', { skip: !CHROME && 'Chr
           m4.decompose(pos, q, sc);
           const wx = o.position.x + pos.x, wz = o.position.z + pos.z;
           const d = Math.hypot(wx - CITY.x, wz - CITY.z);
-          if (d < 80) { dentroTotal++; if (sc.y > 0.1) dentroAltas++; }
-          else if (d > 95 && d < 130) { foraTotal++; if (sc.y > 0.1) foraAltas++; }
+          if (d < 95) {
+            dentroTotal++;
+            if (sc.y > 0.1) {
+              const s = G.surfaceAt(wx, wz);
+              if (s.surfaceType === 'street' || s.surfaceType === 'building') urbanoAltas++;
+              // núcleo (d<GRASS_FADE0) sem grama — EXCETO canteiros 'green'
+              // (vegetationFactor alto = canteiro por design)
+              else if (d < 56 && s.vegetationFactor < 0.5) nucleoAltas++;
+            }
+          } else if (d > 95 && d < 130) { foraTotal++; if (sc.y > 0.1) foraAltas++; }
         }
       });
-      return { dentroAltas, dentroTotal, foraAltas, foraTotal };
+      return { nucleoAltas, urbanoAltas, dentroTotal, foraAltas, foraTotal };
     });
     assert.ok(r.dentroTotal > 50, `amostra pequena na cidade (${r.dentroTotal})`);
-    assert.equal(r.dentroAltas, 0, `${r.dentroAltas}/${r.dentroTotal} lâminas de grama dentro da cidade`);
+    assert.equal(r.urbanoAltas, 0, `${r.urbanoAltas} lâminas em rua/calçada/praça/prédio`);
+    assert.equal(r.nucleoAltas, 0, `${r.nucleoAltas} lâminas no núcleo urbano fora de canteiro`);
     assert.ok(r.foraAltas > 5, `grama de fora sumiu junto (${r.foraAltas}/${r.foraTotal})`);
   });
 
