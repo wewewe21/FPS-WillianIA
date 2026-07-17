@@ -126,4 +126,23 @@ async function startBRMatch(h, { hostCode = 'QUEDALIVRE', serverPort } = {}) {
   return bot; // fica vivo na partida — quem chamou fecha com bot.close()
 }
 
-module.exports = { CHROME, bootGame, startBRMatch };
+/* inicia uma partida BR e PERMANECE na fase SHIP (não força PLAY).
+   Use FLY_TIME alto no extraEnv do bootGame pra nave não acabar no meio
+   do teste. Não mexe no startBRMatch acima: os testes legados dependem
+   do pulo direto pro chão. */
+async function startBRMatchInShip(h, { hostCode = 'QUEDALIVRE' } = {}) {
+  const { io } = require('socket.io-client');
+  const bot = io(`http://localhost:${h.port}`, { transports: ['websocket'] });
+  await new Promise(r => bot.once('init', r));
+  bot.emit('hello', { nick: 'BotHost' });
+  await new Promise((res, rej) => bot.timeout(4000).emit('claimHost', { code: hostCode },
+    (e, d) => (e || !d || !d.ok) ? rej(new Error('claimHost falhou')) : res()));
+  bot.emit('requestStart');
+  await h.page.waitForFunction(
+    'window.__BR_debug && !!window.__BR_debug.S.plan && window.__BR_debug.S.phase === "SHIP"' +
+    ' && !!window.__BR_debug.shipDebug.local',
+    { timeout: 30000 });
+  return bot;
+}
+
+module.exports = { CHROME, bootGame, startBRMatch, startBRMatchInShip };

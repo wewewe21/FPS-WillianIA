@@ -13,6 +13,7 @@ const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const CityProto = require('./city-destruction-protocol.js');
+const ShipProto = require('./ship-protocol.js');
 
 const app = express();
 /* cache: código do jogo REVALIDA sempre (no-cache + ETag = 304 barato) —
@@ -27,7 +28,7 @@ app.use((req, res, next) => {
 });
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
-  'city-destruction-client.js', 'city-destruction-protocol.js', 'favicon.svg'];
+  'city-destruction-client.js', 'city-destruction-protocol.js', 'ship-protocol.js', 'favicon.svg'];
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 // probe automático dos navegadores por /favicon.ico → serve o SVG (evita o 404)
@@ -320,12 +321,25 @@ function startMatch() {
   match.bossHp = match.bossMaxHp;
   match.bossDead = !match.flags.golem; // GOLEM desligado = já "morto" pro servidor
   match.aliveCount = 0;
-  for (const p of players.values()) {
+  // slots da nave: atribuídos AQUI (cliente não escolhe), fixos durante o voo;
+  // desconexão de um jogador não realoca os outros (índice por jogador).
+  // O slot também é a âncora inicial do speed-check local (spawn fora dele
+  // já conta como movimento impossível).
+  const shipSlots = {};
+  let slotIdx = 0;
+  for (const [id, p] of players) {
     if (p.spectator) continue; // quem entrou tarde continua espectador
     p.alive = true; p.kills = 0; p.placement = 0;
     p.zoneHp = ZONE_HP; p.lastState = Date.now(); p.canDrop = true; p.landed = false; p.hitBy = {};
+    shipSlots[id] = slotIdx;
+    const sl = ShipProto.slotLocal(slotIdx);
+    p.shipLocalPrev = [sl[0], ShipProto.DIMS.floorY, sl[1]];
+    p.shipLocalT = match.t0;
+    p.shipLocal = null;
+    slotIdx++;
     match.aliveCount++;
   }
+  match.plan.shipSlots = shipSlots;
   io.emit('matchStart', { t0: match.t0, serverNow: Date.now(), plan: match.plan, num: match.num });
   broadcastRoster();
   sysChat(`Partida #${match.num} começou — ${match.aliveCount} na nave. Boa sorte!`);
@@ -428,11 +442,11 @@ setInterval(() => {
    congela o loop e ficava "vivo flutuando fora da safe" pra sempre, travando
    a vitória. Aqui o servidor espelha o círculo e elimina quem o cliente não
    elimina: fora da zona, flutuando na altitude da nave ou AFK sem mandar estado. */
-/* posição esperada da nave em t (valida o flag ship dos clientes) */
+/* centro da nave em t — delega ao ship-protocol.js: o bob senoidal agora é
+   IDÊNTICO em cliente e servidor (antes o cliente balançava e aqui não) */
 function shipPosAt(t, plan = match.plan) {
-  const sp = plan.ship;
-  const k = Math.min(Math.max(t / sp.flyTime, 0), 1.18);
-  return [sp.from[0] + (sp.to[0] - sp.from[0]) * k, sp.alt, sp.from[1] + (sp.to[1] - sp.from[1]) * k];
+  const pose = ShipProto.poseAt(plan.ship, t);
+  return [pose.x, pose.y, pose.z];
 }
 
 function zoneAt(t, plan = match.plan) {
@@ -494,7 +508,12 @@ setInterval(() => {
    `p.landed` fecha a janela assim que o jogador toca o chão (reporta estado
    sem ship/fall/chute) — depois disso o flag de queda não protege mais. */
 function combatImmune(p) {
-  if (p.ship) return true;
+  if (p.ship) {
+    // a nave só imuniza durante a janela do voo (relógio do SERVIDOR):
+    // cliente que para de mandar estado ou segue forjando ship=true depois
+    // do fim não fica imortal — o flag congelado expira sozinho aqui
+    return !!match.plan && (Date.now() - match.t0) / 1000 <= match.plan.ship.flyTime + 8;
+  }
   if (!p.fall || p.landed) return false;
   return match.plan && Date.now() - match.t0 < (match.plan.ship.flyTime + FALL_GRACE_S) * 1000;
 }
@@ -640,10 +659,35 @@ io.on('connection', socket => {
     if (match.phase === 'PLAYING' && p.alive && !p.spectator && match.plan) {
       const t = (now - match.t0) / 1000;
       if (d.ship) {
-        // diz estar na nave: precisa estar NA nave (rota conhecida) e no tempo dela
+        // diz estar na nave: tempo e posição LOCAL validados; a posição
+        // mundial é RECONSTRUÍDA do relógio+rota do servidor (d.pos, d.shipLocal,
+        // timestamps e slot do cliente NUNCA são confiáveis — ship-protocol.js)
         if (t > match.plan.ship.flyTime + 8) { p.strikes = (p.strikes || 0) + 1; return; }
-        const sp = shipPosAt(t);
-        if (Math.hypot(pos[0] - sp[0], pos[2] - sp[2]) > 60) { p.strikes = (p.strikes || 0) + 1; return; }
+        const pose = ShipProto.poseAt(match.plan.ship, t);
+        let local;
+        if (d.shipLocal !== undefined) {
+          local = ShipProto.sanitizeLocal(d.shipLocal);
+          if (!local) { p.strikes = (p.strikes || 0) + 1; return; }
+        } else {
+          // legado (bot/cliente antigo sem shipLocal): converte o mundo pra
+          // local e valida com as MESMAS regras abaixo — nada menos seguro.
+          // Remover quando bots/clients externos migrarem pro protocolo novo.
+          local = ShipProto.worldToLocal(pose, pos);
+          local[1] = ShipProto.DIMS.floorY;
+        }
+        if (!ShipProto.localInCabin(local)) { p.strikes = (p.strikes || 0) + 1; return; }
+        if (p.shipLocalPrev) {
+          // speedhack DENTRO da cabine: regra própria da nave (não mexe nos
+          // limites globais); dt mínimo de 50 ms evita divisão explosiva
+          const dts = Math.max((now - (p.shipLocalT || now)) / 1000, 0.05);
+          const spd = Math.hypot(local[0] - p.shipLocalPrev[0], local[2] - p.shipLocalPrev[2]) / dts;
+          if (spd > ShipProto.DIMS.maxLocalSpeed) { p.strikes = (p.strikes || 0) + 1; return; }
+        }
+        p.shipLocalPrev = local;
+        p.shipLocalT = now;
+        p.shipLocal = local;
+        const w = ShipProto.localToWorld(pose, local);
+        pos[0] = w[0]; pos[1] = w[1]; pos[2] = w[2];
       } else if (p.lastPos) {
         const dt = Math.max((now - p.lastPosT) / 1000, 0.05);
         const hSpd = Math.hypot(pos[0] - p.lastPos[0], pos[2] - p.lastPos[2]) / dt;
@@ -670,6 +714,7 @@ io.on('connection', socket => {
 
     p.pos = pos;
     p.ship = !!d.ship;
+    if (!p.ship) p.shipLocal = null;
     p.fall = !!d.fall || !!d.chute;
     p.chute = !!d.chute;
     // tocou o chão: fecha a janela de invulnerabilidade de queda. Uma vez
@@ -681,6 +726,9 @@ io.on('connection', socket => {
       id: socket.id, pos: p.pos, rotY: +d.rotY || 0,
       ship: !!d.ship, chute: !!d.chute, car: Number.isInteger(d.car) ? d.car : -1,
       heli: !!d.heli, fall: p.fall,
+      // posição local VALIDADA na cabine: os outros clientes interpolam no
+      // referencial da nave (sem atraso quando ela se desloca)
+      shipLocal: p.ship && p.shipLocal ? p.shipLocal : undefined,
       nick: p.nick, colors: p.colors, bot: !!p.bot, heldWeapon: p.heldWeapon,
     });
   });

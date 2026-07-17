@@ -130,11 +130,16 @@ describe('BR — indicadores da zona e cabine da nave', { skip: !CHROME && 'Chro
     const r = await h.play(() => {
       const ship = window.__BR_debug.ship;
       if (!ship) return null;
-      const janela = ship.g.getObjectByName('cabineJanela');
-      return { temJanela: !!janela, filhos: ship.g.children.length };
+      // checagem SEMÂNTICA (contar filhos media a geometria antiga):
+      // exterior, interior e as peças nomeadas da cabine precisam existir
+      const partes = {};
+      for (const n of ['shipExterior', 'shipInterior', 'cabinePiso', 'cabineTeto', 'cabineParede', 'cabineJanela'])
+        partes[n] = !!ship.g.getObjectByName(n);
+      const dims = window.__BR_debug.shipDebug.dims;
+      return { partes, altura: dims.ceilingY - dims.floorY };
     });
     if (!r) { t.skip('nave ainda não construída'); return; }
-    assert.ok(r.temJanela, 'janela do chão da cabine sumiu');
-    assert.ok(r.filhos >= 15, `cabine incompleta (${r.filhos} peças)`);
+    for (const [n, ok] of Object.entries(r.partes)) assert.ok(ok, `${n} sumiu da nave`);
+    assert.ok(r.altura >= 4.2, `cabine baixa demais (${r.altura} m)`);
   });
 });

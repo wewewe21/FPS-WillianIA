@@ -22,7 +22,8 @@ process.once('exit', cleanupRank);
 // além do processo filho que executa a partida.
 const inheritedRankFile = process.env.RANK_FILE;
 process.env.RANK_FILE = rankFile;
-const { zoneAt, shipPosAt } = require(path.join(__dirname, '..', 'server.js'));
+const { zoneAt } = require(path.join(__dirname, '..', 'server.js'));
+const ShipProto = require(path.join(__dirname, '..', 'ship-protocol.js'));
 if (inheritedRankFile === undefined) delete process.env.RANK_FILE;
 else process.env.RANK_FILE = inheritedRankFile;
 
@@ -116,10 +117,13 @@ const pct = (arr, p) => arr.length ? arr.slice().sort((a, b) => a - b)[Math.floo
       if (!b.alive || b.afk && b.landed) continue;
       if (b.quitAt && t > b.quitAt && b.s.connected) { b.s.disconnect(); b.alive = false; continue; }
       if (b.phase === 'SHIP') {
-        const sp = shipPosAt(t, plan);
-        [b.x, b.y, b.z] = sp;
+        // protocolo novo: slot atribuído pelo servidor + posição local validável
+        const slotIdx = plan.shipSlots && Number.isInteger(plan.shipSlots[b.id]) ? plan.shipSlots[b.id] : b.i;
+        const sl = ShipProto.slotLocal(slotIdx);
+        const local = [sl[0], ShipProto.DIMS.floorY, sl[1]];
+        [b.x, b.y, b.z] = ShipProto.localToWorld(ShipProto.poseAt(plan.ship, t), local);
         if (t >= b.jumpAt) { b.phase = 'FALL'; }
-        b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, car: -1 });
+        b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, shipLocal: local, car: -1 });
       } else if (b.phase === 'FALL') {
         b.y = Math.max(4, b.y - 4.4); // ~44 m/s
         if (b.y <= 4) { b.phase = 'PLAY'; b.landed = true; }

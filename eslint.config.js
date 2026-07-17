@@ -48,7 +48,7 @@ module.exports = [
   },
   {
     // UMD: roda no navegador (window) e no node (module.exports)
-    files: ['city-destruction-protocol.js'],
+    files: ['city-destruction-protocol.js', 'ship-protocol.js'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'script',

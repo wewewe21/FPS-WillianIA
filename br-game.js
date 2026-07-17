@@ -49,7 +49,8 @@
       c2.fillStyle = cssColor;
       c2.fillText(name.slice(0, 14), 128, 32);
       const tex = new THREE.CanvasTexture(cv);
-      const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+      // depthTest LIGADO: nome não vaza por teto/casco da nave nem por parede
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true, transparent: true }));
       spr.scale.set(2.6, 0.65, 1);
       spr.position.y = 2.35;
       return spr;
@@ -125,6 +126,7 @@
         id, nick: nk || '???', alive: true, isBoss: false,
         group, body, targetPos: group.position.clone(), yaw: 0, targetYaw: 0,
         chute: false, ship: false, fall: false, car: -1, heli: false, bot: false,
+        shipLocalTgt: null, shipLocalCur: null,
         heldWeapon: 'FACA', fireT: 0, hitT: 0, deadT: 0,
         lastPos: group.position.clone(), speed: 0, walkPh: 0,
         sphCache: [
@@ -351,69 +353,230 @@
       }
     };
 
-    /* =============== nave alienígena =============== */
+    /* =============== nave alienígena ===============
+       Dimensões, pose, slots e colisão vêm do ship-protocol.js (fonte única
+       compartilhada com o servidor). A nave é um REFERENCIAL MÓVEL: durante
+       o voo a posição do jogador vive em coordenadas locais (shipLocalPos)
+       e só vira mundo na hora de desenhar/enviar. */
+    const ShipProto = window.ShipProtocol;
+    const SHIP_DIMS = ShipProto.DIMS;
     let ship = null;
+    let shipLocalPos = null; // Vector3 LOCAL (y = piso); null fora da fase SHIP
+    const _shipPose = { x: 0, y: 0, z: 0, yaw: 0, k: 0 };
+    const _swArr = [0, 0, 0]; // scratch local<->mundo (zero alocação por frame)
     function buildShip() {
+      const D = SHIP_DIMS;
       const g = new THREE.Group();
+      const _im = new THREE.Matrix4(), _iq = new THREE.Quaternion(),
+        _ie = new THREE.Euler(), _iv = new THREE.Vector3(), _is = new THREE.Vector3(1, 1, 1);
+      const setInst = (mesh, i, x, y, z, rotY) => {
+        // culling do InstancedMesh usa a bounding da GEOMETRIA na origem do
+        // grupo: com a câmera dentro da cabine ele descartava tudo em bloco
+        mesh.frustumCulled = false;
+        _ie.set(0, rotY || 0, 0); _iq.setFromEuler(_ie); _iv.set(x, y, z);
+        _im.compose(_iv, _iq, _is); mesh.setMatrixAt(i, _im);
+      };
+
+      /* ---------- EXTERIOR: casco UFO em camadas ---------- */
+      const ext = new THREE.Group(); ext.name = 'shipExterior'; g.add(ext);
       const mHull = new THREE.MeshStandardMaterial({ color: 0x39424f, metalness: 0.75, roughness: 0.35 });
-      const disc = new THREE.Mesh(new THREE.CylinderGeometry(9, 12, 2.4, 24), mHull);
-      g.add(disc);
-      const dome = new THREE.Mesh(new THREE.SphereGeometry(4.6, 18, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+      const mHullDark = new THREE.MeshStandardMaterial({ color: 0x232a34, metalness: 0.7, roughness: 0.45 });
+      // cilindros do casco SEM caps (openEnded): os discos de fechamento
+      // cortavam a cabine na horizontal (y=-0.3 e y=1.35) e escondiam piso,
+      // janela, consoles e teto — o fechamento externo é feito por anéis
+      const lower = new THREE.Mesh(new THREE.CylinderGeometry(D.outerRadius, 11, 2.6, 64, 1, true), mHull);
+      lower.position.y = -1.6; ext.add(lower);
+      const belly = new THREE.Mesh(new THREE.CylinderGeometry(11, 7.2, 1.4, 48, 1, true), mHullDark);
+      belly.position.y = -3.5; ext.add(belly);
+      const mFundo = new THREE.MeshStandardMaterial({ color: 0x232a34, metalness: 0.7, roughness: 0.45, side: THREE.DoubleSide });
+      const fundo = new THREE.Mesh(new THREE.RingGeometry(D.windowRadius + 0.2, 7.4, 48), mFundo);
+      fundo.rotation.x = -Math.PI / 2; fundo.position.y = -4.19; ext.add(fundo);
+      // poço da janela: liga o piso ao furo do fundo (sem "céu vazando" rasante)
+      const poco = new THREE.Mesh(new THREE.CylinderGeometry(D.windowRadius + 0.15, D.windowRadius + 0.15, 2.9, 32, 1, true),
+        new THREE.MeshStandardMaterial({ color: 0x1a222c, roughness: 0.7, metalness: 0.4, side: THREE.DoubleSide }));
+      poco.position.y = -2.85; ext.add(poco);
+      const rim = new THREE.Mesh(new THREE.CylinderGeometry(D.outerRadius, D.outerRadius, 1.7, 64, 1, true), mHull);
+      rim.position.y = 0.5; ext.add(rim);
+      // casco superior: cone suave até a base da cúpula (a 13.2 m o teto de
+      // 3.25 fica DENTRO dele — casco envolve piso, parede e teto)
+      const upper = new THREE.Mesh(new THREE.CylinderGeometry(10.2, D.outerRadius, 3.9, 64, 1, true), mHull);
+      upper.position.y = 3.3; ext.add(upper);
+      const topo = new THREE.Mesh(new THREE.RingGeometry(6.9, 10.3, 48), mHull);
+      topo.rotation.x = -Math.PI / 2; topo.position.y = 5.24; ext.add(topo);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(7.2, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2),
         new THREE.MeshStandardMaterial({ color: 0x2dd6c4, transparent: true, opacity: 0.5, roughness: 0.15, metalness: 0.4 }));
-      dome.position.y = 1.1; g.add(dome);
-      const ring = new THREE.Mesh(new THREE.TorusGeometry(10.2, 0.5, 8, 32),
+      dome.position.y = 5.0; dome.scale.y = 0.85; ext.add(dome);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(D.outerRadius + 0.7, 0.55, 10, 64),
         new THREE.MeshStandardMaterial({ color: 0x0a2e28, emissive: 0x2dd6c4, emissiveIntensity: 2.2 }));
-      ring.rotation.x = Math.PI / 2; g.add(ring);
-      const mLite = new THREE.MeshStandardMaterial({ color: 0x201000, emissive: 0xffb03c, emissiveIntensity: 3 });
-      for (let i = 0; i < 8; i++) {
-        const l = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), mLite);
-        const a = i / 8 * Math.PI * 2;
-        l.position.set(Math.cos(a) * 11, -0.9, Math.sin(a) * 11);
-        g.add(l);
+      ring.rotation.x = Math.PI / 2; ring.position.y = 0.5; ext.add(ring);
+      // luzes alaranjadas, placas do casco e emissores: instanciados (1 draw call cada)
+      const lites = new THREE.InstancedMesh(new THREE.SphereGeometry(0.5, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0x201000, emissive: 0xffb03c, emissiveIntensity: 3 }), 16);
+      for (let i = 0; i < 16; i++) {
+        const a = i / 16 * Math.PI * 2;
+        setInst(lites, i, Math.cos(a) * (D.outerRadius - 0.8), -1.35, Math.sin(a) * (D.outerRadius - 0.8), 0);
       }
-      const beam = new THREE.PointLight(0x2dd6c4, 3.2, 60, 1.6);
-      beam.position.y = -4; g.add(beam);
-      /* ---- CABINE INTERNA: os jogadores viajam DENTRO da nave ----
-         parede/teto escuros (BackSide: visíveis só por dentro) e um piso
-         anelar com JANELA de vidro no centro — dá pra olhar o mapa lá embaixo
-         (o casco por baixo é face frontal → invisível de dentro, sem furo real) */
-      const mWall = new THREE.MeshStandardMaterial({ color: 0x161d27, roughness: 0.85, metalness: 0.35, side: THREE.BackSide });
-      const wall = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 2.4, 24, 1, true), mWall);
-      wall.position.y = 0.2; g.add(wall);
-      const teto = new THREE.Mesh(new THREE.CircleGeometry(8, 24),
-        new THREE.MeshStandardMaterial({ color: 0x0e1a22, roughness: 0.9, side: THREE.DoubleSide }));
-      teto.rotation.x = Math.PI / 2; teto.position.y = 1.35; g.add(teto);
-      const piso = new THREE.Mesh(new THREE.RingGeometry(3.1, 8, 32),
-        new THREE.MeshStandardMaterial({ color: 0x232c38, roughness: 0.7, metalness: 0.25, side: THREE.DoubleSide }));
-      piso.rotation.x = -Math.PI / 2; piso.position.y = -0.95; g.add(piso);
-      const janela = new THREE.Mesh(new THREE.CircleGeometry(3.1, 32),
+      ext.add(lites);
+      const plates = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 0.9, 0.22), mHullDark, 24);
+      for (let i = 0; i < 24; i++) {
+        const a = i / 24 * Math.PI * 2;
+        setInst(plates, i, Math.cos(a) * (D.outerRadius + 0.05), 0.5, Math.sin(a) * (D.outerRadius + 0.05), -a - Math.PI / 2);
+      }
+      ext.add(plates);
+      const emitters = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.9, 1.3, 0.8, 16),
+        new THREE.MeshStandardMaterial({ color: 0x081f1c, emissive: 0x2dd6c4, emissiveIntensity: 1.6 }), 4);
+      for (let i = 0; i < 4; i++) {
+        const a = i / 4 * Math.PI * 2 + Math.PI / 8;
+        setInst(emitters, i, Math.cos(a) * 4.6, -4.2, Math.sin(a) * 4.6, 0);
+      }
+      ext.add(emitters);
+      // three r184 = luzes FÍSICAS (queda ~1/d²): numa nave de 36 m as
+      // intensidades precisam de escala física, não os 1.7/3.2 da nave antiga
+      const beam = new THREE.PointLight(0x2dd6c4, 260, 90, 2);
+      beam.position.y = -6; ext.add(beam);
+
+      /* ---------- INTERIOR: cabine de transporte (BackSide: só por dentro) ---------- */
+      const inter = new THREE.Group(); inter.name = 'shipInterior'; g.add(inter);
+      const wallH = D.ceilingY - D.floorY;
+      const parede = new THREE.Mesh(new THREE.CylinderGeometry(D.cabinRadius, D.cabinRadius, wallH, 64, 1, true),
+        new THREE.MeshStandardMaterial({ color: 0x1a2330, roughness: 0.8, metalness: 0.3, side: THREE.BackSide }));
+      parede.name = 'cabineParede';
+      parede.position.y = (D.floorY + D.ceilingY) / 2; inter.add(parede);
+      const teto = new THREE.Mesh(new THREE.CircleGeometry(D.cabinRadius, 64),
+        new THREE.MeshStandardMaterial({ color: 0x18242e, roughness: 0.85, side: THREE.DoubleSide }));
+      teto.name = 'cabineTeto';
+      teto.rotation.x = Math.PI / 2; teto.position.y = D.ceilingY; inter.add(teto);
+      // piso fosco: sol/point lights viravam um BLOB especular branco (GGX largo)
+      const mFloor = new THREE.MeshStandardMaterial({ color: 0x232c38, roughness: 0.95, metalness: 0.08, side: THREE.DoubleSide });
+      const piso = new THREE.Mesh(new THREE.RingGeometry(D.windowRadius, D.cabinRadius, 64), mFloor);
+      piso.name = 'cabinePiso';
+      piso.rotation.x = -Math.PI / 2; piso.position.y = D.floorY; inter.add(piso);
+      // espessura visual do piso: saia curta na boca da janela
+      const pisoBorda = new THREE.Mesh(new THREE.CylinderGeometry(D.windowRadius, D.windowRadius, 0.28, 48, 1, true), mFloor);
+      pisoBorda.position.y = D.floorY - 0.14; inter.add(pisoBorda);
+      // vidro NA MESMA altura de caminhada do piso (delta mínimo só anti z-fight)
+      const janela = new THREE.Mesh(new THREE.CircleGeometry(D.windowRadius, 48),
         new THREE.MeshBasicMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false }));
       janela.name = 'cabineJanela';
-      janela.rotation.x = -Math.PI / 2; janela.position.y = -0.97; g.add(janela);
-      const aro = new THREE.Mesh(new THREE.TorusGeometry(3.15, 0.09, 8, 40),
-        new THREE.MeshStandardMaterial({ color: 0x0a2e28, emissive: 0x2dd6c4, emissiveIntensity: 1.8 }));
-      aro.rotation.x = Math.PI / 2; aro.position.y = -0.9; g.add(aro);
-      const luzTeto = new THREE.PointLight(0x6fe8d8, 1.7, 20, 1.4);
-      luzTeto.position.y = 1.1; g.add(luzTeto);
-      const luzJanela = new THREE.PointLight(0x9fd8ff, 0.8, 12, 1.6);
-      luzJanela.position.y = -0.5; g.add(luzJanela);
+      janela.rotation.x = -Math.PI / 2; janela.position.y = D.floorY - 0.02; inter.add(janela);
+      const aro = new THREE.Mesh(new THREE.TorusGeometry(D.windowRadius + 0.12, 0.11, 8, 48),
+        new THREE.MeshStandardMaterial({ color: 0x0a2e28, emissive: 0x2dd6c4, emissiveIntensity: 1.1 }));
+      aro.rotation.x = Math.PI / 2; aro.position.y = D.floorY + 0.06; inter.add(aro);
+      // faixas emissivas (rodapé + cornija) — geometria compartilhada
+      const stripGeo = new THREE.TorusGeometry(D.cabinRadius - 0.06, 0.06, 6, 64);
+      const mStrip = new THREE.MeshStandardMaterial({ color: 0x08201d, emissive: 0x2dd6c4, emissiveIntensity: 2.4 });
+      const strip1 = new THREE.Mesh(stripGeo, mStrip);
+      strip1.rotation.x = Math.PI / 2; strip1.position.y = D.floorY + 0.12; inter.add(strip1);
+      const strip2 = new THREE.Mesh(stripGeo, mStrip);
+      strip2.rotation.x = Math.PI / 2; strip2.position.y = D.ceilingY - 0.12; inter.add(strip2);
+      // nervuras: saliência ≤ wallMargin (0.22) → flush com o raio caminhável,
+      // não precisam de collider próprio; ângulos fora dos arcos dos consoles
+      const ribs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.3, wallH, 0.22),
+        new THREE.MeshStandardMaterial({ color: 0x2b3a49, roughness: 0.55, metalness: 0.5 }), 12);
+      for (let i = 0; i < 12; i++) {
+        const a = i / 12 * Math.PI * 2 + Math.PI / 12;
+        setInst(ribs, i, Math.cos(a) * (D.cabinRadius - 0.11), (D.floorY + D.ceilingY) / 2,
+          Math.sin(a) * (D.cabinRadius - 0.11), -a - Math.PI / 2);
+      }
+      inter.add(ribs);
+      // consoles periféricos: alinhados aos arcos do protocolo — o collider
+      // correspondente é o clampToCabin (nenhuma parede invisível sem visual).
+      // Geometria/material COMPARTILHADOS (6 + 6 meshes, custo mínimo)
+      const consoleGeo = new THREE.BoxGeometry(2.6, 1.15, 0.85);
+      const mConsole = new THREE.MeshStandardMaterial({ color: 0x1c2836, roughness: 0.45, metalness: 0.55,
+        emissive: 0x0a4b44, emissiveIntensity: 0.4 });
+      const telaGeo = new THREE.PlaneGeometry(2.1, 0.6);
+      const mTela = new THREE.MeshStandardMaterial({ color: 0x03211e, emissive: 0x35f0da, emissiveIntensity: 1.6 });
+      for (const c of ShipProto.CONSOLES) {
+        const rMid = (c.innerR + D.cabinRadius) / 2;
+        const box = new THREE.Mesh(consoleGeo, mConsole);
+        box.position.set(Math.cos(c.ang) * rMid, D.floorY + 0.575, Math.sin(c.ang) * rMid);
+        box.rotation.y = -c.ang - Math.PI / 2;
+        inter.add(box);
+        const tela = new THREE.Mesh(telaGeo, mTela);
+        tela.position.set(Math.cos(c.ang) * (c.innerR - 0.03), D.floorY + 0.85, Math.sin(c.ang) * (c.innerR - 0.03));
+        tela.rotation.y = -c.ang - Math.PI / 2;
+        inter.add(tela);
+      }
+      // marcação no piso (anel de embarque)
+      const marks = new THREE.Mesh(new THREE.RingGeometry(8.6, 8.75, 64),
+        new THREE.MeshBasicMaterial({ color: 0x2dd6c4, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthWrite: false }));
+      marks.rotation.x = -Math.PI / 2; marks.position.y = D.floorY + 0.01; inter.add(marks);
+      // luminária central do teto: detalhe visível ao olhar reto pra cima
+      const lampada = new THREE.Mesh(new THREE.CircleGeometry(2.6, 32),
+        new THREE.MeshStandardMaterial({ color: 0x0c2a26, emissive: 0x9fffee, emissiveIntensity: 1.1, side: THREE.DoubleSide }));
+      lampada.rotation.x = Math.PI / 2; lampada.position.y = D.ceilingY - 0.04; inter.add(lampada);
+      const lampAro = new THREE.Mesh(new THREE.TorusGeometry(2.75, 0.08, 6, 40), mStrip);
+      lampAro.rotation.x = Math.PI / 2; lampAro.position.y = D.ceilingY - 0.06; inter.add(lampAro);
+      // iluminação interna em escala FÍSICA, moderada pro tone mapping
+      // (exposure 0.58 + bloom: forte demais vira feixe estourado no centro)
+      const luzTeto = new THREE.PointLight(0x6fe8d8, 45, 34, 2);
+      luzTeto.position.y = D.ceilingY - 0.6; inter.add(luzTeto);
+      const luzMeio = new THREE.PointLight(0x7fd8cc, 36, 30, 2);
+      luzMeio.position.y = (D.floorY + D.ceilingY) / 2; inter.add(luzMeio);
+      const luzJanela = new THREE.PointLight(0x9fd8ff, 3.5, 14, 2);
+      luzJanela.position.y = D.floorY + 0.9; inter.add(luzJanela);
+
       MP.scene.add(g);
-      return { g, ring };
+      return { g, ring, ext, inter };
     }
-    function shipPos(out, tm) {
-      const sp = S.plan.ship;
-      const k = Math.min(Math.max(tm / sp.flyTime, 0), 1.18);
-      out.set(
-        sp.from[0] + (sp.to[0] - sp.from[0]) * k,
-        sp.alt + Math.sin(tm * 1.7) * 1.2,
-        sp.from[1] + (sp.to[1] - sp.from[1]) * k,
-      );
-      return k;
+
+    /* slot inicial: atribuído pelo SERVIDOR no plano; fallback determinístico
+       por hash do id (servidor antigo sem shipSlots) */
+    function shipSlotIndex() {
+      if (S.plan && S.plan.shipSlots && Number.isInteger(S.plan.shipSlots[INIT.id]))
+        return S.plan.shipSlots[INIT.id];
+      let h = 0;
+      for (let i = 0; i < INIT.id.length; i++) h = (h * 31 + INIT.id.charCodeAt(i)) | 0;
+      return (h >>> 1) % 32;
     }
-    // assento: desloca cada jogador um pouquinho dentro da nave
-    let seat = 0;
-    for (let i = 0; i < INIT.id.length; i++) seat = (seat * 31 + INIT.id.charCodeAt(i)) | 0;
-    const seatOx = ((seat >>> 4) % 7 - 3) * 0.9, seatOz = ((seat >>> 8) % 7 - 3) * 0.9;
+
+    /* controlador cinemático da cabine: WASD em coordenadas LOCAIS, sem
+       gravidade/tiro/pulo. Yaw da câmera via Euler YXZ — olhar reto pra
+       cima/baixo NÃO zera a direção (normalizar getWorldDirection ali explode). */
+    function shipWalk(dt, pose) {
+      if (!S.chatOpen && !MP.state.paused && !MP.player.dead) {
+        _eul.setFromQuaternion(MP.camera.quaternion);
+        const yaw = _eul.y;
+        const fx = -Math.sin(yaw), fz = -Math.cos(yaw); // frente (horizontal estável)
+        const K = G.keys;
+        let mx = 0, mz = 0;
+        if (K.KeyW) { mx += fx; mz += fz; }
+        if (K.KeyS) { mx -= fx; mz -= fz; }
+        if (K.KeyD) { mx += -fz; mz += fx; }
+        if (K.KeyA) { mx -= -fz; mz -= fx; }
+        const len = Math.hypot(mx, mz);
+        if (len > 1e-6) {
+          mx /= len; mz /= len; // diagonal não é mais rápida
+          const c = Math.cos(pose.yaw), s = Math.sin(pose.yaw); // mundo -> local
+          const lx = c * mx - s * mz, lz = s * mx + c * mz;
+          const step = Math.min(dt, 0.1) * SHIP_DIMS.walkSpeed;
+          shipLocalPos.x += lx * step;
+          shipLocalPos.z += lz * step;
+        }
+      }
+      // corpo-a-corpo LOCAL: não atravessa outro jogador na cabine (empate
+      // exato desempata por id — sem divisão por zero, sem jitter)
+      const minD = SHIP_DIMS.playerRadius * 2 + 0.06;
+      for (const rp of remotes.values()) {
+        if (!rp.alive || !rp.ship || !rp.shipLocalCur) continue;
+        let dx = shipLocalPos.x - rp.shipLocalCur.x, dz = shipLocalPos.z - rp.shipLocalCur.z;
+        let d = Math.hypot(dx, dz);
+        if (d >= minD) continue;
+        if (d < 1e-6) { dx = INIT.id < rp.id ? 1 : -1; dz = 0; d = 1; }
+        shipLocalPos.x = rp.shipLocalCur.x + dx / d * minD;
+        shipLocalPos.z = rp.shipLocalCur.z + dz / d * minD;
+      }
+      ShipProto.clampToCabin(shipLocalPos, SHIP_DIMS.playerRadius);
+      shipLocalPos.y = SHIP_DIMS.floorY; // pés SEMPRE no piso: sem nado/flutuação
+    }
+    /* projeta a posição local no mundo (posição final do frame) */
+    function shipProject(pose) {
+      _swArr[0] = shipLocalPos.x; _swArr[1] = shipLocalPos.y; _swArr[2] = shipLocalPos.z;
+      ShipProto.localToWorld(pose, _swArr, _swArr);
+      MP.player.pos.set(_swArr[0], _swArr[1], _swArr[2]);
+      MP.player.vel.set(0, 0, 0);
+    }
 
     /* =============== queda + paraquedas =============== */
     let fallVy = 0;
@@ -460,6 +623,7 @@
       if (S.phase !== 'SHIP') return;
       S.phase = 'FALL';
       S.jumped = true;
+      shipLocalPos = null; // estado da cabine morre aqui; a pos MUNDIAL fica intacta
       fallVy = -4;
       window.__FP_pose = 'fall'; // braços abertos na queda livre
       UI.hint('🌀 caindo — [ESPAÇO] abre o paraquedas antes', 3000);
@@ -1123,6 +1287,18 @@
       rp.targetPos.set(d.pos[0], groundedBot ? MP.heightAt(d.pos[0], d.pos[2]) : d.pos[1], d.pos[2]);
       rp.targetYaw = d.rotY || 0;
       rp.ship = !!d.ship;
+      // posição LOCAL na cabine (já validada pelo servidor): interpola no
+      // referencial da nave; sem ela (server antigo) cai no lerp mundial
+      if (rp.ship && Array.isArray(d.shipLocal) && d.shipLocal.length === 3 &&
+          d.shipLocal.every(Number.isFinite)) {
+        if (!rp.shipLocalTgt) {
+          rp.shipLocalTgt = new THREE.Vector3();
+          rp.shipLocalCur = new THREE.Vector3(d.shipLocal[0], d.shipLocal[1], d.shipLocal[2]);
+        }
+        rp.shipLocalTgt.set(d.shipLocal[0], d.shipLocal[1], d.shipLocal[2]);
+      } else if (!rp.ship && rp.shipLocalTgt) {
+        rp.shipLocalTgt = rp.shipLocalCur = null; // pulou: volta ao lerp mundial
+      }
       rp.chute = !!d.chute;
       rp.fall = !!d.fall;
       rp.car = typeof d.car === 'number' ? d.car : -1;
@@ -1343,11 +1519,15 @@
         if (car >= 0 && myCarClaim !== car) claimCar(car);
         else if (car < 0 && myCarClaim >= 0) { socket.emit('leaveCar', { idx: myCarClaim }); myCarClaim = -1; }
       }
-      socket.volatile.emit('state', {
+      const st = {
         pos: [p.x, p.y, p.z], rotY, car, heli,
         ship: S.phase === 'SHIP', fall: S.phase === 'FALL', chute: S.phase === 'FALL' && S.chuteOpen,
         heldWeapon: localWeaponCode(),
-      });
+      };
+      // na nave o servidor valida e reconstrói TUDO pela posição local
+      if (S.phase === 'SHIP' && shipLocalPos)
+        st.shipLocal = [shipLocalPos.x, shipLocalPos.y, shipLocalPos.z];
+      socket.volatile.emit('state', st);
     }, 100);
     const _eul = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -1370,7 +1550,6 @@
     }, 500);
 
     /* =============== loop principal do BR =============== */
-    const _shipV = new THREE.Vector3();
     let lastT = performance.now(), hudAcc = 0, dmgAcc = 0, promptAcc = 0;
     (function brTick() {
       requestAnimationFrame(brTick);
@@ -1392,6 +1571,30 @@
       if ((S.phase === 'SHIP' || S.phase === 'FALL') && !MP.player.dead && !forceDeath)
         MP.player.invulnUntil = MP.state.gameTime + 1;
 
+      /* nave: pose PRIMEIRO — os avatares remotos na cabine convertem a
+         posição local com a pose deste frame (ninguém fica pra trás quando
+         a nave anda). Caminhada em coordenadas LOCAIS; __BR_freeze mantém
+         o playerUpdate global (gravidade/terreno) fora. */
+      if (ship && S.plan) {
+        const tm = S.matchT();
+        ShipProto.poseAt(S.plan.ship, tm, _shipPose);
+        ship.g.position.set(_shipPose.x, _shipPose.y, _shipPose.z);
+        ship.g.rotation.y = _shipPose.yaw;
+        ship.g.visible = _shipPose.k < 1.15;
+        ship.ring.rotation.z += dt * 0.8;
+        if (S.phase === 'SHIP') {
+          if (!shipLocalPos) {
+            const sl = ShipProto.slotLocal(shipSlotIndex());
+            shipLocalPos = new THREE.Vector3(sl[0], SHIP_DIMS.floorY, sl[1]);
+          }
+          // testes determinísticos pilotam via __BR_debug.shipDebug.step()
+          if (!window.__BR_shipManual) shipWalk(dt, _shipPose);
+          shipProject(_shipPose);
+          if (tm >= S.plan.ship.flyTime) jumpFromShip(); // fim da rota: todo mundo pula
+          UI.hint(`🛸 NA NAVE — [ESPAÇO] pra pular · auto em ${Math.max(0, S.plan.ship.flyTime - tm).toFixed(0)}s`);
+        }
+      }
+
       /* avatares: interpolação + animação de corrida + paraquedas + morte */
       const k = 1 - Math.exp(-12 * dt);
       window.__BR_takenCars.clear(); // carros ocupados por remotos (bloqueia tecla E neles)
@@ -1405,14 +1608,26 @@
           if (rp.deadT >= 1.2) rp.group.visible = false;
           continue;
         }
-        // visível também na nave (todo mundo viaja no convés); some dentro de carro/heli
+        // visível também na nave (todo mundo viaja na cabine); some dentro de carro/heli
         rp.group.visible = rp.alive && rp.car < 0 && !rp.heli;
-        rp.group.position.lerp(rp.targetPos, k);
+        if (rp.ship && rp.shipLocalCur && ship && S.plan) {
+          // na cabine: interpola em coordenadas LOCAIS e converte com a pose
+          // ATUAL — sem rastro na translação da nave; pés no piso
+          const px = rp.shipLocalCur.x, pz = rp.shipLocalCur.z;
+          rp.shipLocalCur.lerp(rp.shipLocalTgt, k);
+          _swArr[0] = rp.shipLocalCur.x; _swArr[1] = SHIP_DIMS.floorY; _swArr[2] = rp.shipLocalCur.z;
+          ShipProto.localToWorld(_shipPose, _swArr, _swArr);
+          rp.group.position.set(_swArr[0], _swArr[1], _swArr[2]);
+          // pernas animam pela caminhada LOCAL (não pelos ~40 m/s da nave)
+          rp.speed = Math.hypot(rp.shipLocalCur.x - px, rp.shipLocalCur.z - pz) / Math.max(dt, 0.001);
+        } else {
+          rp.group.position.lerp(rp.targetPos, k);
+          rp.speed = rp.lastPos.distanceTo(rp.group.position) / Math.max(dt, 0.001);
+        }
         let dy = rp.targetYaw - rp.yaw;
         dy = Math.atan2(Math.sin(dy), Math.cos(dy));
         rp.yaw += dy * k;
         rp.group.rotation.y = rp.yaw;
-        rp.speed = rp.lastPos.distanceTo(rp.group.position) / Math.max(dt, 0.001);
         rp.lastPos.copy(rp.group.position);
         rp.walkPh += dt * Math.min(rp.speed, 9) * 1.6;
         const sw = Math.sin(rp.walkPh) * Math.min(rp.speed / 5, 1) * 0.7;
@@ -1466,23 +1681,6 @@
       stepBullets(dt);
       skySync(dt);
 
-      /* nave */
-      if (ship && S.plan) {
-        const tm = S.matchT();
-        const kk = shipPos(_shipV, tm);
-        ship.g.position.copy(_shipV);
-        ship.g.visible = kk < 1.15;
-        ship.ring.rotation.z += dt * 0.8;
-        const sp = S.plan.ship;
-        ship.g.rotation.y = Math.atan2(sp.to[0] - sp.from[0], sp.to[1] - sp.from[1]);
-        if (S.phase === 'SHIP') {
-          // DENTRO da cabine: pés no piso interno, todo mundo ao redor da janela
-          MP.player.pos.set(_shipV.x + seatOx, _shipV.y - 0.95, _shipV.z + seatOz);
-          MP.player.vel.set(0, 0, 0);
-          if (tm >= sp.flyTime) jumpFromShip(); // fim da rota: todo mundo pula
-          UI.hint(`🛸 NA NAVE — [ESPAÇO] pra pular · auto em ${Math.max(0, sp.flyTime - tm).toFixed(0)}s`);
-        }
-      }
       if (S.phase === 'FALL') fallStep(dt);
       if (S.phase === 'SPECT') {
         spectStep();
@@ -1560,6 +1758,22 @@
     window.__BR_debug = {
       S, zc, crates, remotes, drops, LOBBY,
       get ship() { return ship; },
+      /* nave: dimensões/estado local pros testes (window.__BR_shipManual=true
+         desliga o passo automático e step(dt) pilota determinístico) */
+      shipDebug: {
+        proto: ShipProto,
+        get dims() { return SHIP_DIMS; },
+        get walkRadius() { return ShipProto.walkRadius(); },
+        get local() { return shipLocalPos ? [shipLocalPos.x, shipLocalPos.y, shipLocalPos.z] : null; },
+        setLocal(x, z) { if (shipLocalPos) shipLocalPos.set(x, SHIP_DIMS.floorY, z); },
+        pose() { return { x: _shipPose.x, y: _shipPose.y, z: _shipPose.z, yaw: _shipPose.yaw, k: _shipPose.k }; },
+        step(dt) {
+          if (S.phase !== 'SHIP' || !ship || !S.plan || !shipLocalPos) return;
+          ShipProto.poseAt(S.plan.ship, S.matchT(), _shipPose);
+          shipWalk(dt, _shipPose);
+          shipProject(_shipPose);
+        },
+      },
       jump: jumpFromShip, spect: enterSpectator, openCrate: tryOpenCrate,
       get boss() { return boss; }, get bossHp() { return bossHp; },
       get bullets() { return bullets.length; },

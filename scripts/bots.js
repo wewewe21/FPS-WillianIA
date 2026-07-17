@@ -9,7 +9,8 @@
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { io } = require('socket.io-client');
-const { zoneAt, mulberry32, shipPosAt } = require(path.join(__dirname, '..', 'server.js'));
+const { zoneAt, mulberry32 } = require(path.join(__dirname, '..', 'server.js'));
+const ShipProto = require(path.join(__dirname, '..', 'ship-protocol.js'));
 
 const NICKS = ['Zumbi', 'Falcao', 'Vaga-Lume', 'Trovao', 'Golem Jr', 'Coiote', 'Visitante', 'Sombra',
   'Pantera', 'Cacto', 'Urubu', 'Lagarto', 'Tempestade', 'Neve', 'Fumaca', 'Raio'];
@@ -304,9 +305,15 @@ function startBots(N, URL) {
     for (const b of bots) {
       if (!b.alive) continue;
       if (b.phase === 'SHIP') {
-        [b.x, b.y, b.z] = shipPosAt(t, plan);
+        // protocolo novo: posição LOCAL no slot atribuído pelo servidor —
+        // ele valida e reconstrói a posição mundial pela rota autoritativa
+        const slotIdx = plan.shipSlots && Number.isInteger(plan.shipSlots[b.id]) ? plan.shipSlots[b.id] : b.i;
+        const sl = ShipProto.slotLocal(slotIdx);
+        const local = [sl[0], ShipProto.DIMS.floorY, sl[1]];
+        const w = ShipProto.localToWorld(ShipProto.poseAt(plan.ship, t), local);
+        [b.x, b.y, b.z] = w;
         if (t >= b.jumpAt) b.phase = 'FALL';
-        b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, heldWeapon: 'FACA', car: -1 });
+        b.s.volatile.emit('state', { pos: [b.x, b.y, b.z], rotY: 0, ship: true, shipLocal: local, heldWeapon: 'FACA', car: -1 });
       } else if (b.phase === 'FALL') {
         const groundY = terrain ? terrain.heightAt(b.x, b.z) : 4;
         b.y = Math.max(groundY, b.y - 4.2);
