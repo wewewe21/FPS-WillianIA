@@ -351,6 +351,7 @@ for (const b of Structures.walls) {
   if (hx < 0.04 || hy < 0.04 || hz < 0.04) continue;
   const wb = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
   wb.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2);
+  wb.userData = { category: 'rigid', sourceId: b.city ? 'city-wall' : 'wall', hardForVehicle: true };
   wb.updateAABB(); // CANNON calcula o AABB na criação (origem) e nunca mais — sem isto o broadphase não enxerga o corpo
   world.addBody(wb);
   if (b.city) Structures.city.registerBody(wb); // destruição da cidade remove estes
@@ -364,6 +365,7 @@ Structures.city.bindPhysics(world);
   const cx = CITY.x, cz = CITY.z, gy = heightAt(cx, cz);
   const SW = CityLayout.CITY_CONST.SIDEWALK_W;
   const registerSlab = body => {
+    body.userData = { category: 'structural', sourceId: 'street-slab', hardForVehicle: false };
     body.updateAABB();
     world.addBody(body);
     Structures.city.registerBody(body);
@@ -409,9 +411,10 @@ const treeSpots = []; // posições das árvores (LOD + minimapa)
     const rot = rand(TAU);
     treeSpots.push({ x, y: isExcluded ? -100 : y, z, s, rot, tint });
     if (!isExcluded) {
-      addObstacle(x, z, 0.45 * s);
+      addObstacle(x, z, 0.45 * s, { category: 'rigid', sourceId: 'tree' });
       const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(0.32 * s, 1.8, 0.32 * s)) });
       body.position.set(x, y + 1.8, z);
+      body.userData = { category: 'rigid', sourceId: 'tree:' + treeSpots.length, hardForVehicle: true };
       body.updateAABB(); // idem paredes: AABB ficava na origem
       world.addBody(body);
     }
@@ -523,6 +526,7 @@ const Scenery = createScenery();
     const hx = p.size.x / 2 * 0.72, hy = p.size.y / 2, hz = p.size.z / 2 * 0.72;
     const body = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
     body.position.set(x, heightAt(x, z) + hy, z);
+    body.userData = { category: 'rigid', sourceId: 'structure', hardForVehicle: true };
     body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), ry || 0);
     body.updateAABB();
     world.addBody(body);
@@ -607,9 +611,10 @@ const Scenery = createScenery();
     _dummy.updateMatrix();
     rocks.setMatrixAt(placed++, _dummy.matrix);
     if (!isExcluded && s > 1.1) {
-      addObstacle(x, z, s * 0.8);
+      addObstacle(x, z, s * 0.8, { category: 'rigid', sourceId: 'rock' });
       const body = new CANNON.Body({ mass: 0, shape: new CANNON.Sphere(s * 0.75) });
       body.position.set(x, y + s * 0.2, z);
+      body.userData = { category: 'rigid', sourceId: 'rock:' + placed, hardForVehicle: true };
       body.updateAABB(); // idem paredes: AABB ficava na origem
       world.addBody(body);
     }
@@ -693,7 +698,10 @@ const Scenery = createScenery();
     _dummy.updateMatrix();
     cacti.setMatrixAt(nCac++, _dummy.matrix);
     if (!isExcluded) {
-      addObstacle(x, z, 0.35);
+      // MATRIZ DE COLISÃO: cacto é "vegetação macia" — bloqueia o PLAYER
+      // (círculo), mas NÃO tem corpo Cannon: carro passa (comportamento
+      // intencional, documentado; grama/flor = decorativo puro, nada colide)
+      addObstacle(x, z, 0.35, { category: 'softVegetation', sourceId: 'cactus' });
     }
   }
   cacti.count = nCac;
@@ -2139,6 +2147,59 @@ window.__game = {
     player.pos.set(Car.group.position.x + 3, heightAt(Car.group.position.x + 3, Car.group.position.z), Car.group.position.z);
   },
 };
+
+/* ?debugTerrain=1 — diagnóstico OPT-IN de superfície e veículo (leitura pura:
+   não aceita estado de rede, não concede autoridade, sem log por frame). */
+if (/[?&]debugTerrain=1/.test(location.search)) {
+  const _dn = new THREE.Vector3();
+  window.__terrainDebug = {
+    at(x, z) {
+      const su = surfaceAt(x, z);
+      const from = new CANNON.Vec3(x, 150, z), to = new CANNON.Vec3(x, -40, z);
+      const res = new CANNON.RaycastResult();
+      world.raycastClosest(from, to, {}, res);
+      terrainNormal(x, z, _dn);
+      return {
+        x, z,
+        heightCanonica: su.height,
+        heightCannon: res.hasHit ? res.hitPointWorld.y : null,
+        cannonBody: res.hasHit && res.body.userData ? res.body.userData : null,
+        groundAt: groundAt(x, z, 999),
+        normalGeometrica: (() => { const n = geometricNormalAt(x, z, new THREE.Vector3()); return [n.x, n.y, n.z]; })(),
+        normalSuave: [_dn.x, _dn.y, _dn.z],
+        slopeDegrees: su.slopeDegrees,
+        bioma: su.biomeId, pesos: su.biomeWeights,
+        surfaceType: su.surfaceType, driveable: su.driveable,
+        vegetationFactor: su.vegetationFactor, waterDepth: su.waterDepth,
+        obstaculos: obstaclesNear(x, z),
+      };
+    },
+    vehicle() {
+      const v = Car.vehicle;
+      if (!v) return null;
+      const cb = Car.chassisBody;
+      let chassisContacts = 0;
+      for (const c of world.contacts) if (c.bi === cb || c.bj === cb) chassisContacts++;
+      return {
+        pos: [cb.position.x, cb.position.y, cb.position.z],
+        vel: [cb.velocity.x, cb.velocity.y, cb.velocity.z],
+        sleepState: cb.sleepState,
+        chassisContacts,
+        wheels: v.wheelInfos.map(w => ({
+          hasHit: !!(w.raycastResult && w.raycastResult.hasHit),
+          body: w.raycastResult && w.raycastResult.body
+            ? (w.raycastResult.body.userData ? w.raycastResult.body.userData.sourceId : 'terreno') : null,
+          point: w.raycastResult && w.raycastResult.hasHit
+            ? [w.raycastResult.hitPointWorld.x, w.raycastResult.hitPointWorld.y, w.raycastResult.hitPointWorld.z] : null,
+          suspensionLength: w.suspensionLength,
+          force: w.suspensionForce,
+          slip: w.sideImpulse,
+          engineForce: w.engineForce,
+        })),
+      };
+    },
+  };
+}
 
 /* Hooks pequenos para playtest automatizado e acessibilidade por estado textual. */
 window.advanceTime = ms => {

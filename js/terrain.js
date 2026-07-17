@@ -180,10 +180,11 @@ function biomeAt(x, z) {
 /* colisores círculo (árvores/pedras/cactos) num hash espacial */
 const obstacleGrid = new Map(); // hash espacial p/ colisão do player
 const OBST_CELL = 16;
-function addObstacle(x, z, r) {
+function addObstacle(x, z, r, meta) {
   const k = `${Math.floor(x / OBST_CELL)}_${Math.floor(z / OBST_CELL)}`;
   if (!obstacleGrid.has(k)) obstacleGrid.set(k, []);
-  obstacleGrid.get(k).push({ x, z, r });
+  // meta opcional: { category, sourceId } — diagnóstico da matriz de colisão
+  obstacleGrid.get(k).push(meta ? { x, z, r, ...meta } : { x, z, r });
 }
 function obstaclesNear(x, z) {
   const gx = Math.floor(x / OBST_CELL), gz = Math.floor(z / OBST_CELL);

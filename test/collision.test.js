@@ -542,4 +542,40 @@ describe('Colisões', { skip: !CHROME && 'Chrome não encontrado' }, () => {
       bot.close();
     }
   });
+
+  it('dada a taxonomia de colisores, então corpos rígidos têm metadados e ninguém mora na origem', async () => {
+    const r = await h.play(() => {
+      const MP = window.QA.MP;
+      let rigid = 0, semMeta = 0, naOrigem = 0, aabbRuim = 0;
+      for (const b of MP.world.bodies) {
+        if (b.mass !== 0) continue;
+        if (b.shapes[0] && b.shapes[0].elementSize !== undefined) continue; // heightfield
+        if (b.userData && b.userData.category) rigid++;
+        else semMeta++;
+        if (Math.abs(b.position.x) < 1e-6 && Math.abs(b.position.z) < 1e-6 && Math.abs(b.position.y) < 1e-6) naOrigem++;
+        // AABB atualizada: precisa conter a posição do corpo
+        if (b.aabb && (b.position.x < b.aabb.lowerBound.x - 5 || b.position.x > b.aabb.upperBound.x + 5)) aabbRuim++;
+      }
+      return { rigid, semMeta, naOrigem, aabbRuim };
+    });
+    assert.ok(r.rigid > 100, `poucos corpos com metadados: ${r.rigid}`);
+    assert.equal(r.semMeta, 0, `${r.semMeta} corpos estáticos SEM categoria/sourceId`);
+    assert.equal(r.naOrigem, 0, `${r.naOrigem} corpos estáticos parados na origem`);
+    assert.equal(r.aabbRuim, 0, `${r.aabbRuim} corpos com AABB não atualizada`);
+  });
+
+  it('dada grama alta sobre uma pedra, então a física da pedra não muda com a grama', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G, MP = window.QA.MP;
+      const rock = MP.world.bodies.find(b => b.userData && b.userData.sourceId === 'rock');
+      if (!rock) return { skip: true };
+      const antes = [rock.position.x, rock.position.y, rock.position.z];
+      G.Grass.refreshAll(); // refaz TODA a grama por cima
+      window.QA.tick(30);
+      const depois = [rock.position.x, rock.position.y, rock.position.z];
+      return { antes, depois };
+    });
+    if (r.skip) return;
+    assert.deepEqual(r.depois, r.antes, 'corpo da pedra mudou quando a grama refez');
+  });
 });
