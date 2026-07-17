@@ -99,6 +99,15 @@ describe('Transformações local <-> mundo', () => {
     assert.ok(Math.abs(w[1] - (pose.y + P.DIMS.floorY)) < 1e-9);
     assert.ok(Math.abs(w[2] - pose.z) < 1e-9);
   });
+
+  it('coversPoint: casco cobre, fora do raio e acima do teto não', () => {
+    const pose = { x: 100, y: 50, z: -30, yaw: 0.7, k: 0.5 };
+    assert.equal(P.coversPoint(pose, 100, 50, -30), true, 'centro da cabine');
+    assert.equal(P.coversPoint(pose, 117.9, 50, -30), true, 'borda do casco (r=17.9)');
+    assert.equal(P.coversPoint(pose, 119.5, 50, -30), false, 'fora do raio externo');
+    assert.equal(P.coversPoint(pose, 100, 55, -30), false, 'acima do teto');
+    assert.equal(P.coversPoint(pose, 100, 20, -30), true, 'sombra de chuva sob a nave');
+  });
 });
 
 describe('Slots de spawn na cabine', () => {

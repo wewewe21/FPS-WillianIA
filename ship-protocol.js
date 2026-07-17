@@ -87,6 +87,15 @@
     return o;
   }
 
+  /* telhado climático da nave: a coordenada MUNDIAL está sob o casco?
+     Raio EXTERNO (o casco inteiro faz sombra de chuva) + teto local. */
+  const _cvp = [0, 0, 0];
+  function coversPoint(pose, x, y, z) {
+    _cvp[0] = x; _cvp[1] = y; _cvp[2] = z;
+    worldToLocal(pose, _cvp, _cvp);
+    return Math.hypot(_cvp[0], _cvp[2]) <= DIMS.outerRadius && _cvp[1] < DIMS.ceilingY + 0.6;
+  }
+
   /* slots em 5 anéis concêntricos ao redor da janela. Índice i é atribuído
      pelo SERVIDOR no início da partida e não muda no voo; a posição de um
      slot só depende do próprio índice (desconexões não realocam ninguém).
@@ -144,7 +153,7 @@
 
   return {
     DIMS, CONSOLES, SLOT_TOTAL,
-    walkRadius, routeYaw, poseAt, localToWorld, worldToLocal,
+    walkRadius, routeYaw, poseAt, localToWorld, worldToLocal, coversPoint,
     slotLocal, sanitizeLocal, localInCabin, clampToCabin,
   };
 });

@@ -687,11 +687,12 @@
        horário e clima vêm do js/climate.js (função pura de seed + relógio da
        PARTIDA): sem espelho de constantes, sem sorteio local — late join,
        reconexão e aba pausada convergem sozinhos */
-    // cabine da nave = volume coberto: chuva não entra e o som abafa.
-    // Verdade = fase da partida + posição LOCAL validada (shipLocalPos),
-    // nunca uma flag solta do cliente.
-    if (G.Cover) G.Cover.setDynamicProvider(() =>
-      (S.phase === 'SHIP' && shipLocalPos) ? { covered: true, sourceId: 'ship' } : null);
+    // cabine/casco da nave = telhado climático REAL: testa a coordenada no
+    // espaço LOCAL da nave (pose da fase, validada) — antes cobria o mundo
+    // inteiro e apagava até a chuva visível pela janela
+    if (G.Cover) G.Cover.setDynamicProvider((x, y, z) =>
+      (S.phase === 'SHIP' && ShipProto.coversPoint(_shipPose, x, y, z))
+        ? { covered: true, sourceId: 'ship' } : null);
 
     let skyAcc = 9; // força a 1ª sincronização de clima logo de cara
     function skySync(dt) {
