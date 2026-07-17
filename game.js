@@ -2018,6 +2018,7 @@ window.__game = {
   get fps() { return fpsVal; },
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
+  platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)
   heightAt, biomeAt, groundAt, obstaclesNear,
   forceStart() { startGame(false); },
   teleportToCar() {
