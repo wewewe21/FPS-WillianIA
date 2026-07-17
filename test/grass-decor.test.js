@@ -113,7 +113,7 @@ describe('Grama decorativa (Chrome headless)', { skip: !CHROME && 'Chrome não e
 
   it('dado o rebuild, então needsUpdate/bounds ficam válidos e a fila esvazia', async () => {
     const r = await h.play(() => {
-      const G = window.QA.G, MP = window.QA.MP;
+      const G = window.QA.G;
       window.QA.reset();
       window.QA.tick(150);
       const sample = G.Grass.debugSample(30, 30, 400) || [];

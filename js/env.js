@@ -1,16 +1,21 @@
 /* ================================================================
-   AMBIENTE DINÂMICO — ciclo dia/noite, estrelas, chuva e neve
+   AMBIENTE DINÂMICO — ciclo dia/noite, estrelas, chuva e neve.
+   Horário e clima vêm do js/climate.js (determinístico por seed+tempo,
+   compartilhado com o BR); aqui fica só a APRESENTAÇÃO: luz, céu, fog,
+   golden hour, partículas e a suavização (weatherK) das transições.
    ================================================================ */
-const _dummy2 = new THREE.Object3D();
 import * as THREE from 'three';
+import { todStep, weatherAt, windAt, goldenHourK } from './climate.js';
 
 export function createEnv(deps) {
-  const { CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler } = deps;
+  const { CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler,
+    worldSeed = 424242 } = deps;
   const _dummy2 = new THREE.Object3D();
-  const DAY_LEN = 420; // segundos por ciclo completo
-  let tod = 0.33; // 0 = meia-noite, 0.5 = meio-dia
-  let weather = 'limpo', weatherK = 0, nextWeather = 75, thunderT = 9, flashT = 0;
-  let nightK = 0, dayK = 1;
+  let elapsed = 0;          // relógio da SESSÃO (clima do solo deriva daqui)
+  let tod = 0.33;           // 0 = meia-noite, 0.5 = meio-dia (setter de QA/BR ajusta)
+  let weatherOverride = null; // BR/QA: Env.weather = w manda; null = agenda do clima
+  let weather = 'limpo', weatherK = 0, thunderT = 9, flashT = 0;
+  let nightK = 0, dayK = 1, goldenK = 0;
 
   // estrelas no domo
   const starGeo = new THREE.BufferGeometry();
@@ -47,55 +52,70 @@ export function createEnv(deps) {
   const SUN_DAY = new THREE.Color(0xffe7c0), HEMI_DAY = new THREE.Color(0xa9cdf2), HEMI_NIGHT = new THREE.Color(0x2a3c5e);
   const _f = new THREE.Color(), _sd2 = new THREE.Vector3();
 
+  const COL_GOLD_SUN = new THREE.Color(0xffa050);   // sol dourado do fim de tarde
+  const COL_GOLD_FOG = new THREE.Color(0xf0a988);   // horizonte pêssego
+  const COL_GOLD_SKYW = new THREE.Color(0xffb984);  // água quente
+  const COL_GOLD_GRASS = new THREE.Color(0xffc07a); // luz quente na grama (verde fica verde)
+
   function update(dt, t) {
-    // dia passa devagar, noite passa rápido: dia dura ~3x mais que a noite
-    const dayNow = tod > 0.25 && tod < 0.75;
-    tod = (tod + dt * (dayNow ? 0.62 : 1.9) / DAY_LEN) % 1;
+    elapsed += dt;
+    // dia passa devagar, noite passa rápido (curva única do js/climate.js)
+    tod = todStep(tod, dt);
+    goldenK = goldenHourK(tod);
     const ang = (tod - 0.25) * TAU; // nascer do sol ~6h
     const elevDeg = Math.sin(ang) * 58;
     const azimDeg = 155 + Math.cos(ang) * 55;
     dayK = clamp((elevDeg + 4) / 14, 0, 1);
     nightK = 1 - dayK;
+    const gk = goldenK * dayK; // golden hour só enquanto há sol
     // sol em movimento: céu, CSM, grama e água acompanham
     _sd2.setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - Math.max(elevDeg, 2)), THREE.MathUtils.degToRad(azimDeg));
     sunDir.copy(_sd2);
     sky.material.uniforms.sunPosition.value.copy(_sd2);
     if (elevDeg > -2) csm.lightDirection.copy(_sd2).negate().normalize();
-    for (const l of csm.lights) l.intensity = 1.8 * dayK * (1 - weatherK * 0.55);
+    for (const l of csm.lights) l.intensity = 1.8 * dayK * (1 - weatherK * 0.55) * (1 - gk * 0.15);
     hemiLight.intensity = 0.42 * dayK + 0.09;
     hemiLight.color.copy(HEMI_DAY).lerp(HEMI_NIGHT, nightK);
     ambLight.intensity = 0.16 * dayK + 0.05;
-    renderer.toneMappingExposure = lerp(0.34, CFG.EXPOSURE, dayK);
+    // exposição CONTROLADA: golden hour soma no máx +0.02 (nada estoura)
+    renderer.toneMappingExposure = lerp(0.34, CFG.EXPOSURE, dayK) + gk * 0.02;
     scene.environmentIntensity = 0.38 * dayK + 0.05;
     const u = sky.material.uniforms;
-    u.rayleigh.value = lerp(0.55, 1.15, dayK);
-    u.mieCoefficient.value = 0.0008 + weatherK * 0.0035;
+    // fim de tarde: céu quente (sol baixo + rayleigh/mie extras dão o
+    // gradiente pêssego/rosa/lilás do horizonte — referência Vice City)
+    u.rayleigh.value = lerp(0.55, 1.15, dayK) + gk * 1.4;
+    u.mieCoefficient.value = 0.0008 + weatherK * 0.0035 + gk * 0.004;
     if (u.cloudCoverage) u.cloudCoverage.value = 0.38 + weatherK * 0.45;
-    _f.copy(FOG_DAY).lerp(FOG_NIGHT, nightK).lerp(FOG_RAIN, weatherK * 0.7 * dayK);
+    _f.copy(FOG_DAY).lerp(FOG_NIGHT, nightK).lerp(FOG_RAIN, weatherK * 0.7 * dayK).lerp(COL_GOLD_FOG, gk * 0.45);
     scene.fog.color.copy(_f);
-    scene.fog.near = CFG.VIEW_DIST * (0.5 - weatherK * 0.28);
+    scene.fog.near = CFG.VIEW_DIST * (0.5 - weatherK * 0.28); // golden NÃO encobre o mapa
     stars.material.opacity = nightK * (1 - weatherK) * 0.9;
     stars.position.copy(camera.position);
     Grass.material.uniforms.uSunDir.value.copy(_sd2);
-    Grass.material.uniforms.uSunColor.value.copy(SUN_DAY).multiplyScalar(0.22 + dayK * 0.92);
+    // grama recebe LUZ quente — os verdes continuam vivos e reconhecíveis
+    Grass.material.uniforms.uSunColor.value.copy(SUN_DAY).lerp(COL_GOLD_GRASS, gk * 0.6).multiplyScalar(0.22 + dayK * 0.92);
     Grass.material.uniforms.uSkyColor.value.copy(HEMI_DAY).lerp(HEMI_NIGHT, nightK);
     Grass.material.uniforms.uWind.value = CFG.WIND_STRENGTH + weatherK * 0.5;
     Water.uniforms.uSunDir.value.copy(_sd2);
-    Water.uniforms.uSky.value.copy(FOG_DAY).lerp(FOG_NIGHT, nightK);
-    Structures.cityMat.emissiveIntensity = 0.12 + nightK * 1.6; // janelas acendem à noite
+    Water.uniforms.uSky.value.copy(FOG_DAY).lerp(FOG_NIGHT, nightK).lerp(COL_GOLD_SKYW, gk * 0.5);
+    // janelas começam a acender no fim da tarde e seguem acesas à noite
+    Structures.cityMat.emissiveIntensity = 0.12 + nightK * 1.6 + gk * 0.5;
+    // sol dourado/alaranjado no golden hour (fora dele: branco original)
+    for (const l of csm.lights) l.color.setRGB(1, 1, 1).lerp(COL_GOLD_SUN, gk * 0.85);
 
-    // máquina de clima
-    nextWeather -= dt;
-    if (nextWeather <= 0) {
-      nextWeather = rand(80, 150);
-      const r = Math.random();
-      weather = r < 0.52 ? 'limpo' : r < 0.8 ? 'chuva' : 'neve';
-    }
+    // clima: agenda determinística (seed+tempo) do js/climate.js; override
+    // (BR/QA) manda quando setado. A transição continua suavizada aqui.
+    weather = weatherOverride !== null ? weatherOverride
+      : weatherAt(worldSeed, elapsed).type;
     weatherK = damp(weatherK, weather === 'limpo' ? 0 : 1, 0.4, dt);
     SFX.setRain(weather === 'chuva' ? weatherK : 0);
-    if (weather === 'chuva' && weatherK > 0.6) {
+    // vento compartilhado: grama, chuva e neve seguem a MESMA direção
+    const wind = windAt(worldSeed, elapsed);
+    Grass.material.uniforms.uWindDir.value.set(wind.dirX, wind.dirZ);
+    if (weather === 'chuva' && weatherK > 0.75) {
       thunderT -= dt;
-      if (thunderT <= 0) { thunderT = rand(7, 18); SFX.thunder(); flashT = 0.13; }
+      // trovão raro e distante: clima normal não é jump scare
+      if (thunderT <= 0) { thunderT = rand(18, 40); SFX.thunder(); flashT = 0.13; }
     }
     flashT = Math.max(0, flashT - dt);
     if (flashT > 0) hemiLight.intensity += 2.8; // relâmpago
@@ -138,8 +158,10 @@ export function createEnv(deps) {
   return {
     update,
     get nightK() { return nightK; },
+    get goldenK() { return goldenK; },
     get tod() { return tod; }, set tod(v) { tod = v; },
-    get weather() { return weather; }, set weather(w) { weather = w; nextWeather = rand(80, 150); },
+    // setter = override (BR sincronizado / QA); null volta pra agenda do clima
+    get weather() { return weather; }, set weather(w) { weatherOverride = w; weather = w === null ? weather : w; },
     get weatherK() { return weatherK; },
   };
 }

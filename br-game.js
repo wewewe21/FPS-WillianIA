@@ -684,34 +684,18 @@
     }
 
     /* =============== céu sincronizado: dia/noite e clima iguais pra todos ===============
-       cada cliente rodava o próprio relógio (pausa, aba oculta e slow-mo da morte
-       descolavam tudo) — aqui o horário é função pura do relógio da PARTIDA,
-       e o clima é sorteado por (seed ^ época), determinístico em todo cliente */
-    const DAY_LEN = 480, DAY_SPD = 0.62 / DAY_LEN, NIGHT_SPD = 1.9 / DAY_LEN; // espelho do Env
-    function todAt(t) {
-      let tod = 0.33, rem = Math.max(0, t);
-      for (let guard = 0; rem > 0 && guard < 96; guard++) {
-        const day = tod >= 0.25 && tod < 0.75;
-        const spd = day ? DAY_SPD : NIGHT_SPD;
-        const edge = day ? 0.75 : (tod < 0.25 ? 0.25 : 1.25);
-        const toEdge = (edge - tod) / spd;
-        if (toEdge > rem) { tod += rem * spd; break; }
-        tod = edge >= 1 ? edge - 1 : edge;
-        rem -= toEdge;
-      }
-      return tod % 1;
-    }
+       horário e clima vêm do js/climate.js (função pura de seed + relógio da
+       PARTIDA): sem espelho de constantes, sem sorteio local — late join,
+       reconexão e aba pausada convergem sozinhos */
     let skyAcc = 9; // força a 1ª sincronização de clima logo de cara
     function skySync(dt) {
       if (!S.plan || !MP.state.started) return;
       const ciclo = S.flags && S.flags.ciclo;
-      G.Env.tod = ciclo === 'dia' ? 0.45 : ciclo === 'noite' ? 0.95 : todAt(S.matchT());
+      G.Env.tod = ciclo === 'dia' ? 0.45 : ciclo === 'noite' ? 0.95 : G.Climate.todAt(S.matchT());
       skyAcc += dt;
       if (skyAcc > 1) {
         skyAcc = 0;
-        const epoch = Math.floor(Math.max(0, S.matchT()) / 75); // clima muda a cada ~75s
-        const r = seededRng((INIT.worldSeed ^ Math.imul(epoch + 1, 2654435761)) >>> 0)();
-        const w = r < 0.52 ? 'limpo' : r < 0.8 ? 'chuva' : 'neve';
+        const w = G.Climate.weatherAt(INIT.worldSeed >>> 0, S.matchT()).type;
         if (G.Env.weather !== w) G.Env.weather = w;
       }
     }

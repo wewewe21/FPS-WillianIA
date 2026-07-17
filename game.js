@@ -13,6 +13,7 @@ import { CFG, SETTINGS, persistSettings } from './js/config.js';
 import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
 import { createBiomes } from './js/biomes.js';
+import * as Climate from './js/climate.js';
 import { createSFX } from './js/sfx.js';
 import { createStructures } from './js/structures.js';
 import * as CityLayout from './js/citylayout.js';
@@ -1734,7 +1735,8 @@ const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, SFX, FX, s
 /* Rockets criado APOS o Boss (dependencia declarada) — só é usado em runtime */
 const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses, extraTargets });
 
-const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler });
+const Env = createEnv({ CFG, clamp, lerp, damp, rand, TAU, SFX, scene, camera, renderer, csm, sky, sunDir, hemiLight, ambLight, Water, Grass, Structures, _euler,
+  worldSeed: ((window.__MP_init && window.__MP_init.worldSeed) >>> 0) || 424242 });
 
 /* ================================================================
    VIDA AMBIENTE — borboletas, pássaros, pólen, fogueira, fumaça,
@@ -2088,7 +2090,7 @@ window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
-  WeaponModels, FpBody, WeaponRig,
+  WeaponModels, FpBody, WeaponRig, Climate,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
   get fps() { return fpsVal; },
