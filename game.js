@@ -172,23 +172,28 @@ world.allowSleep = true;
 world.defaultContactMaterial.friction = 0.3;
 world.defaultContactMaterial.restitution = 0.05;
 
-/* heightfield espelhando a MESMA função heightAt do visual */
+/* heightfield na MESMA grade do PlaneGeometry visual (célula de 5 m, mesmos
+   vértices, MESMA diagonal de triangulação) — física e malha descrevem a
+   mesma superfície; carros deixam de flutuar/afundar entre as duas. */
 {
-  const elem = 4;
-  const n = Math.floor(CFG.WORLD_SIZE / elem) + 1;
-  const half = ((n - 1) * elem) / 2;
+  const elem = CFG.WORLD_SIZE / CFG.TERRAIN_SEGS;
+  const n = CFG.TERRAIN_SEGS + 1;
+  const half = CFG.WORLD_SIZE / 2;
   const data = [];
   for (let i = 0; i < n; i++) {
     data.push([]);
     for (let j = 0; j < n; j++) {
-      data[i].push(heightAt(-half + i * elem, half - j * elem));
+      data[i].push(heightAt(-half + j * elem, -half + i * elem));
     }
   }
   const hfShape = new CANNON.Heightfield(data, { elementSize: elem });
   const hfBody = new CANNON.Body({ mass: 0 });
   hfBody.addShape(hfShape);
-  hfBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
-  hfBody.position.set(-half, 0, half);
+  /* eixos locais x→+Z, y→+X, z→+Y (rotação de -120° em torno de (1,1,1)):
+     alinha a diagonal das células do cannon com a do PlaneGeometry — com a
+     orientação antiga cada célula divergia dentro dos triângulos. */
+  hfBody.quaternion.set(-0.5, -0.5, -0.5, 0.5);
+  hfBody.position.set(-half, 0, -half);
   hfBody.updateAABB();
   world.addBody(hfBody);
 }
@@ -334,6 +339,31 @@ for (const b of Structures.walls) {
   if (b.city) Structures.city.registerBody(wb); // destruição da cidade remove estes
 }
 Structures.city.bindPhysics(world);
+
+/* lajes FÍSICAS do pavimento urbano: o asfalto/calçada visual fica ~0,1 m
+   acima do terreno; sem corpo os veículos afundavam as rodas no visual.
+   Registradas na cidade: somem na destruição junto com o pavimento visual. */
+{
+  const cx = CITY.x, cz = CITY.z, gy = heightAt(cx, cz);
+  const SW = CityLayout.CITY_CONST.SIDEWALK_W;
+  const registerSlab = body => {
+    body.updateAABB();
+    world.addBody(body);
+    Structures.city.registerBody(body);
+  };
+  for (const r of CityLayout.ROADS) {
+    const hx = (r.x1 - r.x0) / 2 + SW, hz = (r.z1 - r.z0) / 2 + SW, hy = 0.45;
+    const b = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
+    // topo = topo do asfalto (trimBox de 0.12 centrado em gy+0.08)
+    b.position.set(cx + (r.x0 + r.x1) / 2, gy + 0.14 - hy, cz + (r.z0 + r.z1) / 2);
+    registerSlab(b);
+  }
+  { // praça pavimentada (disco ao redor da torre)
+    const b = new CANNON.Body({ mass: 0, shape: new CANNON.Cylinder(CityLayout.PLAZA.r, CityLayout.PLAZA.r, 0.9, 20) });
+    b.position.set(cx, gy + 0.08 - 0.45, cz);
+    registerSlab(b);
+  }
+}
 
 const treeSpots = []; // posições das árvores (LOD + minimapa)
 {
@@ -2019,6 +2049,7 @@ window.__game = {
   get errors() { return __errors; },
   tick, // passo manual do loop (testes/depuração): __game.tick(1/60)
   platforms, // hook de QA: plataformas/rampas pisáveis (andares e escada da torre)
+  terrainMesh, // hook de QA: superfície visual p/ comparar com o heightfield físico
   heightAt, biomeAt, groundAt, obstaclesNear,
   forceStart() { startGame(false); },
   teleportToCar() {

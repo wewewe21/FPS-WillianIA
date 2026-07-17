@@ -126,6 +126,7 @@
         id, nick: nk || '???', alive: true, isBoss: false,
         group, body, targetPos: group.position.clone(), yaw: 0, targetYaw: 0,
         chute: false, ship: false, fall: false, car: -1, heli: false, bot: false,
+        carHintIdx: -1, carHintPos: null, carHintYaw: 0, // dica visual das rodas do carro remoto
         shipLocalTgt: null, shipLocalCur: null,
         heldWeapon: 'FACA', fireT: 0, hitT: 0, deadT: 0,
         lastPos: group.position.clone(), speed: 0, walkPh: 0,
@@ -1301,7 +1302,8 @@
       }
       rp.chute = !!d.chute;
       rp.fall = !!d.fall;
-      rp.car = typeof d.car === 'number' ? d.car : -1;
+      // só índice INTEIRO dentro da frota (NaN/Infinity/lixo viram "a pé")
+      rp.car = Number.isInteger(d.car) && d.car >= 0 && d.car < G.Car.vehicles.length ? d.car : -1;
       rp.heli = !!d.heli;
       rp.bot = !!d.bot;
       rp.heldWeapon = d.heldWeapon ? weaponCode(d.heldWeapon) : rp.heldWeapon;
@@ -1652,11 +1654,45 @@
         if (rp.car >= 0) {
           const v = G.Car.vehicles[rp.car];
           if (v && !(G.state.driving && v.group === G.Car.group)) {
-            v.chassisBody.position.set(rp.group.position.x, rp.group.position.y, rp.group.position.z);
+            const gp = rp.group.position;
+            /* dica VISUAL de giro/esterço das rodas: derivada da pose
+               interpolada já validada (nunca autoridade — só alimenta a
+               animação em js/car.js). Teleporte/troca de carro reinicia. */
+            if (rp.carHintIdx !== rp.car || !rp.carHintPos) {
+              rp.carHintIdx = rp.car;
+              rp.carHintPos = rp.carHintPos || new THREE.Vector3();
+              rp.carHintPos.copy(gp);
+              rp.carHintYaw = rp.yaw;
+            } else {
+              const dx = gp.x - rp.carHintPos.x, dz = gp.z - rp.carHintPos.z;
+              const dtc = Math.min(Math.max(dt, 1 / 240), 0.5);
+              if (Math.hypot(dx, dz) < 8 && Number.isFinite(dx) && Number.isFinite(dz)) {
+                const fwdX = Math.cos(rp.yaw), fwdZ = -Math.sin(rp.yaw);
+                const vMax = (v.cfg.maxKmh || 100) / 3.6 * 1.3;
+                const vLong = Math.max(-vMax, Math.min(vMax, (dx * fwdX + dz * fwdZ) / dtc));
+                let dyaw = rp.yaw - rp.carHintYaw;
+                dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+                const wheelBase = v.cfg.wheelsVis[0][0] - v.cfg.wheelsVis[2][0];
+                const steerRaw = Math.atan2((dyaw / dtc) * wheelBase, Math.max(Math.abs(vLong), 2) * (vLong < 0 ? -1 : 1));
+                const steer = Math.max(-v.cfg.steer, Math.min(v.cfg.steer, steerRaw));
+                v.remoteHint = v.remoteHint || { speed: 0, steer: 0, ttl: 0 };
+                v.remoteHint.speed = vLong;
+                v.remoteHint.steer = steer;
+                v.remoteHint.ttl = 0.35;
+              } else if (v.remoteHint) v.remoteHint.ttl = 0; // salto impossível: sem giro fantasma
+              rp.carHintPos.copy(gp);
+              rp.carHintYaw = rp.yaw;
+            }
+            v.chassisBody.position.set(gp.x, gp.y, gp.z);
             v.chassisBody.velocity.set(0, 0, 0);
             v.chassisBody.angularVelocity.set(0, 0, 0);
             v.chassisBody.quaternion.setFromAxisAngle(_yAxis, rp.yaw);
           }
+        } else if (rp.carHintIdx >= 0) { // saiu do carro: reinicia o estado visual
+          const prev = G.Car.vehicles[rp.carHintIdx];
+          if (prev && prev.remoteHint) prev.remoteHint.ttl = 0;
+          rp.carHintIdx = -1;
+          rp.carHintPos = null;
         }
         // voando: o helicóptero (único no mapa) segue o piloto remoto
         if (rp.heli && !G.state.flying) {
