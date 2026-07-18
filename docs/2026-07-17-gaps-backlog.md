@@ -26,11 +26,11 @@ externo ao repositório.
 
 | # | Gap | Custo |
 |---|---|---|
-| 8 | **DOCUMENTADO (2026-07-17)** — causa-raiz MEDIDA não é atrito: o caminhão ENCALHA DE BARRIGA (caixa do chassi toca o terreno ~348/360 frames) em subida DIAGONAL ≥14°; rampa alinhada nunca estola. Dois mecanismos executados e descartados com telemetria (hillAwd e grip de arranque com gate — dist idêntica até com slip 8). Fix real = clearance do collider (half.y/offset) → capotamento/colisão, task própria, DECISÃO PENDENTE do dono. Contrato em `test/car-hillstart.test.js` (it da rampa em `todo`, acusa quando resolver) | decisão |
+| 8 | **RESOLVIDO (2026-07-18)** — collider do caminhão em 2 caixas (casco y[0.05..0.85] no footprint + barriga y[-0.25..0.05] só entre eixos, `cfg.shapes`): corredor de estol 1,2→51,4 m, reta 87 km/h, árvore ainda para o carro, crista continua pendurando (por construção). Causa era ENCALHE DE BARRIGA, não atrito — 2 mecanismos de tração descartados por medição antes (`test/car-hillstart.test.js`) | — |
 | 9 | **RESOLVIDO (2026-07-17)** — gota/floco classificado POR FRAME pela posição MUNDIAL (`js/env.js`); chuva externa visível por porta/janela; nave cobre o volume REAL do casco (`ShipProto.coversPoint`); `camExposure` só em som/relâmpago/transição | — |
 | 10 | **RESOLVIDO (2026-07-17)** — `Structures.fieldRoofs` (torre + cabana, metadado puro sem RNG) com source `'campo'` no cover; ruína/forte abertos por design; imune ao evento da cidade (testado) | — |
 | 11 | **RESOLVIDO (2026-07-17)** — `Grass.stampTrack` + atributo `aTrack` por lâmina; rodas traseiras em contato >2 m/s; some em ~10 s; zera na reciclagem do chunk; zero corpos físicos | — |
-| 12 | **INSTRUMENTADO (2026-07-17)** — probe físico node (`scripts/probe-hillstart.mjs`: Δ 5 m×2,5 m desprezível em rampa uniforme) + `?segs=440` no cliente + protocolo/gate de adoção no mapa (`docs/plans/2026-07-17-gaps-8-13-mapa.md`). DECISÃO pendente de medição no Chrome real do Will. Adoção nunca é por cliente (muda layout do mundo pro mesmo seed) | medir |
+| 12 | **FECHADO (2026-07-18)** — MEDIDO em Chrome real (GPU): p95 20,0→19,7 ms (vsync), tris +9%, heap +135 MB; benefício físico inexistente após o fix do collider (encalhe de barriga era a causa, resolvido em 5 m). Recusado — 5 m fica; `?segs=440` vira ferramenta de medição. Números no mapa | — |
 | 13 | **FECHADO (2026-07-17)** — mantido `DAY_LEN=480`; gatilho de reabertura = playtest do SOLO acusar ritmo (aí é `todRate` do modo solo, nunca segundo relógio) | — |
 
 ## Testes / infra
@@ -48,9 +48,10 @@ externo ao repositório.
 |---|---|
 | 18 | `ak-47_reddot.glb` no repo, não mapeado no arsenal (não trocar sem aval) |
 | 19 | `br-rank.json` (M) e `assets/models/boss-castle.v1.glb` (??) são do dev — nunca staged |
-| 20 | PR pro upstream do Will pendente — rodadas de armas + terreno estão só no fork |
+| 20 | **MORTO (2026-07-18)** — projeto é PRÓPRIO (decisão do dono): sem upstream do Will; PR/merge interno no nosso repo |
 
 ## Ordem sugerida
 
-**20** (PR — barato, destrava o Will) → **8** (sente no gameplay) → **10/9**
-(imersão da chuva) → **1/2** somente se o gatilho disparar.
+Rodada 8–13 concluída (2026-07-18): 8/9/10/11 resolvidos, 12 medido e
+recusado, 13 mantido. Restam **3–7** (polish de armas), **14–17** (infra) e
+**1/2** somente se o gatilho disparar.
