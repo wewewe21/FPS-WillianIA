@@ -62,6 +62,59 @@ describe('ADS por eixo óptico (Chrome headless)', { skip: !CHROME && 'Chrome n�
     }
   });
 
+  /* régua dot↔aro do red dot (arma 0). A leitura histórica de "ponto a 4–6 px
+     do centro do aro" era viés de silhueta: a base do mount esconde o arco
+     inferior EXTERNO do torus e desloca o centroide VISÍVEL ~5 px pra cima —
+     os centros geométricos projetam no mesmo pixel (medido: 0.0 px). */
+  it('dado o red dot do fuzil, então o ponto projeta ≤2 px do centro geométrico do aro (3 resoluções)', async () => {
+    for (const [w, hh] of [[1280, 720], [1920, 1080], [2560, 1080]]) {
+      await h.page.setViewport({ width: w, height: hh, deviceScaleFactor: 1 });
+      const r = await h.play(() => {
+        const G = window.QA.G, MP = window.QA.MP, THREE = MP.THREE;
+        window.QA.reset();
+        G.arsenal[0].locked = false;
+        G.switchWeapon(0);
+        window.QA.tick(40);
+        let s = G.WeaponRig.activeSight(G.gun);
+        for (let k = 0; k < 4 && s.id !== 'reddot'; k++) { // T real: FOV/pose juntos
+          MP.justPressed.add('KeyT');
+          window.QA.tick(1);
+          s = G.WeaponRig.activeSight(G.gun);
+        }
+        G.mouse.aiming = true;
+        window.QA.tick(240);
+        G.camera.updateMatrixWorld(true);
+        G.gun.group.updateWorldMatrix(true, false);
+        const ring = s.mesh.children.find(o => o.geometry && o.geometry.type === 'TorusGeometry');
+        const dot = s.mesh.children.find(o => o.geometry && o.geometry.type === 'CircleGeometry'
+          && o.geometry.parameters.radius < 0.01);
+        // centro geométrico do aro NA TELA: média da circunferência projetada
+        const R = ring.geometry.parameters.radius;
+        ring.updateWorldMatrix(true, false);
+        let cx = 0, cy = 0;
+        const N = 32;
+        for (let i = 0; i < N; i++) {
+          const a = i / N * Math.PI * 2;
+          const v = new THREE.Vector3(Math.cos(a) * R, Math.sin(a) * R, 0);
+          ring.localToWorld(v).project(G.camera);
+          cx += v.x / N; cy += v.y / N;
+        }
+        const d = dot.getWorldPosition(new THREE.Vector3()).project(G.camera);
+        G.mouse.aiming = false;
+        for (let k = 0; k < 4 && G.WeaponRig.activeSight(G.gun).id !== 'iron'; k++) {
+          MP.justPressed.add('KeyT'); // volta pra alça: os testes seguintes partem dela
+          window.QA.tick(1);
+        }
+        window.QA.tick(120);
+        return { sight: s.id, ndcRing: [cx, cy], ndcDot: [d.x, d.y] };
+      });
+      assert.equal(r.sight, 'reddot', `mira ativa ${r.sight} ≠ reddot em ${w}x${hh}`);
+      const px = Math.hypot((r.ndcDot[0] - r.ndcRing[0]) * w / 2,
+        (r.ndcDot[1] - r.ndcRing[1]) * hh / 2);
+      assert.ok(px <= 2, `red dot a ${px.toFixed(2)}px do centro do aro em ${w}x${hh}`);
+    }
+  });
+
   it('dado ADS, então o corpo da arma não bloqueia o centro e a câmera fica fora do modelo', async () => {
     await h.page.setViewport({ width: 1280, height: 720, deviceScaleFactor: 1 });
     const r = await h.play((idxs) => {
