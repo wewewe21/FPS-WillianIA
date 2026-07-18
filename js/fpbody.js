@@ -31,6 +31,8 @@ export function createFpBody(deps) {
     fingersL: [0.8, 0.3, -0.4],
     elbowOut: 0.34,        // quão aberto o cotovelo fica (direção do pole)
     elbowDown: 0.5,
+    reachBend: 0.95,       // fração do alcance onde a mão chega: sobra dobra de cotovelo
+    clavMax: 0.45,         // extensão máxima da clavícula rumo à âncora (m)
   };
 
   const B = {};            // ossos por apelido
@@ -148,9 +150,13 @@ export function createFpBody(deps) {
       console.error('FP body falhou — mantendo mãos procedurais:', err);
     });
 
-  /* gira um osso no MUNDO de forma que a direção atual `from` aponte pra `to` */
+  /* gira um osso no MUNDO de forma que a direção atual `from` aponte pra `to`.
+     Escratch PRÓPRIO (_af/_at): fromDir/toDir chegam nos registradores
+     compartilhados (_v/_v2/_v3) — usar _v aqui já engoliu o toDir do cotovelo
+     e deixou o antebraço inerte (mão a ~0,65 m da âncora, item 6 do backlog) */
+  const _af = new THREE.Vector3(), _at = new THREE.Vector3();
   function aimBone(bone, fromDir, toDir) {
-    _q.setFromUnitVectors(_v.copy(fromDir).normalize(), _v2.copy(toDir).normalize());
+    _q.setFromUnitVectors(_af.copy(fromDir).normalize(), _at.copy(toDir).normalize());
     bone.getWorldQuaternion(_q2);
     _q.multiply(_q2); // quat mundial desejado
     bone.parent.getWorldQuaternion(_q2).invert();
@@ -172,7 +178,21 @@ export function createFpBody(deps) {
   }
 
   /* IK analítico de 2 ossos com dobra guiada por "pole" (cotovelo) */
-  function solveArm(up, fore, hand, len, targetPos, targetQuat, sideSign) {
+  function solveArm(sh, up, fore, hand, len, targetPos, sideSign) {
+    // clavícula: âncora além do alcance → o OMBRO estende rumo ao alvo até
+    // sobrar dobra de cotovelo (o clamp sozinho deixava o braço reto e a mão
+    // curta — a âncora de apoio fica a até ~1 m do ombro em várias armas)
+    if (sh) {
+      _v.copy(targetPos).sub(up.getWorldPosition(_v2));
+      const need = Math.min(
+        Math.max(_v.length() - (len.a + len.b) * TUNE.reachBend, 0), TUNE.clavMax);
+      if (need > 1e-4) {
+        _v.normalize().multiplyScalar(need);                 // delta em mundo
+        sh.parent.getWorldQuaternion(_q).invert();
+        _v.applyQuaternion(_q).divide(sh.parent.getWorldScale(_v3));
+        sh.position.add(_v);
+      }
+    }
     const sPos = up.getWorldPosition(_v3.set(0, 0, 0)).clone();
     _tp.copy(targetPos).sub(sPos);
     const reach = len.a + len.b;
@@ -287,8 +307,8 @@ export function createFpBody(deps) {
       }
     } else return;
 
-    solveArm(B.upR, B.foR, B.haR, armLen.r, rp, null, 1);
-    solveArm(B.upL, B.foL, B.haL, armLen.l, lp, null, -1);
+    solveArm(B.shR, B.upR, B.foR, B.haR, armLen.r, rp, 1);
+    solveArm(B.shL, B.upL, B.foL, B.haL, armLen.l, lp, -1);
     alignHand(B.haR, fingerAxis.r, dirR, TUNE.rollR);
     alignHand(B.haL, fingerAxis.l, dirL, TUNE.rollL);
 

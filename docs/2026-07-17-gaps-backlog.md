@@ -19,7 +19,7 @@ externo ao repositório.
 | 3 | **SILHUETA RESOLVIDA (2026-07-18)** — sniper remoto com modelo próprio (luneta fechada + bipé, br-game.js SIL). Recarga remota SEM sinal na rede (playerUpdate não carrega reloading; verificado server+cliente) → exigiria campo novo de protocolo; fica como decisão consciente, gatilho = feedback de gameplay | decisão |
 | 4 | **NÃO REPRODUZ (2026-07-18)** — ótica exata (0,00 px numérico, ≤1 px renderizado); '4–6 px' era viés de centroide (base do mount oculta o arco inferior do aro). Régua dot↔aro ≤2 px adicionada ao weapon-ads (RED provado por perturbação) | — |
 | 5 | **RESOLVIDO (2026-07-18)** — `scope2x` reticle 'cross'→'overlay' (1 campo, weaponrig.js); ADS 8/8 + aim 7/7 | — |
-| 6 | Mão do rig fica ~0,65 m da âncora (origem no punho + clamp do IK — pré-existente, idêntico ao baseline); braço estica no hip da bazuca | M |
+| 6 | **RESOLVIDO (2026-07-18)** — o "~0,65 m" NÃO era origem no punho/clamp: era aliasing de escratch no `aimBone` (`toDir` chegava em `_v` e era engolido) → antebraço inerte, cotovelo travado em 173° e mão direita longe do grip MESMO com alvo ao alcance; segunda causa: âncora de apoio a até ~1 m do ombro (reach 0,66 m) → clavícula agora estende até sobrar dobra. Punho→âncora 0,65→0,00 m; cotovelo 41–143°; capturas hip/ADS conferidas | — |
 | 7 | **RESOLVIDO (2026-07-18)** — transição de escala 0,15 s (mín. 3 frames) no saque/coldre dos remotos (`stepHolster` em br-game.js), flags validadas como antes; RED provado, br-bot-visual 7/7 ×3 | — |
 
 ## Rodada de terreno/clima (2026-07-17)
@@ -53,5 +53,6 @@ externo ao repositório.
 ## Ordem sugerida
 
 Rodada 8–13 concluída (2026-07-18): 8/9/10/11 resolvidos, 12 medido e
-recusado, 13 mantido. Restam **3–7** (polish de armas), **14–17** (infra) e
-**1/2** somente se o gatilho disparar.
+recusado, 13 mantido. Rodada de armas fechada (3 decisão, 4 não reproduz,
+5/6/7 resolvidos). Restam **15** (infra) e **1/2** somente se o gatilho
+disparar.
