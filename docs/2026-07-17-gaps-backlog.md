@@ -16,7 +16,7 @@ externo ao repositório.
 
 | # | Gap | Custo |
 |---|---|---|
-| 3 | Silhuetas remotas: DMR e Sniper dividem a mesma; sem animação de recarga/mecanismo nos remotos | M |
+| 3 | **SILHUETA RESOLVIDA (2026-07-18)** — sniper remoto com modelo próprio (luneta fechada + bipé, br-game.js SIL). Recarga remota SEM sinal na rede (playerUpdate não carrega reloading; verificado server+cliente) → exigiria campo novo de protocolo; fica como decisão consciente, gatilho = feedback de gameplay | decisão |
 | 4 | **NÃO REPRODUZ (2026-07-18)** — ótica exata (0,00 px numérico, ≤1 px renderizado); '4–6 px' era viés de centroide (base do mount oculta o arco inferior do aro). Régua dot↔aro ≤2 px adicionada ao weapon-ads (RED provado por perturbação) | — |
 | 5 | **RESOLVIDO (2026-07-18)** — `scope2x` reticle 'cross'→'overlay' (1 campo, weaponrig.js); ADS 8/8 + aim 7/7 | — |
 | 6 | Mão do rig fica ~0,65 m da âncora (origem no punho + clamp do IK — pré-existente, idêntico ao baseline); braço estica no hip da bazuca | M |
