@@ -141,7 +141,9 @@ function animateSkeleton(sk, dt, t, moving) {
     );
   };
 
-  const chestTwist = attackValue(-stride * 0.045 * walk, -0.34, 0.42);
+  // twist do torso no strike é pequeno de propósito: spine+chest giram o
+  // frame do ombro inteiro e arrastariam a lâmina pra fora do eixo do player
+  const chestTwist = attackValue(-stride * 0.045 * walk, -0.34, 0.12);
   const bodyLean = 0.04 * walk + attackValue(0, -0.08, 0.13);
   const bob = Math.abs(step) * 0.035 * walk + idle * 0.006;
   sk.model.position.y = sk.modelBaseY + bob;
@@ -194,7 +196,7 @@ function animateSkeleton(sk, dt, t, moving) {
   // ombro; strike varre pra frente e termina com a lâmina no player
   // (~15° abaixo da horizontal — resolvido analiticamente e validado)
   poseBone(sk, b.armR,
-    attackValue(-0.25 + stride * 0.06 * walk, 0.75, -0.45),
+    attackValue(-0.25 + stride * 0.06 * walk, 0.75, -0.3),
     attackValue(0, -0.15, 0),
     attackValue(-1.12, -0.45, -1.0));
   poseBone(sk, b.foreR, attackValue(-0.95, -1.45, -0.25), 0, 0);

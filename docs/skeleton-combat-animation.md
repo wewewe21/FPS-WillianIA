@@ -27,7 +27,7 @@ O dano não é mais aplicado imediatamente ao entrar no alcance. Ele ocorre dura
 
 1. O modelo `assets/models/skeleton.v1.glb` possui rig e uma animação chamada `Take 01`, mas a implementação atual utiliza poses procedurais para controlar diretamente a caminhada e o ataque.
 2. A localização dos ossos aceita diferentes variações de nomenclatura, reduzindo dependência de nomes exatos exportados pelo Blender ou Sketchfab.
-3. A espada é criada em Three.js e acompanha a posição mundial da mão direita. Caso o osso da mão não seja encontrado, existe uma posição de fallback.
+3. A espada é a cimitarra embutida no próprio GLB (malha `Circle_3`, 100% rígida no osso `Hand.R`): acompanha a mão de graça pelo skinning. Não existe mais malha procedural de espada. No frame local da mão a lâmina corre em `-Z` (perpendicular ao punho) e o cabo em `+Y`.
 4. A caveira interrompe o deslocamento durante o ataque para evitar deslize artificial enquanto executa o golpe.
 5. O alcance de início do ataque é maior que o alcance de dano, permitindo preparação, oportunidade de esquiva e leitura visual do movimento.
 6. Os principais parâmetros de ajuste estão concentrados nas constantes de combate e nas curvas de preparação, corte e recuperação dentro de `js/skeletons.js`.
@@ -39,11 +39,14 @@ O dano não é mais aplicado imediatamente ao entrar no alcance. Ele ocorre dura
 - verificação de sintaxe JavaScript;
 - confirmação do arquivo alterado e dos commits na branch `refatoracao`.
 
-## Limitação conhecida
+## Mapeamento de eixos validado
 
-Não foi possível executar uma validação visual completa do jogo neste ambiente. Portanto, a orientação final da espada, os eixos locais dos braços e a amplitude exata das articulações devem ser confirmados dentro do navegador com o modelo carregado.
+A validação visual foi feita com `scripts/capture-skeletons.js` (PNGs + relatório numérico por frame) e com sondas de rotação por eixo em cada osso. O mapa resultante está comentado no topo de `js/skeletons.js`. Os pontos que derrubam qualquer intuição:
 
-Essa limitação não impede o funcionamento lógico da feature, mas pode exigir pequenos ajustes visuais nos ângulos do ombro, antebraço, punho ou direção da espada.
+- o export é T-pose: os braços precisam de correção estática (~70° pra baixo) antes de qualquer offset de animação;
+- os ossos `Foot.L/R` são filhos do `rootJoint`, não das panturrilhas — girar coxa/joelho não move as botas; a passada é translação local do osso do pé em contrafase com as coxas;
+- nas coxas o balanço sagital é o eixo Z; nas panturrilhas a flexão do joelho é o eixo X (o Z é torção lateral);
+- a lâmina termina o corte dentro de ±20° do eixo até o player (medido ≤17,6° na janela de dano).
 
 ## Checklist de avaliação manual
 
