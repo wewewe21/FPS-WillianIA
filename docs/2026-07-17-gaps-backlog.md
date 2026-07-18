@@ -20,7 +20,7 @@ externo ao repositório.
 | 4 | **NÃO REPRODUZ (2026-07-18)** — ótica exata (0,00 px numérico, ≤1 px renderizado); '4–6 px' era viés de centroide (base do mount oculta o arco inferior do aro). Régua dot↔aro ≤2 px adicionada ao weapon-ads (RED provado por perturbação) | — |
 | 5 | **RESOLVIDO (2026-07-18)** — `scope2x` reticle 'cross'→'overlay' (1 campo, weaponrig.js); ADS 8/8 + aim 7/7 | — |
 | 6 | Mão do rig fica ~0,65 m da âncora (origem no punho + clamp do IK — pré-existente, idêntico ao baseline); braço estica no hip da bazuca | M |
-| 7 | heldWeapon remoto some por flag na nave/queda — sem animação de transição/coldre | P |
+| 7 | **RESOLVIDO (2026-07-18)** — transição de escala 0,15 s (mín. 3 frames) no saque/coldre dos remotos (`stepHolster` em br-game.js), flags validadas como antes; RED provado, br-bot-visual 7/7 ×3 | — |
 
 ## Rodada de terreno/clima (2026-07-17)
 
@@ -40,7 +40,7 @@ externo ao repositório.
 | 14 | **FECHADO (2026-07-18)** — e2e rodado 3×: 22-23/24, falhas variam por rodada e todas passam em outra = flake de SwiftShader (documentado no próprio script); zero regressão | — |
 | 15 | Flakes de carga: boot de browser >60 s com processo pesado paralelo — protocolo "isolado 2–3×" documentado, mas custa re-runs | M |
 | 16 | **OBSOLETO (2026-07-18)** — já resolvido por `scripts/run-tests.js` (enumera testes em JS, roda em node ≥18 em qualquer SO; `engines: >=18`); suíte validada 2× em node 20 | — |
-| 17 | Validação visual só com screenshots estáticos — sem vídeo/GIF de recarga/golden hour | P |
+| 17 | **RESOLVIDO (2026-07-18)** — `scripts/gif-from-frames.sh` (ffmpeg 2 passos c/ palette) monta GIF de qualquer captura; validado com os ciclos de ataque/caminhada dos esqueletos | — |
 
 ## Fora de escopo, anotado
 
