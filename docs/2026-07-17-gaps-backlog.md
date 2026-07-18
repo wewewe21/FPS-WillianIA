@@ -18,7 +18,7 @@ externo ao repositório.
 |---|---|---|
 | 3 | Silhuetas remotas: DMR e Sniper dividem a mesma; sem animação de recarga/mecanismo nos remotos | M |
 | 4 | Red dot: ponto ~4–6 px do centro geométrico do aro (dentro da tolerância do teste) | P |
-| 5 | Luneta 2x do fuzil usa retículo 3D sem overlay (decisão registrada no plano) — trocar é 1 campo do perfil | P |
+| 5 | **RESOLVIDO (2026-07-18)** — `scope2x` reticle 'cross'→'overlay' (1 campo, weaponrig.js); ADS 8/8 + aim 7/7 | — |
 | 6 | Mão do rig fica ~0,65 m da âncora (origem no punho + clamp do IK — pré-existente, idêntico ao baseline); braço estica no hip da bazuca | M |
 | 7 | heldWeapon remoto some por flag na nave/queda — sem animação de transição/coldre | P |
 
@@ -37,9 +37,9 @@ externo ao repositório.
 
 | # | Gap | Custo |
 |---|---|---|
-| 14 | e2e Python da cidade (`npm run test:e2e`) não rodado nas rodadas de hoje (suíte JS 433/433 ok) | P |
+| 14 | **FECHADO (2026-07-18)** — e2e rodado 3×: 22-23/24, falhas variam por rodada e todas passam em outra = flake de SwiftShader (documentado no próprio script); zero regressão | — |
 | 15 | Flakes de carga: boot de browser >60 s com processo pesado paralelo — protocolo "isolado 2–3×" documentado, mas custa re-runs | M |
-| 16 | `npm test` exige Node 21+ (glob) e quebra no Windows do Will — herdado do merge | P |
+| 16 | **OBSOLETO (2026-07-18)** — já resolvido por `scripts/run-tests.js` (enumera testes em JS, roda em node ≥18 em qualquer SO; `engines: >=18`); suíte validada 2× em node 20 | — |
 | 17 | Validação visual só com screenshots estáticos — sem vídeo/GIF de recarga/golden hour | P |
 
 ## Fora de escopo, anotado
