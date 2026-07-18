@@ -78,7 +78,15 @@ const { simplex, heightAt, buildHeightGrid, groundAt, slopeAt, terrainNormal, bi
 // grade CANÔNICA construída AQUI, antes de QUALQUER consumidor: malha visual,
 // heightfield do Cannon, grama, spawns e consultas leem a MESMA superfície
 // triangulada — a semântica de heightAt nunca troca durante a execução.
-buildHeightGrid(CFG.WORLD_SIZE);
+/* A/B de resolução (gap 12): ?segs=440 → célula 2,5 m. MUDA o layout do
+   mundo pro mesmo seed (worldgen lê heightAt da grade) — ferramenta de
+   MEDIÇÃO solo; adoção real = mudar CFG.TERRAIN_SEGS pra todos de uma vez. */
+const _segsQA = +(new URLSearchParams(location.search).get('segs') || 0);
+if (_segsQA >= 55 && _segsQA <= 880) {
+  CFG.TERRAIN_SEGS = _segsQA;
+  console.warn(`[A/B] TERRAIN_SEGS=${_segsQA} — mundo diverge do canônico`);
+}
+buildHeightGrid(CFG.WORLD_SIZE, CFG.TERRAIN_SEGS);
 // biomas centralizados: pesos/limiar únicos p/ cores, grama, clima e debug
 const Biomes = createBiomes({ simplex, heightAt, slopeAt,
   WATER_LEVEL, CITY, VOLCANO, cityCategory: CityLayout.cityCategory,
