@@ -197,48 +197,52 @@ describe('Mira e balística visual (Chrome headless)', { skip: !CHROME && 'Chrom
     assert.ok(r.under > -0.1, 'foguete atravessou o terreno antes de detonar');
   });
 
-  it('dadas as mãos do rig, então ACOMPANHAM as âncoras (offset estável, sem teleporte)', async () => {
-    // o osso da mão tem offset natural em relação à âncora (origem no punho,
-    // rolagem da pegada, braço no limite de alcance) — o critério é TRACKING:
-    // offset consistente entre hip e ADS e nunca uma distância absurda
+  it('dadas as mãos do rig, então POUSAM na âncora e o cotovelo mantém dobra visível', async () => {
+    // régua real (item 6 do backlog): o punho tem que TERMINAR na âncora da
+    // empunhadura (o IK resolve exato quando o alvo está ao alcance; a
+    // clavícula estende quando não está) e o cotovelo nunca fica reto
+    // (braço hiperestendido = alvo fora de alcance ou antebraço inerte)
     const r = await h.play(() => {
       const G = window.QA.G, THREE = window.QA.MP.THREE;
       if (!G.FpBody.ready) return { skip: true };
       window.QA.reset();
       const B = window.__FP.bones;
       const out = [];
-      const _a = new THREE.Vector3(), _b = new THREE.Vector3();
+      const arm = (up, fo, ha, anchor) => {
+        const sh = up.getWorldPosition(new THREE.Vector3());
+        const el = fo.getWorldPosition(new THREE.Vector3());
+        const hb = ha.getWorldPosition(new THREE.Vector3());
+        const an = anchor.getWorldPosition(new THREE.Vector3());
+        const v1 = sh.sub(el).normalize(), v2 = hb.clone().sub(el).normalize();
+        return { gap: hb.distanceTo(an), elbow: THREE.MathUtils.radToDeg(v1.angleTo(v2)) };
+      };
       for (const i of [0, 1, 2, 3, 4, 6, 7]) {
         G.arsenal[i].locked = false;
         G.switchWeapon(i);
         window.QA.tick(60);
-        const d = {};
         for (const mode of ['hip', 'ads']) {
           G.mouse.aiming = mode === 'ads';
           window.QA.tick(180);
-          d[mode] = {
-            R: B.haR.getWorldPosition(_a).distanceTo(G.gun.parts.handR.getWorldPosition(_b)),
-            L: B.haL.getWorldPosition(_a).distanceTo(G.gun.parts.handL.getWorldPosition(_b)),
-          };
+          // luneta (overlay cheio): arma E corpo somem — pose não renderiza
+          if (!G.FpBody.bodyRoot.visible) continue;
+          const R = arm(B.upR, B.foR, B.haR, G.gun.parts.handR);
+          const L = arm(B.upL, B.foL, B.haL, G.gun.parts.handL);
+          out.push({ i, mode,
+            gapR: +R.gap.toFixed(3), gapL: +L.gap.toFixed(3),
+            elbowR: +R.elbow.toFixed(1), elbowL: +L.elbow.toFixed(1) });
         }
-        out.push({ i,
-          hipR: +d.hip.R.toFixed(3), adsR: +d.ads.R.toFixed(3),
-          hipL: +d.hip.L.toFixed(3), adsL: +d.ads.L.toFixed(3) });
         G.mouse.aiming = false;
         window.QA.tick(60);
       }
       return { out };
     });
     if (r.skip) return; // corpo FP indisponível neste ambiente
+    assert.ok(r.out.length >= 10, 'poucas poses medidas: ' + r.out.length);
     for (const x of r.out) {
-      for (const k of ['hipR', 'adsR', 'hipL', 'adsL'])
-        assert.ok(x[k] < 0.8, `arma ${x.i}: mão a ${x[k]}m da âncora (${k}) — teleporte/quebra de IK`);
-      // 0.45: no hip a arma pode sair do alcance do braço (IK clampa no 99% do
-      // alcance — comportamento pré-existente, ex.: bazuca) sem ser teleporte
-      assert.ok(Math.abs(x.hipR - x.adsR) < 0.45,
-        `arma ${x.i}: mão direita não acompanhou o ADS (hip ${x.hipR} vs ads ${x.adsR})`);
-      assert.ok(Math.abs(x.hipL - x.adsL) < 0.45,
-        `arma ${x.i}: mão de apoio não acompanhou o ADS (hip ${x.hipL} vs ads ${x.adsL})`);
+      assert.ok(x.gapR < 0.12, `arma ${x.i} ${x.mode}: mão direita a ${x.gapR}m da âncora`);
+      assert.ok(x.gapL < 0.12, `arma ${x.i} ${x.mode}: mão de apoio a ${x.gapL}m da âncora`);
+      assert.ok(x.elbowR < 160, `arma ${x.i} ${x.mode}: cotovelo direito reto (${x.elbowR}°)`);
+      assert.ok(x.elbowL < 160, `arma ${x.i} ${x.mode}: cotovelo esquerdo reto (${x.elbowL}°)`);
     }
   });
 
