@@ -1631,7 +1631,7 @@ function playerDamage(dmg, fromPos, cause) {
 
 const Volcano = createVolcano({ scene, VOLCANO, player, playerDamage, csmMat });
 
-const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY });
+const Car = createCar({ damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, CITY, stampTrack: Grass.stampTrack });
 
 const Heli = createHeli({ CFG, clamp, damp, _v1, groundAt, SFX, scene, camera, csmMat, Structures, ui, centerMsg, state, keys, mouse, player, chaseCamPos });
 

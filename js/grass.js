@@ -50,6 +50,7 @@ export function createGrass(deps) {
     uBaseColor:   { value: new THREE.Color(0x3e7028) },
     uTipColor:    { value: new THREE.Color(0x9cc94f) },
     uPatchRadius: { value: PATCH_RADIUS },
+    uTrackFade:   { value: 10.0 },  // segundos até a trilha de pneu sumir
     ...THREE.UniformsLib.fog,
   };
 
@@ -68,6 +69,8 @@ export function createGrass(deps) {
       uniform float uPatchRadius;
       attribute float aPhase;
       attribute vec3  aTint;
+      attribute float aTrack;
+      uniform float uTrackFade;
       varying vec2 vUv;
       varying vec3 vTint;
 
@@ -96,6 +99,10 @@ export function createGrass(deps) {
         vec3 transformed = position;
         float h = uv.y;          // peso pela altura: raiz fixa, ponta solta
         float hh = h * h;
+
+        // trilha de pneu: lâmina amassada que levanta em uTrackFade segundos
+        float trackK = clamp(1.0 - (uTime - aTrack) / uTrackFade, 0.0, 1.0);
+        transformed.y *= 1.0 - trackK * 0.85;
 
         // some suavemente perto da borda do patch (esconde o recorte)
         float dCam = distance((modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz, cameraPosition);
@@ -183,12 +190,18 @@ export function createGrass(deps) {
     chunk.mesh.position.set(wx, 0, wz);
     const phase = chunk.mesh.geometry.attributes.aPhase;
     const tint = chunk.mesh.geometry.attributes.aTint;
+    // chunk reciclado nasce limpo: trilha de pneu é estado de RUNTIME, nunca
+    // parte do conteúdo determinístico (bytes m/ph/ti não mudam)
+    const track = chunk.mesh.geometry.attributes.aTrack;
+    track.array.fill(-1e4);
+    track.needsUpdate = true;
     const rng = chunkRng(cx, cz);                      // determinístico por chunk
     const r = (a, b) => a + rng() * (b - a);
     let minY = Infinity, maxY = -Infinity;
     for (let i = 0; i < PER_CHUNK; i++) {
       const lx = r(-SIZE / 2, SIZE / 2);
       const lz = r(-SIZE / 2, SIZE / 2);
+      chunk.roots[i * 2] = lx; chunk.roots[i * 2 + 1] = lz;
       // raiz na superfície CANÔNICA (a mesma da malha/física) + fatores centrais
       const su = surfaceAt ? surfaceAt(wx + lx, wz + lz) : null;
       const y = su ? su.height : heightAt(wx + lx, wz + lz);
@@ -240,11 +253,12 @@ export function createGrass(deps) {
     const geo = baseBlade.clone();
     geo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(new Float32Array(PER_CHUNK), 1));
     geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(new Float32Array(PER_CHUNK * 3), 3));
+    geo.setAttribute('aTrack', new THREE.InstancedBufferAttribute(new Float32Array(PER_CHUNK).fill(-1e4), 1));
     geo.boundingSphere = new THREE.Sphere();
     const mesh = new THREE.InstancedMesh(geo, material, PER_CHUNK);
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     mesh.frustumCulled = true;   // culling por chunk
-    const chunk = { mesh, cx: 99999, cz: 99999 };
+    const chunk = { mesh, cx: 99999, cz: 99999, roots: new Float32Array(PER_CHUNK * 2) };
     legacyConsume(cx, cz); // preserva o consumo do stream seedado (ver comentário)
     fillChunk(chunk, cx, cz);
     scene.add(mesh);
@@ -318,8 +332,39 @@ export function createGrass(deps) {
       m: Array.from(ch.mesh.instanceMatrix.array.slice(0, 64)),
       ph: Array.from(g.attributes.aPhase.array.slice(0, 16)),
       ti: Array.from(g.attributes.aTint.array.slice(0, 16)),
+      tr: Array.from(g.attributes.aTrack.array),
     };
   }
 
-  return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes };
+  /* trilha de pneu: marca as lâminas num corredor segmento±TRACK_HW com o
+     timestamp atual — o shader achata e devolve em uTrackFade s. Runtime
+     puro: NENHUM rand, nenhum corpo físico, memória fixa por chunk. Só
+     chunks que cruzam o bbox do segmento pagam o loop; needsUpdate sobe
+     o buffer daquele chunk (~4 KB), nunca o tapete inteiro. */
+  const TRACK_HW = 0.42;
+  function stampTrack(x0, z0, x1, z1) {
+    const minX = Math.min(x0, x1) - TRACK_HW, maxX = Math.max(x0, x1) + TRACK_HW;
+    const minZ = Math.min(z0, z1) - TRACK_HW, maxZ = Math.max(z0, z1) + TRACK_HW;
+    for (const ch of chunks) {
+      const ox = ch.cx * SIZE, oz = ch.cz * SIZE;
+      if (ox + SIZE / 2 < minX || ox - SIZE / 2 > maxX || oz + SIZE / 2 < minZ || oz - SIZE / 2 > maxZ) continue;
+      const track = ch.mesh.geometry.attributes.aTrack;
+      const ax = x0 - ox, az = z0 - oz;
+      const abx = (x1 - ox) - ax, abz = (z1 - oz) - az;
+      const ab2 = abx * abx + abz * abz || 1e-6;
+      let dirty = false;
+      for (let i = 0; i < PER_CHUNK; i++) {
+        const px = ch.roots[i * 2] - ax, pz = ch.roots[i * 2 + 1] - az;
+        let t = (px * abx + pz * abz) / ab2;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = px - abx * t, dz = pz - abz * t;
+        if (dx * dx + dz * dz > TRACK_HW * TRACK_HW) continue;
+        track.setX(i, uniforms.uTime.value);
+        dirty = true;
+      }
+      if (dirty) track.needsUpdate = true;
+    }
+  }
+
+  return { update, material, PATCH_RADIUS, refreshAll, debugSample, debugChunkBytes, stampTrack };
 }

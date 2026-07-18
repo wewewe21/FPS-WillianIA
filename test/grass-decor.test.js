@@ -129,4 +129,20 @@ describe('Grama decorativa (Chrome headless)', { skip: !CHROME && 'Chrome não e
     });
     assert.equal(r.out, 0, `${r.out} lâminas fora do próprio chunk`);
   });
+
+  it('trilha de pneu: amassa lâminas SÓ no corredor e zera no chunk reciclado', async () => {
+    const r = await h.play(() => {
+      const G = window.QA.G;
+      G.Grass.stampTrack(1, -3, 1, 3);           // segmento dentro do chunk (0,0)
+      const b = G.Grass.debugChunkBytes(0, 0);
+      const marcadas = b.tr.filter(v => v > -1).length;
+      const total = b.tr.length;
+      G.Grass.refreshAll();                       // reciclagem/refill limpa a trilha
+      const depois = G.Grass.debugChunkBytes(0, 0).tr.filter(v => v > -1).length;
+      return { marcadas, total, depois };
+    });
+    assert.ok(r.marcadas > 0, 'nenhuma lâmina marcada no corredor');
+    assert.ok(r.marcadas < r.total * 0.2, `trilha larga demais: ${r.marcadas}/${r.total}`);
+    assert.equal(r.depois, 0, 'trilha sobreviveu à reciclagem do chunk');
+  });
 });

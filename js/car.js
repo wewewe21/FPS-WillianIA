@@ -4,7 +4,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { buildCarRig } from './carwheels.js';
 
 export function createCar(deps) {
-  const { damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys } = deps;
+  const { damp, rand, _v1, _v2, heightAt, SFX, FX, scene, world, csmMat, Structures, ui, state, keys, stampTrack = null } = deps;
   const DRIVE_SIGN = 1; // sinal do engineForce p/ andar pra frente (validado em teste)
   /* REST longo: o raio da roda no cannon nasce no ponto de conexão e mede
      rest+raio. Com rest curto a conexão ficava ~0,4 m do chão e AFUNDAVA no
@@ -341,6 +341,24 @@ export function createCar(deps) {
           v.vehicle.applyEngineForce(DRIVE_SIGN * force, 2);
           v.vehicle.applyEngineForce(DRIVE_SIGN * force, 3);
         }
+        /* trilha na grama: segmento anterior→atual de cada roda TRASEIRA em
+           contato real, só em movimento (>2 m/s). Onde não há lâmina
+           (asfalto/água/deserto: escala ~0 na geração) a marca é inócua. */
+        if (stampTrack && Math.abs(fwdSpeed) > 2) {
+          if (!v._trk) v._trk = [null, null];
+          for (let k = 0; k < 2; k++) {
+            const info = v.vehicle.wheelInfos[2 + k];
+            if (!info.isInContact) { v._trk[k] = null; continue; }
+            const hp = info.raycastResult.hitPointWorld;
+            const prev = v._trk[k];
+            if (!prev) { v._trk[k] = { x: hp.x, z: hp.z }; continue; }
+            const ddx = hp.x - prev.x, ddz = hp.z - prev.z;
+            if (ddx * ddx + ddz * ddz > 0.16) {          // passo de 0,4 m
+              stampTrack(prev.x, prev.z, hp.x, hp.z);
+              prev.x = hp.x; prev.z = hp.z;
+            }
+          }
+        } else if (v._trk) v._trk = null;
       } else {
         /* freio de estacionamento: 12 segura ladeira sem o jitter do impulso
            de atrito do cannon (com 30 o carro vibrava a ~0,25 m/s e nunca
