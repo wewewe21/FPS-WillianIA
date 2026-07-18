@@ -87,7 +87,16 @@
       box(t.DMR, mDark, 0.14, 0.14, 0.55, 0, 0, -0.22);
       cyl(t.DMR, mDark, 0.025, 0.55, 0, 0.01, -0.75);
       cyl(t.DMR, mDark, 0.045, 0.24, 0, 0.13, -0.18);
-      t.SNIPER = t.DMR; // mesma família visual (cano longo + luneta)
+      // SNIPER: irmã da DMR mas inconfundível à distância — cano bem mais
+      // longo, luneta FECHADA maior (tubo grosso + oculares) e bipé curto
+      t.SNIPER = new THREE.Group();
+      box(t.SNIPER, mDark, 0.13, 0.13, 0.6, 0, 0, -0.24);
+      cyl(t.SNIPER, mDark, 0.02, 0.75, 0, 0.02, -0.92);
+      cyl(t.SNIPER, mDark, 0.055, 0.28, 0, 0.14, -0.16);
+      cyl(t.SNIPER, mDark, 0.065, 0.05, 0, 0.14, -0.31);
+      cyl(t.SNIPER, mDark, 0.06, 0.04, 0, 0.14, -0.01);
+      box(t.SNIPER, mDark, 0.024, 0.16, 0.024, 0.055, -0.1, -0.55, 0.35);
+      box(t.SNIPER, mDark, 0.024, 0.16, 0.024, -0.055, -0.1, -0.55, 0.35);
       t.BAZUCA = new THREE.Group();
       cyl(t.BAZUCA, mDark, 0.09, 1.0, 0, 0.09, -0.3);
       const tip = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.16, 8), mAmber);
@@ -97,7 +106,7 @@
       box(t.PLASMA, mDark, 0.18, 0.18, 0.5, 0, 0, -0.18);
       box(t.PLASMA, mTeal, 0.19, 0.03, 0.36, 0, 0.06, -0.2);
       cyl(t.PLASMA, mTeal, 0.035, 0.2, 0, 0, -0.53);
-      const MUZZLE_Z = { FUZIL: -0.9, ESCOPETA: -0.82, DMR: -1.05, SNIPER: -1.05, BAZUCA: -0.98, PLASMA: -0.68 };
+      const MUZZLE_Z = { FUZIL: -0.9, ESCOPETA: -0.82, DMR: -1.05, SNIPER: -1.3, BAZUCA: -0.98, PLASMA: -0.68 };
       return { t, MUZZLE_Z };
     })();
     function applyRemoteWeapon(rp) {

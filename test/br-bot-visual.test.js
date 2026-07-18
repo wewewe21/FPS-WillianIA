@@ -153,6 +153,43 @@ describe('BR — representação visual de bot armado', { skip: !CHROME && 'Chro
       'sem frames intermediários de encolhimento (pop instantâneo)');
   });
 
+  /* troca a arma do remoto e devolve a assinatura da silhueta (nº de meshes,
+     maior dimensão do Box3 e z do focinho) — DMR e SNIPER precisam divergir */
+  const silhouetteOf = async code => {
+    const st = {
+      pos: [playerPos[0] + 3, playerPos[1], playerPos[2]],
+      rotY: -Math.PI / 2, heldWeapon: code, ship: false, fall: false,
+    };
+    host.emit('state', st);
+    const retry = setInterval(() => host.emit('state', st), 250); // volatile pode dropar
+    try {
+      await h.page.waitForFunction(c => {
+        const rp = window.__BR_debug && [...window.__BR_debug.remotes.values()][0];
+        return rp && rp.body.weapon.userData.weaponClass === c && rp.body.weapon.visible;
+      }, { timeout: 8000, polling: 20 }, code);
+    } finally { clearInterval(retry); }
+    return h.play(() => {
+      const rp = [...window.__BR_debug.remotes.values()][0];
+      const THREE = window.__MP.THREE;
+      const sil = rp.body.weapon.children.find(c => c !== rp.body.muzzle);
+      let meshes = 0;
+      sil.traverse(o => { if (o.isMesh) meshes++; });
+      const size = new THREE.Box3().setFromObject(sil).getSize(new THREE.Vector3());
+      return { meshes, len: Math.max(size.x, size.y, size.z), muzzleZ: rp.body.muzzle.position.z };
+    });
+  };
+
+  it('sniper remoto tem silhueta própria, distinta da DMR', async () => {
+    const dmr = await silhouetteOf('DMR');
+    const sniper = await silhouetteOf('SNIPER');
+    assert.notEqual(sniper.meshes, dmr.meshes,
+      `sniper e DMR remotos compartilham a mesma silhueta (${dmr.meshes} meshes)`);
+    assert.ok(sniper.len > dmr.len + 0.08,
+      `cano da sniper remota não é mais longo (sniper=${sniper.len.toFixed(3)} vs dmr=${dmr.len.toFixed(3)})`);
+    assert.ok(sniper.muzzleZ < dmr.muzzleZ - 0.05,
+      `focinho da sniper não acompanha o cano longo (sniper=${sniper.muzzleZ} vs dmr=${dmr.muzzleZ})`);
+  });
+
   it('rede de segurança: nenhum pageerror nos cenários visuais', () => {
     assert.deepEqual(h.pageErrors, [], 'erros de página: ' + h.pageErrors.join(' | '));
   });
