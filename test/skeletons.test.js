@@ -281,7 +281,9 @@ describe('Esqueletos (caçadores que atravessam tudo)', { skip: !CHROME && 'Chro
       const sk = S.list[0];
       sk.alive = true;
       sk.pos().set(1, 0, 0);
-      S.update(1 / 60, 0);
+      // o dano do melee é gated pelo frame de STRIKE do swing da espada
+      // (animação procedural) — ticka até o golpe conectar, teto de 2 s
+      for (let i = 0; i < 120 && !receivedCause; i++) S.update(1 / 60, i / 60);
       return receivedCause;
     });
     assert.deepEqual(cause, { type: 'skeleton' });
