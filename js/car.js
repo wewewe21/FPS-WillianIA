@@ -58,7 +58,15 @@ export function createCar(deps) {
       mass: cfg.mass,
       position: new CANNON.Vec3(x, spawnY - drop, z),
     });
-    chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(...cfg.half)), new CANNON.Vec3(0, drop, 0));
+    /* casco físico: caixa única (padrão) ou composição por cfg.shapes —
+       [{half, off}] com off relativo ao CENTRO da caixa histórica (y=comDrop).
+       Caminhão: casco alto de comprimento total + BARRIGA curta entre eixos —
+       ângulo de ataque/saída real; encalhe de CRISTA (entre eixos) continua
+       existindo de propósito (relevo legítimo, dá ré). */
+    const shapes = cfg.shapes || [{ half: cfg.half, off: [0, 0, 0] }];
+    for (const s of shapes)
+      chassisBody.addShape(new CANNON.Box(new CANNON.Vec3(s.half[0], s.half[1], s.half[2])),
+        new CANNON.Vec3(s.off[0], drop + s.off[1], s.off[2]));
     if (ry) chassisBody.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), ry);
     chassisBody.angularDamping = 0.42;
     chassisBody.linearDamping = 0.02;
@@ -295,6 +303,13 @@ export function createCar(deps) {
     wheelsVis: [[1.673, -0.387, 0.916], [1.673, -0.387, -0.916], [-0.812, -0.343, 0.916], [-0.812, -0.343, -0.916]],
     wheelRVis: [0.437, 0.437, 0.481, 0.481], wheelWVis: 0.22, groundOffset: -1.47, suspStiff: 20, comDrop: 0.3,
     force: 3600, steer: 0.45, brake: 55, maxKmh: 84, grip: 2.0, engine: 'truck', // idem buggy: 1.6 estolava em hill-start ≥14°
+    // encalhe de barriga MEDIDO (test/car-hillstart): a caixa única tocava o
+    // terreno 348/360 frames na diagonal ≥14°. Duas caixas: casco y[0.05..0.85]
+    // no footprint todo + barriga y[-0.25..0.05] SÓ entre eixos.
+    shapes: [
+      { half: [2.7, 0.40, 1.05], off: [0, 0.15, 0] },
+      { half: [1.0, 0.15, 0.95], off: [0.4, -0.40, 0] },
+    ],
     modelUrl: '/assets/models/Veículos/truck-drifter.optimized.glb', modelYaw: 0,
     build: () => buildPlaceholder([2.7, 0.55, 1.05], 0x46523a) };
   const mkSport = c => ({ name: 'ESPORTIVO GT', mass: 420, half: [1.9, 0.32, 0.88],

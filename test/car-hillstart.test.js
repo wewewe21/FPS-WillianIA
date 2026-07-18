@@ -10,7 +10,7 @@
    plana continua chegando a ≥55 km/h (a distribuição de força não
    pode castrar a traseira nem mudar o total 2×3600). Porta 3236.
 
-   GAP 8 DOCUMENTADO (todo): dois mecanismos executados e MEDIDOS
+   HISTÓRICO DO GAP 8: dois mecanismos executados e MEDIDOS
    sem resgate no corredor de estol (−229.8, 27.4, yaw 5.89,
    align 0,55 → 1,2–1,3 m em 6 s):
    1) hillAwd (redistribuir 2×3600 pro eixo dianteiro): 2,2 m.
@@ -19,12 +19,15 @@
       IDÊNTICA em todos os valores — o grip não é o gargalo.
    Causa-raiz medida: a CAIXA do chassi encosta no terreno
    (pilar ConvexPolyhedron do Heightfield) ~348/360 frames durante
-   o arranque — o caminhão ENCALHA de barriga na diagonal íngreme;
+   o arranque — o caminhão ENCALHAVA de barriga na diagonal íngreme;
    o contato estático ancora o chassi e nenhum orçamento de atrito
-   de RODA muda isso. Resgate exigiria mexer em geometria/altura do
-   collider ou unstuck — ambos proibidos pelo plano. O it da rampa
-   fica como `todo`: sai do vermelho e acusa quando o encalhe for
-   resolvido de verdade.
+   de RODA muda isso.
+   SOLUÇÃO (js/car.js, cfg.shapes): collider do caminhão em DUAS
+   caixas — casco alto de comprimento total (ângulo de ataque/saída
+   real nos balanços) + BARRIGA curta só entre eixos (o fundo
+   original). Encalhe de CRISTA (pendurado entre eixos = dá ré)
+   continua existindo de propósito: relevo legítimo, doutrina do
+   car-terrain-traversal. Buggy/sport seguem na caixa única.
    ================================================================ */
 'use strict';
 const { describe, it, before, after } = require('node:test');
@@ -119,9 +122,7 @@ describe('Hill-start do caminhão (Chrome headless)', { skip: !CHROME && 'Chrome
     };
   };
 
-  it('caminhão arranca PARADO em rampa 13,5–16,5° e anda ≥8 m em 6 s',
-    { todo: 'gap 8: encalhe do chassi no terreno em diagonal íngreme (ver cabeçalho) — grip/força não resgatam' },
-    async () => {
+  it('caminhão arranca PARADO em rampa 13,5–16,5° e anda ≥8 m em 6 s', async () => {
     const r = await h.play((src) => {
       eval(src)();
       window.QA.reset();
