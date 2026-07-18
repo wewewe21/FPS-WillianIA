@@ -38,7 +38,7 @@ externo ao repositório.
 | # | Gap | Custo |
 |---|---|---|
 | 14 | **FECHADO (2026-07-18)** — e2e rodado 3×: 22-23/24, falhas variam por rodada e todas passam em outra = flake de SwiftShader (documentado no próprio script); zero regressão | — |
-| 15 | Flakes de carga: boot de browser >60 s com processo pesado paralelo — protocolo "isolado 2–3×" documentado, mas custa re-runs | M |
+| 15 | **RESOLVIDO (2026-07-18)** — triagem automática no `scripts/run-tests.js`: arquivo que falha na suíte re-roda isolado 2×; FLAKE = verde, REGRESSÃO = exit 1 com atribuição por arquivo (parse do `location:` do TAP). Protocolo do CLAUDE.md virou código | — |
 | 16 | **OBSOLETO (2026-07-18)** — já resolvido por `scripts/run-tests.js` (enumera testes em JS, roda em node ≥18 em qualquer SO; `engines: >=18`); suíte validada 2× em node 20 | — |
 | 17 | **RESOLVIDO (2026-07-18)** — `scripts/gif-from-frames.sh` (ffmpeg 2 passos c/ palette) monta GIF de qualquer captura; validado com os ciclos de ataque/caminhada dos esqueletos | — |
 
