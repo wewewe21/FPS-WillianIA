@@ -17,7 +17,7 @@ externo ao repositório.
 | # | Gap | Custo |
 |---|---|---|
 | 3 | Silhuetas remotas: DMR e Sniper dividem a mesma; sem animação de recarga/mecanismo nos remotos | M |
-| 4 | Red dot: ponto ~4–6 px do centro geométrico do aro (dentro da tolerância do teste) | P |
+| 4 | **NÃO REPRODUZ (2026-07-18)** — ótica exata (0,00 px numérico, ≤1 px renderizado); '4–6 px' era viés de centroide (base do mount oculta o arco inferior do aro). Régua dot↔aro ≤2 px adicionada ao weapon-ads (RED provado por perturbação) | — |
 | 5 | **RESOLVIDO (2026-07-18)** — `scope2x` reticle 'cross'→'overlay' (1 campo, weaponrig.js); ADS 8/8 + aim 7/7 | — |
 | 6 | Mão do rig fica ~0,65 m da âncora (origem no punho + clamp do IK — pré-existente, idêntico ao baseline); braço estica no hip da bazuca | M |
 | 7 | heldWeapon remoto some por flag na nave/queda — sem animação de transição/coldre | P |
