@@ -26,12 +26,12 @@ externo ao repositório.
 
 | # | Gap | Custo |
 |---|---|---|
-| 8 | Caminhão não arranca PARADO em rampa ≥14° (círculo de fricção do cannon; com embalo sobe). Corredores de teste ≤12°; driveable mundial segue 20° | M (recalibra drift) |
-| 9 | Chuva visível através de janela/porta aberta não implementada — em volume coberto a chuva some inteira | M |
-| 10 | Cobertura de chuva das estruturas do CAMPO vem só das lajes-plataforma; casas sem plataforma interna não abafam | P |
-| 11 | Trilha de pneus amassando a grama (melhoria visual opcional da spec) | M |
-| 12 | A/B de resolução 2,5 m decidido por argumento (crista é analítica, grade fina não ajuda) + orçamento — sem A/B físico completo rodado | P (só medir) |
-| 13 | DAY_LEN unificado em 480 (valor do BR): dia do SOLO ficou ~14% mais longo | P (1 número) |
+| 8 | **DOCUMENTADO (2026-07-17)** — causa-raiz MEDIDA não é atrito: o caminhão ENCALHA DE BARRIGA (caixa do chassi toca o terreno ~348/360 frames) em subida DIAGONAL ≥14°; rampa alinhada nunca estola. Dois mecanismos executados e descartados com telemetria (hillAwd e grip de arranque com gate — dist idêntica até com slip 8). Fix real = clearance do collider (half.y/offset) → capotamento/colisão, task própria, DECISÃO PENDENTE do dono. Contrato em `test/car-hillstart.test.js` (it da rampa em `todo`, acusa quando resolver) | decisão |
+| 9 | **RESOLVIDO (2026-07-17)** — gota/floco classificado POR FRAME pela posição MUNDIAL (`js/env.js`); chuva externa visível por porta/janela; nave cobre o volume REAL do casco (`ShipProto.coversPoint`); `camExposure` só em som/relâmpago/transição | — |
+| 10 | **RESOLVIDO (2026-07-17)** — `Structures.fieldRoofs` (torre + cabana, metadado puro sem RNG) com source `'campo'` no cover; ruína/forte abertos por design; imune ao evento da cidade (testado) | — |
+| 11 | **RESOLVIDO (2026-07-17)** — `Grass.stampTrack` + atributo `aTrack` por lâmina; rodas traseiras em contato >2 m/s; some em ~10 s; zera na reciclagem do chunk; zero corpos físicos | — |
+| 12 | **INSTRUMENTADO (2026-07-17)** — probe físico node (`scripts/probe-hillstart.mjs`: Δ 5 m×2,5 m desprezível em rampa uniforme) + `?segs=440` no cliente + protocolo/gate de adoção no mapa (`docs/plans/2026-07-17-gaps-8-13-mapa.md`). DECISÃO pendente de medição no Chrome real do Will. Adoção nunca é por cliente (muda layout do mundo pro mesmo seed) | medir |
+| 13 | **FECHADO (2026-07-17)** — mantido `DAY_LEN=480`; gatilho de reabertura = playtest do SOLO acusar ritmo (aí é `todRate` do modo solo, nunca segundo relógio) | — |
 
 ## Testes / infra
 
