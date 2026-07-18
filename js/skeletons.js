@@ -9,15 +9,20 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneRig } from 'three/addons/utils/SkeletonUtils.js';
 import { meleeBlocked } from './aihelpers.js';
 
+/* Mapa de eixos do rig (Sketchfab exporta em T-pose; tudo abaixo foi
+   validado EMPIRICAMENTE com capturas por eixo — não confiar em intuição):
+   - braço D (armR):   z<0 baixa da T-pose; x<0 avança, x>0 recua
+   - antebraço D:      x<0 flexiona o cotovelo (mão sobe à frente)
+   - braço E (armL):   x<0 baixa da T-pose; z segue o balanço frente/trás
+   - coxas (thL/thR):  z>0 avança a perna (sagital); x abre lateral (NÃO usar)
+   - panturrilhas:     x>0 dobra o joelho pra trás; z torce lateral (NÃO usar)
+   - PÉS: filhos do rootJoint, NÃO das panturrilhas — girar a perna não move
+     a bota. A passada é feita por translação local do osso do pé:
+     -y avança, +z levanta; rotação x>0 = ponta da bota pra baixo.
+   - a cimitarra do GLB (malha Circle_3) é 100% rígida em Hand.R e aponta
+     na continuação do antebraço — é a única espada (não há malha procedural) */
 const _poseEuler = new THREE.Euler(0, 0, 0, 'XYZ');
 const _poseQuat = new THREE.Quaternion();
-const _handWorld = new THREE.Vector3();
-const _handLocal = new THREE.Vector3();
-const _swordDir = new THREE.Vector3();
-const _swordCarry = new THREE.Vector3(0.2, -0.94, 0.27).normalize();
-const _swordRaised = new THREE.Vector3(0.38, 0.84, -0.38).normalize();
-const _swordStrike = new THREE.Vector3(-0.48, -0.18, 0.86).normalize();
-const _up = new THREE.Vector3(0, 1, 0);
 
 function smooth01(v) {
   const x = THREE.MathUtils.clamp(v, 0, 1);
@@ -91,62 +96,17 @@ function poseBone(sk, bone, x = 0, y = 0, z = 0) {
   bone.quaternion.copy(rest.quaternion).multiply(_poseQuat);
 }
 
-function makeSword(materials) {
-  const sword = new THREE.Group();
-  sword.name = 'SkeletonSword';
-
-  const bladeGeo = new THREE.BoxGeometry(0.085, 0.92, 0.035);
-  bladeGeo.translate(0, 0.56, 0);
-  const blade = new THREE.Mesh(bladeGeo, materials.blade);
-
-  const tipGeo = new THREE.ConeGeometry(0.047, 0.13, 4);
-  tipGeo.rotateY(Math.PI / 4);
-  tipGeo.translate(0, 1.085, 0);
-  const tip = new THREE.Mesh(tipGeo, materials.blade);
-
-  const guard = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.055, 0.07), materials.guard);
-  guard.position.y = 0.085;
-
-  const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.042, 0.25, 8), materials.grip);
-  grip.position.y = -0.06;
-
-  const pommel = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), materials.guard);
-  pommel.position.y = -0.21;
-
-  for (const mesh of [blade, tip, guard, grip, pommel]) {
-    mesh.castShadow = true;
-    sword.add(mesh);
-  }
-  return sword;
-}
-
-function updateSword(sk, attackP) {
-  if (!sk.sword) return;
-  const g = sk.group;
-  const hand = sk.bones && sk.bones.handR;
-
-  if (hand) {
-    g.updateMatrixWorld(true);
-    hand.getWorldPosition(_handWorld);
-    _handLocal.copy(_handWorld);
-    g.worldToLocal(_handLocal);
-    sk.sword.position.copy(_handLocal);
-  } else {
-    sk.sword.position.set(0.48, 1.2, 0.08);
-  }
-
-  if (attackP < 0) {
-    _swordDir.copy(_swordCarry);
-  } else {
-    const wind = smooth01(attackP / 0.32);
-    const cut = smooth01((attackP - 0.32) / 0.27);
-    const recover = smooth01((attackP - 0.59) / 0.41);
-    _swordDir.lerpVectors(_swordCarry, _swordRaised, wind);
-    _swordDir.lerp(_swordStrike, cut).lerp(_swordCarry, recover).normalize();
-  }
-
-  sk.sword.quaternion.setFromUnitVectors(_up, _swordDir);
-  sk.sword.position.addScaledVector(_swordDir, 0.015);
+/* pés são filhos do rootJoint: a passada é translação local + pitch */
+function poseFoot(sk, bone, fwd, lift, pitch) {
+  if (!bone) return;
+  const rest = sk.rest.get(bone);
+  if (!rest) return;
+  _poseEuler.set(pitch, 0, 0, 'XYZ');
+  _poseQuat.setFromEuler(_poseEuler);
+  bone.quaternion.copy(rest.quaternion).multiply(_poseQuat);
+  bone.position.copy(rest.position);
+  bone.position.y -= fwd;
+  bone.position.z += lift;
 }
 
 function animateSkeleton(sk, dt, t, moving) {
@@ -154,15 +114,14 @@ function animateSkeleton(sk, dt, t, moving) {
   const b = sk.bones;
   const targetMove = moving && !sk.attacking ? 1 : 0;
   sk.moveBlend += (targetMove - sk.moveBlend) * (1 - Math.exp(-10 * dt));
-  if (moving && !sk.attacking) sk.phase += dt * 7.2;
+  if (moving && !sk.attacking) sk.phase += dt * 9;
 
   const walk = sk.moveBlend;
-  const stride = Math.sin(sk.phase);
+  const stride = Math.sin(sk.phase); // >0: perna E à frente
   const step = Math.cos(sk.phase);
-  const liftL = Math.max(0, -stride);
-  const liftR = Math.max(0, stride);
+  const swingL = Math.max(0, step);   // perna E no ar (indo pra frente)
+  const swingR = Math.max(0, -step);  // perna D no ar
   const idle = Math.sin(t * 1.55 + sk.idlePhase);
-  const carryR = 0.42 + stride * 0.1 * walk;
 
   let attackP = -1;
   let wind = 0, cut = 0, recover = 0;
@@ -211,46 +170,44 @@ function animateSkeleton(sk, dt, t, moving) {
     -chestTwist * 0.18,
     -stride * 0.012 * walk);
 
-  poseBone(sk, b.thL, 0, 0, stride * 0.58 * walk);
-  poseBone(sk, b.thR, 0, 0, -stride * 0.58 * walk);
-  poseBone(sk, b.calfL, 0, 0, -liftL * 0.72 * walk);
-  poseBone(sk, b.calfR, 0, 0, liftR * 0.72 * walk);
-  poseBone(sk, b.footL, 0, 0, (-stride * 0.16 + liftL * 0.2) * walk);
-  poseBone(sk, b.footR, 0, 0, (stride * 0.16 - liftR * 0.2) * walk);
-  poseBone(sk, b.toeL, 0, 0, Math.max(0, step) * 0.09 * walk);
-  poseBone(sk, b.toeR, 0, 0, Math.max(0, -step) * 0.09 * walk);
+  // pernas: coxa balança no Z (sagital), joelho dobra no X da panturrilha
+  // durante o balanço; o pé (preso ao root) faz a passada por translação
+  poseBone(sk, b.thL, 0, 0, stride * 0.5 * walk);
+  poseBone(sk, b.thR, 0, 0, -stride * 0.5 * walk);
+  poseBone(sk, b.calfL, (0.08 + swingL * 0.9) * walk, 0, 0);
+  poseBone(sk, b.calfR, (0.08 + swingR * 0.9) * walk, 0, 0);
+  poseFoot(sk, b.footL, stride * 2.0 * walk, swingL * 0.85 * walk, -stride * 0.22 * walk);
+  poseFoot(sk, b.footR, -stride * 2.0 * walk, swingR * 0.85 * walk, stride * 0.22 * walk);
 
   poseBone(sk, b.shoulderL, 0, -chestTwist * 0.18, 0);
   poseBone(sk, b.shoulderR, 0, -chestTwist * 0.12, 0);
+  // braço E: rest é T-pose — baixa ~70° SEMPRE, balança em contrafase
   poseBone(sk, b.armL,
-    attackValue(0, -0.1, 0.18),
-    attackValue(0, 0.08, -0.12),
-    attackValue(-stride * 0.42 * walk, -0.42, -0.18));
-  poseBone(sk, b.foreL,
-    attackValue(0, 0.08, -0.08),
+    -1.22 + attackValue(0, 0.25, -0.15),
     0,
-    attackValue(-0.08 - liftR * 0.16 * walk, -0.28, -0.42));
-  poseBone(sk, b.handL, 0, 0, attackValue(0, -0.08, 0.12));
+    attackValue(stride * 0.3 * walk, -0.35, 0.3));
+  poseBone(sk, b.foreL, 0, 0, attackValue(-0.3, -0.55, -0.15));
 
+  // braço D (cimitarra): a lâmina sai PERPENDICULAR ao punho (-Z da mão),
+  // então o pitch dela = flexão do cotovelo + x do punho. Carry = braço
+  // baixo, cotovelo dobrado, lâmina diagonal pra cima; windup arma sobre o
+  // ombro; strike varre pra frente e termina com a lâmina no player
+  // (~15° abaixo da horizontal — resolvido analiticamente e validado)
   poseBone(sk, b.armR,
-    attackValue(0.08, -0.58, 0.38),
-    attackValue(0, -0.2, 0.28),
-    attackValue(carryR, 1.26, -0.72));
-  poseBone(sk, b.foreR,
-    attackValue(0.08, -0.35, 0.18),
-    attackValue(0, 0.12, -0.18),
-    attackValue(0.62, 1.05, 0.12));
+    attackValue(-0.25 + stride * 0.06 * walk, 0.75, -0.45),
+    attackValue(0, -0.15, 0),
+    attackValue(-1.12, -0.45, -1.0));
+  poseBone(sk, b.foreR, attackValue(-0.95, -1.45, -0.25), 0, 0);
   poseBone(sk, b.handR,
-    attackValue(0, -0.14, 0.08),
-    attackValue(0, 0.1, -0.12),
-    attackValue(0.08, 0.22, -0.18));
+    attackValue(0, -0.2, 0.56),
+    attackValue(0.55, 0.35, 0),
+    0);
 
   const jawOpen = Math.max(
     sk.targetDistance < 12 ? Math.max(0, Math.sin(t * 9 + sk.idlePhase)) * 0.2 : 0,
     sk.attacking ? Math.sin(Math.min(1, attackP / 0.45) * Math.PI) * 0.32 : 0
   );
   poseBone(sk, b.jaw, jawOpen, 0, 0);
-  updateSword(sk, attackP);
 }
 
 export function createSkeletons(deps) {
@@ -263,12 +220,6 @@ export function createSkeletons(deps) {
   const list = [];
   let enabled = true;
   const api = { list, update, setEnabled, modelReady: false };
-
-  const swordMaterials = {
-    blade: csmMat(new THREE.MeshStandardMaterial({ color: 0xb9c2cc, metalness: 0.88, roughness: 0.24 })),
-    guard: csmMat(new THREE.MeshStandardMaterial({ color: 0x6d5840, metalness: 0.72, roughness: 0.34 })),
-    grip: csmMat(new THREE.MeshStandardMaterial({ color: 0x261912, roughness: 0.78 })),
-  };
 
   function setEnabled(value) {
     enabled = !!value;
@@ -308,7 +259,7 @@ export function createSkeletons(deps) {
       group: g, alive: false, enabled, hp: 0, yaw: 0, phase: rand(TAU), idlePhase: rand(TAU),
       side: list.length % 2 ? 1 : -1, // lado fixo do contorno (metade pra cada)
       hitT: 0, respawnT: 0, groanT: rand(6), bones: null, rest: null,
-      model: null, modelBaseY: 0, modelBaseQuaternion: new THREE.Quaternion(), sword: null,
+      model: null, modelBaseY: 0, modelBaseQuaternion: new THREE.Quaternion(),
       moveBlend: 0, attacking: false, attackT: 0, attackHit: false,
       attackDuration: ATTACK_DURATION, targetDistance: Infinity,
       sph: [{ c: new THREE.Vector3(), r: 0.45, part: 'body' }, { c: new THREE.Vector3(), r: 0.28, part: 'head' }],
@@ -368,9 +319,7 @@ export function createSkeletons(deps) {
       sk.modelBaseQuaternion.copy(root.quaternion);
       sk.bones = collectBones(root);
       rememberRestPose(sk);
-      sk.sword = makeSword(swordMaterials);
-      sk.group.add(root, sk.sword);
-      updateSword(sk, -1);
+      sk.group.add(root);
 
       if (sk === list[0]) {
         const required = ['thL', 'thR', 'calfL', 'calfR', 'armR', 'foreR', 'handR', 'head'];
