@@ -15,12 +15,18 @@ describe('BR — representação visual de bot armado', { skip: !CHROME && 'Chro
       playerPos: window.__MP.player.pos.toArray(),
     })));
     host.emit('hello', { nick: 'BotVisual', bot: true });
-    host.emit('state', {
+    // o servidor retransmite via volatile (pode dropar sob carga): repete o
+    // MESMO estado até o avatar aparecer — idempotente, sem flake de boot
+    const st = {
       pos: [playerPos[0] + 3, playerPos[1], playerPos[2]],
       rotY: -Math.PI / 2,
       heldWeapon: 'FUZIL',
-    });
-    await h.page.waitForFunction('window.__BR_debug.remotes.size > 0', { timeout: 5000 });
+    };
+    host.emit('state', st);
+    const retry = setInterval(() => host.emit('state', st), 250);
+    try {
+      await h.page.waitForFunction('window.__BR_debug.remotes.size > 0', { timeout: 15000 });
+    } finally { clearInterval(retry); }
   });
   after(async () => { if (host) host.close(); if (h) await h.close(); });
 
@@ -50,7 +56,11 @@ describe('BR — representação visual de bot armado', { skip: !CHROME && 'Chro
       rotY: -Math.PI / 2,
       heldWeapon: 'FACA "AURORA"',
     });
-    await new Promise(resolve => setTimeout(resolve, 250));
+    // espera a arma sumir (a transição de coldre leva alguns frames)
+    await h.page.waitForFunction(() => {
+      const rp = window.__BR_debug && [...window.__BR_debug.remotes.values()][0];
+      return rp && rp.heldWeapon === 'FACA' && !rp.body.weapon.visible;
+    }, { timeout: 3000, polling: 20 });
     const state = await h.play(() => {
       const rp = [...window.__BR_debug.remotes.values()][0];
       return { heldWeapon: rp.heldWeapon, weaponVisible: rp.body.weapon.visible };
@@ -81,5 +91,69 @@ describe('BR — representação visual de bot armado', { skip: !CHROME && 'Chro
     assert.ok(state.fireT > 0, 'evento de faca não iniciou a animação');
     assert.ok(state.armX < -0.7,
       `braço não executou o golpe (rotation.x=${state.armX}, arma=${state.heldWeapon}, fireT=${state.fireT})`);
+  });
+
+  /* grava {escala, visível} da arma do remoto a cada frame renderizado —
+     detecta pop instantâneo (0↔1 num frame) vs transição de coldre/saque */
+  const startWeaponLog = () => h.play(() => {
+    const rp = [...window.__BR_debug.remotes.values()][0];
+    const log = window.__wpnLog = [];
+    (function rec() {
+      if (log.length < 600) requestAnimationFrame(rec);
+      log.push({ s: rp.body.weapon.scale.x, v: rp.body.weapon.visible });
+    })();
+  });
+
+  it('saca a arma com transição de escala em vez de pop', async () => {
+    // estado anterior: FACA (arma invisível). Sacar FUZIL deve CRESCER.
+    await startWeaponLog();
+    const st = {
+      pos: [playerPos[0] + 3, playerPos[1], playerPos[2]],
+      rotY: -Math.PI / 2, heldWeapon: 'FUZIL', ship: false, fall: false,
+    };
+    host.emit('state', st);
+    const retry = setInterval(() => host.emit('state', st), 250); // volatile pode dropar
+    try {
+      await h.page.waitForFunction(() => {
+        const rp = window.__BR_debug && [...window.__BR_debug.remotes.values()][0];
+        return rp && rp.body.weapon.visible && rp.body.weapon.scale.x >= 0.98;
+      }, { timeout: 8000, polling: 20 });
+    } finally { clearInterval(retry); }
+    const log = await h.play(() => window.__wpnLog);
+    const first = log.find(f => f.v);
+    assert.ok(first, 'arma nunca apareceu no log de frames');
+    assert.ok(first.s < 0.5,
+      `saque teleportou a escala: primeiro frame visível já em ${first.s}`);
+    assert.ok(log.some(f => f.v && f.s > 0.02 && f.s < 0.9),
+      'sem frames intermediários de crescimento (pop instantâneo)');
+  });
+
+  it('guarda a arma com transição quando a flag de queda cai', async () => {
+    // arma sacada (escala 1). fall:true deve ENCOLHER antes de sumir.
+    // (mesma posição: um salto de altitude tropeçaria no anti-teleporte)
+    await startWeaponLog();
+    const st = {
+      pos: [playerPos[0] + 3, playerPos[1], playerPos[2]],
+      rotY: -Math.PI / 2, heldWeapon: 'FUZIL', fall: true,
+    };
+    host.emit('state', st);
+    const retry = setInterval(() => host.emit('state', st), 250); // volatile pode dropar
+    try {
+      await h.page.waitForFunction(() => {
+        const rp = window.__BR_debug && [...window.__BR_debug.remotes.values()][0];
+        return rp && !rp.body.weapon.visible;
+      }, { timeout: 8000, polling: 20 });
+    } finally { clearInterval(retry); }
+    const log = await h.play(() => window.__wpnLog);
+    const lastVis = log.findIndex((f, i) => f.v && log[i + 1] && !log[i + 1].v);
+    assert.ok(lastVis >= 0, 'transição de sumiço não registrada no log de frames');
+    assert.ok(log[lastVis].s < 0.5,
+      `arma sumiu de estalo: último frame visível ainda com escala ${log[lastVis].s}`);
+    assert.ok(log.some(f => f.v && f.s > 0.02 && f.s < 0.9),
+      'sem frames intermediários de encolhimento (pop instantâneo)');
+  });
+
+  it('rede de segurança: nenhum pageerror nos cenários visuais', () => {
+    assert.deepEqual(h.pageErrors, [], 'erros de página: ' + h.pageErrors.join(' | '));
   });
 });

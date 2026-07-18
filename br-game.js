@@ -110,6 +110,14 @@
       if (tpl) w.add(tpl.clone());
       rp.body.muzzle.position.z = SIL.MUZZLE_Z[code] || -0.9;
     }
+    /* saque/coldre da arma remota: rampa curta de escala no lugar do pop
+       instantâneo (nave/queda/faca). dt clampado ⇒ a transição dura no
+       mínimo 3 frames mesmo num frame lento. Zero alocação por frame. */
+    const HOLSTER_T = 0.15; // s de escala 0<->1
+    function stepHolster(cur, tgt, dt) {
+      const step = Math.min(dt, 0.05) / HOLSTER_T;
+      return cur < tgt ? Math.min(tgt, cur + step) : Math.max(tgt, cur - step);
+    }
 
     function buildVoxelBody(colors) {
       const [cBody, cCloth, cDetail, cVisor] = (colors || ['#4da6ff', '#2b3a4d', '#8a5a2b', '#ffd76a'])
@@ -181,7 +189,7 @@
         chute: false, ship: false, fall: false, car: -1, heli: false, bot: false,
         carHintIdx: -1, carHintPos: null, carHintYaw: 0, // dica visual das rodas do carro remoto
         shipLocalTgt: null, shipLocalCur: null,
-        heldWeapon: 'FACA', fireT: 0, hitT: 0, deadT: 0,
+        heldWeapon: 'FACA', wpnScale: 0, fireT: 0, hitT: 0, deadT: 0,
         lastPos: group.position.clone(), speed: 0, walkPh: 0,
         sphCache: [
           { c: new THREE.Vector3(), r: 0.28, part: 'head' },
@@ -1352,7 +1360,12 @@
       rp.bot = !!d.bot;
       rp.heldWeapon = d.heldWeapon ? weaponCode(d.heldWeapon) : rp.heldWeapon;
       applyRemoteWeapon(rp);
-      rp.body.weapon.visible = rp.heldWeapon !== 'FACA' && !rp.ship && !rp.fall;
+      // saque aparece já neste frame (escala pequena crescendo no brTick);
+      // o coldre é o brTick quem encolhe — fim do pop de aparecer/sumir
+      if (rp.heldWeapon !== 'FACA' && !rp.ship && !rp.fall && !rp.body.weapon.visible) {
+        rp.body.weapon.visible = true;
+        rp.body.weapon.scale.setScalar(Math.max(rp.wpnScale, 0.02));
+      }
     });
     socket.on('playerFired', d => {
       const rp = remotes.get(d.shooterId);
@@ -1689,7 +1702,11 @@
           const strike = 1 - rp.fireT / 0.16;
           rp.body.armR.rotation.x = -0.9 - Math.sin(strike * Math.PI) * 0.9;
         }
-        rp.body.weapon.visible = rp.heldWeapon !== 'FACA' && !rp.ship && !rp.fall;
+        // guarda/saca com transição de escala (alvo 0/1) em vez de pop
+        rp.wpnScale = stepHolster(rp.wpnScale,
+          rp.heldWeapon !== 'FACA' && !rp.ship && !rp.fall ? 1 : 0, dt);
+        rp.body.weapon.scale.setScalar(Math.max(rp.wpnScale, 0.02));
+        rp.body.weapon.visible = rp.wpnScale > 0.02;
         rp.body.muzzle.visible = rp.heldWeapon !== 'FACA' && rp.fireT > 0;
         if (rp.hitT > 0) {
           rp.hitT -= dt;
