@@ -20,7 +20,7 @@ export function createWeaponRig(deps) {
           fb: { eye: [0, 0.0915, 0.0], front: [0, 0.0915, -0.8] } },
         { id: 'reddot', label: 'Red Dot', type: 'redDot', eye: [0, 0.185, 0.1], front: [0, 0.185, -0.6], eyeRelief: 0.3, fov: 48, reticle: 'dot',
           mountY: 0.15, mountZ: 0.1 },
-        { id: 'scope2x', label: 'Luneta 2x', type: 'scope', eye: [0, 0.19, 0.16], front: [0, 0.19, -0.4], eyeRelief: 0.24, fov: 36, reticle: 'cross',
+        { id: 'scope2x', label: 'Luneta 2x', type: 'scope', eye: [0, 0.19, 0.16], front: [0, 0.19, -0.4], eyeRelief: 0.24, fov: 36, reticle: 'overlay',
           mountY: 0.15, mountZ: 0.05 },
       ],
       anchors: { muzzle: [0, 0.033, -0.47], gripR: [0.02, -0.1, 0.17], supportHand: [0, -0.078, -0.38], ejection: [0.045, 0.02, 0.03] },
