@@ -402,10 +402,10 @@ const Scenery = createScenery();
   try {
     // três famílias de árvore (a "assets" é um bosquete inteiro por instância)
     const geos = await Promise.all([
-      Scenery.bakedGeometry('/assets/models/Cenários/giant_low_poly_tree.glb', { height: 12 }),
-      Scenery.bakedGeometry('/assets/models/Cenários/low_poly_tree_with_twisting_branches.glb', { height: 8.5 }),
-      Scenery.bakedGeometry('/assets/models/Cenários/low_poly__tree_assets.glb', { height: 7 }),
-      Scenery.bakedGeometry('/assets/models/Cenários/low_poly_tree_log_and_stump.glb', { height: 1.3 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/giant_low_poly_tree.glb', { height: 12 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/low_poly_tree_with_twisting_branches.glb', { height: 8.5 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/low_poly__tree_assets.glb', { height: 7 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/low_poly_tree_log_and_stump.glb', { height: 1.3 }),
     ]);
     treeVariantMeshes = geos.map(g => {
       const m = new THREE.InstancedMesh(g, treeMat, CFG.TREE_COUNT);
@@ -464,7 +464,7 @@ const Scenery = createScenery();
   try {
     const cidade = Structures.sites.find(s => s.type === 'cidade');
     const mx = cidade ? cidade.x + cidade.r + 16 : 60, mz = cidade ? cidade.z - 18 : 60;
-    const mercado = await Scenery.prop('/assets/models/Cenários/mercado.glb', { height: 7 });
+    const mercado = await Scenery.prop('./assets/models/Cenários/mercado.glb', { height: 7 });
     placeProp(mercado, mx, mz, 0.4);
     Structures.sites.push({ x: mx, z: mz, r: Math.max(mercado.size.x, mercado.size.z) / 2 + 3, type: 'mercado' });
 
@@ -477,13 +477,13 @@ const Scenery = createScenery();
           !Structures.sites.some(s => Math.hypot(x - s.x, z - s.z) < s.r + 20)) { tx = x; tz = z; break; }
     }
     if (tx || tz) {
-      const casa = await Scenery.prop('/assets/models/Cenários/low_poly_tree_house.glb', { height: 13 });
+      const casa = await Scenery.prop('./assets/models/Cenários/low_poly_tree_house.glb', { height: 13 });
       placeProp(casa, tx, tz, poiRand(TAU));
       Structures.sites.push({ x: tx, z: tz, r: Math.max(casa.size.x, casa.size.z) / 2 + 3, type: 'refúgio' });
     }
 
     // barris de madeira: cobertura leve perto dos POIs novos
-    const barril = await Scenery.prop('/assets/models/Cenários/wooden_barrel.glb', { height: 1.05 });
+    const barril = await Scenery.prop('./assets/models/Cenários/wooden_barrel.glb', { height: 1.05 });
     const spots = [[mx + 5, mz + 4], [mx - 6, mz + 2], [mx + 3, mz - 6],
       [tx + 4, tz + 2], [tx - 3, tz - 4], [tx + 2, tz - 5]];
     for (const [bx, bz] of spots) {

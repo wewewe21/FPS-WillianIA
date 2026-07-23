@@ -8,17 +8,17 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { retargetClip } from 'three/addons/utils/SkeletonUtils.js';
 
 export const PLAYER_ANIMATION_SPECS = Object.freeze([
-  { name: 'crouchWalk', file: '/assets/animations/Andando Agachado.fbx', loop: true },
-  { name: 'walk', file: '/assets/animations/Andando.fbx', loop: true },
-  { name: 'death', file: '/assets/animations/Animação de morte.fbx', loop: false },
-  { name: 'land', file: '/assets/animations/aterrissando no chão.fbx', loop: false },
-  { name: 'fall', file: '/assets/animations/caindo.fbx', loop: true },
-  { name: 'run', file: '/assets/animations/Correndo.fbx', loop: true },
-  { name: 'fireRifle', file: '/assets/animations/Fuzil/atirando com fuzil.fbx', loop: false },
-  { name: 'idleRifle', file: '/assets/animations/Fuzil/parado com fuzil na mão.fbx', loop: true },
-  { name: 'firePistol', file: '/assets/animations/pistola/atirando com pistola.fbx', loop: false },
-  { name: 'jump', file: '/assets/animations/Pulando.fbx', loop: false },
-  { name: 'idleShotgun', file: '/assets/animations/Shotgun/parado com a shotgun na mão.fbx', loop: true },
+  { name: 'crouchWalk', file: './assets/Animações/Andando Agachado.fbx', loop: true },
+  { name: 'walk', file: './assets/Animações/Andando.fbx', loop: true },
+  { name: 'death', file: './assets/Animações/Animação de morte.fbx', loop: false },
+  { name: 'land', file: './assets/Animações/aterrissando no chão.fbx', loop: false },
+  { name: 'fall', file: './assets/Animações/caindo.fbx', loop: true },
+  { name: 'run', file: './assets/Animações/Correndo.fbx', loop: true },
+  { name: 'fireRifle', file: './assets/Animações/Fuzil/atirando com fuzil.fbx', loop: false },
+  { name: 'idleRifle', file: './assets/Animações/Fuzil/parado com fuzil na mão.fbx', loop: true },
+  { name: 'firePistol', file: './assets/Animações/pistola/atirando com pistola.fbx', loop: false },
+  { name: 'jump', file: './assets/Animações/Pulando.fbx', loop: false },
+  { name: 'idleShotgun', file: './assets/Animações/Shotgun/parado com a shotgun na mão.fbx', loop: true },
 ]);
 
 /* GLTFLoader sanitiza os pontos dos nomes Blender (Sholder.L -> SholderL).

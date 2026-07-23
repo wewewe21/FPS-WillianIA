@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
-const CITY_URL = '/assets/models/Cenários/new_york_city.optimized.glb';
+const CITY_URL = './assets/models/Cenários/new_york_city.optimized.glb';
 
 export function createCityModel({ scene, renderer, Structures, CITY, heightAt, slopeAt }) {
   const root = new THREE.Group();

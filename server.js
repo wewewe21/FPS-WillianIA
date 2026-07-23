@@ -34,6 +34,8 @@ for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__
 // a pasta agora tem subdiretórios (Armas/, Cenários/, Personagens/, Veículos/)
 app.use('/assets/models', express.static(path.join(__dirname, 'assets', 'models')));
 app.use('/assets/animations', express.static(path.join(__dirname, 'assets', 'Animações')));
+app.use('/assets/Anima%C3%A7%C3%B5es', express.static(path.join(__dirname, 'assets', 'Animações')));
+app.use('/assets/Animações', express.static(path.join(__dirname, 'assets', 'Animações')));
 app.use('/js', express.static(path.join(__dirname, 'js'))); // módulos ES do jogo
 // Export visual produzido pelo editor local. Apenas este JSON final é público;
 // o projeto do editor e suas rotas nunca fazem parte deste servidor.

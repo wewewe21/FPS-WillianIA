@@ -44,7 +44,7 @@ export function createHeli(deps) {
   group.position.set(hs.x, hs.y + 0.05, hs.z);
   scene.add(group);
 
-  const modelUrl = '/assets/models/Veículos/low_poly_helicopter.glb';
+  const modelUrl = './assets/models/Veículos/low_poly_helicopter.glb';
   let modelStatus = 'loading', modelError = '', modelRoot = null;
   let modelMixer = null, modelAction = null, modelMetrics = null;
   const modelMaterials = new Set();

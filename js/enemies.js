@@ -228,7 +228,7 @@ export function createEnemies(deps) {
      da Torre Nexus. A troca é apenas visual: IA, hitbox e dano são mantidos. */
   const modelReadyTasks = [];
   if (Chars) {
-    modelReadyTasks.push(Chars.character('/assets/models/Personagens/Guardiao.glb', { height: 1.92 })
+    modelReadyTasks.push(Chars.character('./assets/models/Personagens/Guardiao.glb', { height: 1.92 })
       .then(mold => {
         for (const e of list) {
           if (e.suit) continue;
@@ -250,7 +250,7 @@ export function createEnemies(deps) {
       .catch(err => console.error('Guardião GLB falhou — inimigos seguem procedurais:', err)));
 
     modelReadyTasks.push(Chars.character(
-      '/assets/models/Personagens/ps1low_poly_night_vision_special_forces_soldier.glb',
+      './assets/models/Personagens/ps1low_poly_night_vision_special_forces_soldier.glb',
       { height: 1.88 },
     ).then(mold => {
       for (const e of list) {

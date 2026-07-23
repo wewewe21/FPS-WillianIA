@@ -61,7 +61,7 @@ export function createFpBody(deps) {
     return GRIP.default;
   }
 
-  new GLTFLoader().loadAsync('/assets/models/Personagens/low_poly_helldiver_rig.glb')
+  new GLTFLoader().loadAsync('./assets/models/Personagens/low_poly_helldiver_rig.glb')
     .then(gltf => {
       const model = gltf.scene;
       model.traverse(o => {
