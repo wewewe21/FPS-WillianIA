@@ -134,10 +134,10 @@ scene.add(hemiLight);
 const ambLight = new THREE.AmbientLight(0xffffff, 0.16);
 scene.add(ambLight);
 
-// Cascaded Shadow Maps — 4 cascatas para sombra nítida perto e barata longe
+// Cascaded Shadow Maps — 3 cascatas para sombra nítida perto e barata longe
 const csm = new CSM({
   maxFar: CFG.CSM_MAX_FAR,
-  cascades: 4,
+  cascades: 3,
   mode: 'practical',
   parent: scene,
   shadowMapSize: CFG.SHADOW_MAP_SIZE,

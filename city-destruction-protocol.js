@@ -19,17 +19,17 @@
   const CITY_RADIUS = 95;
   const CITY_KILL_RADIUS = 100;   // raio letal do ataque (ajuste aqui)
 
-  const DELAY_DEFAULT = 90000;        // produção: 90s após o início da partida
-  const IMPACT_DELAY_DEFAULT = 8500;  // impacto 8,5s após o começo da cinemática
+  const DELAY_DEFAULT = 150000;        // produção: 150s (2min30) após o início da partida
+  const IMPACT_DELAY_DEFAULT = 14000;  // impacto 14s após o começo da cinemática
 
   /* fases da cinematográfica, em segundos desde cinematicStartedAt */
   const PHASES = {
-    skyPan: [0, 3],        // câmera sobe, mísseis ao longe
-    missileClose: [3, 5.5], // close no míssil assinado "By RenatoDReis"
-    wide: [5.5, 7],        // plano aberto sobre a cidade
-    mirv: [7, 8.5],        // ogivas se separam e mergulham
-    impact: 8.5,           // instante oficial do impacto
-    aftermath: [8.5, 12],  // fumaça baixa, câmera devolvida
+    skyPan: [0, 4],           // câmera sobe, mísseis ao longe
+    missileClose: [4, 7.5],   // close no míssil assinado "By RenatoDReis"
+    wide: [7.5, 10],          // plano aberto sobre a cidade
+    mirv: [10, 12.5],         // ogivas se separam e mergulham
+    impact: 12.5,             // instante oficial do impacto
+    aftermath: [12.5, 17],    // fumaça baixa, câmera devolvida
   };
 
   /* contagens visuais por qualidade (assinado e impactos NÃO variam) */
