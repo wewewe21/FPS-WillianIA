@@ -843,9 +843,9 @@ const recoil = {
 
 function playerUpdate(dt, t) {
   const usingTouch = window.__touch && window.__touch.enabled;
-  const sprintHeld = usingTouch ? (window.__touch.moveY < -0.5 && Math.abs(window.__touch.moveX) < 0.3) : (keys['ShiftLeft'] || keys['ShiftRight']);
+  const sprintHeld = usingTouch ? (window.__touch.moveY > 0.5 && Math.abs(window.__touch.moveX) < 0.3) : (keys['ShiftLeft'] || keys['ShiftRight']);
   const crouchHeld = usingTouch ? window.__touch.crouch : (keys['ControlLeft'] || keys['ControlRight']);
-  const fwd = usingTouch ? -window.__touch.moveY : ((keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0));
+  const fwd = usingTouch ? window.__touch.moveY : ((keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0));
   const str = usingTouch ? window.__touch.moveX : ((keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0));
 
   const sliding = player.slideT > 0;
@@ -1875,6 +1875,25 @@ function tick(forceDt) {
   Env.update(dt, t);
   Clouds.update(dt, t);
   Parachute.update(dt, t);
+  // ========== TOUCH CONTROLS UPDATE ==========
+  if (window.__touch && window.__touch.enabled) {
+    window.__touch.update(dt);
+    const tc = window.__touch;
+    if (tc.jump) { justPressed.add('Space'); tc.jump = false; }
+    if (tc.reload) { justPressed.add('KeyR'); tc.reload = false; }
+    if (tc.interact) { justPressed.add('KeyE'); tc.interact = false; }
+    if (tc.grenade) { justPressed.add('KeyG'); tc.grenade = false; }
+    if (tc.medkit) { justPressed.add('KeyQ'); tc.medkit = false; }
+    if (tc.switchWeapon >= 0) {
+      justPressed.add('Digit' + (tc.switchWeapon + 1));
+      tc.switchWeapon = -1;
+    }
+    if (tc.inventory) { justPressed.add('Tab'); tc.inventory = false; }
+    if (tc.toggleSight) { justPressed.add('KeyT'); tc.toggleSight = false; }
+    mouse.aiming = tc.aim;
+    if (tc.shoot) { mouse.shooting = true; mouse.clicked = true; }
+    else { mouse.shooting = false; mouse.clicked = false; }
+  }
   if (!state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
   shootUpdate(dt, t);
   world.step(1 / 60, dt, 3);
@@ -1932,25 +1951,6 @@ function tick(forceDt) {
     fpsFrames = 0; fpsAcc = 0;
   }
   justPressed.clear();
-    // ========== TOUCH CONTROLS UPDATE ==========
-    if (window.__touch && window.__touch.enabled) {
-      window.__touch.update(dt);
-      const tc = window.__touch;
-      if (tc.jump) { justPressed.add('Space'); tc.jump = false; }
-      if (tc.reload) { justPressed.add('KeyR'); tc.reload = false; }
-      if (tc.interact) { justPressed.add('KeyE'); tc.interact = false; }
-      if (tc.grenade) { justPressed.add('KeyG'); tc.grenade = false; }
-      if (tc.medkit) { justPressed.add('KeyQ'); tc.medkit = false; }
-      if (tc.switchWeapon >= 0) {
-        justPressed.add('Digit' + (tc.switchWeapon + 1));
-        tc.switchWeapon = -1;
-      }
-      if (tc.inventory) { justPressed.add('Tab'); tc.inventory = false; }
-      if (tc.toggleSight) { justPressed.add('KeyT'); tc.toggleSight = false; }
-      mouse.aiming = tc.aim;
-      if (tc.shoot) { mouse.shooting = true; mouse.clicked = true; }
-      else { mouse.shooting = false; mouse.clicked = false; }
-    }
 }
 
 /* ================== boot ================== */

@@ -74,6 +74,8 @@ export class TouchControls {
     this._btnJump = null;
     this._btnCrouch = null;
     this._btnReload = null;
+    this._btnGrenade = null;
+    this._btnMedkit = null;
     this._btnInteract = null;
     this._btnPause = null;
     this._weaponBar = null;
@@ -96,7 +98,7 @@ export class TouchControls {
    * Ativa os controles touch: cria DOM, bind events.
    */
   enable() {
-    if (this.enabled || !this.isTouchDevice) return;
+    if (this.enabled) return;
     this.enabled = true;
     this._buildDOM();
     this._bindEvents();
@@ -240,6 +242,14 @@ export class TouchControls {
     this._btnReload = this._createBtn('↺', '40px', '#cccccc', 'rgba(200,200,200,0.15)');
     this._btnReload.dataset.action = 'reload';
 
+    // Botão GRANADA
+    this._btnGrenade = this._createBtn('●', '40px', '#ff8844', 'rgba(255,136,68,0.2)');
+    this._btnGrenade.dataset.action = 'grenade';
+
+    // Botão MEDKIT
+    this._btnMedkit = this._createBtn('✚', '40px', '#ff6a5e', 'rgba(255,106,94,0.2)');
+    this._btnMedkit.dataset.action = 'medkit';
+
     // Botão MIRAR (ADS)
     this._btnAim = this._createBtn('🎯', '46px', '#ffcc44', 'rgba(255,204,68,0.2)');
     this._btnAim.dataset.action = 'aim';
@@ -262,10 +272,12 @@ export class TouchControls {
     this._btnInteract.dataset.action = 'interact';
     this._btnInteract.style.display = 'none'; // escondido até contexto
 
-    // Montagem dos botões (ordem: pular, agachar, recarregar, mirar, atirar, interagir)
+    // Montagem dos botões (ordem: pular, agachar, recarregar, granada, medkit, mirar, atirar, interagir)
     btnPanel.appendChild(this._btnJump);
     btnPanel.appendChild(this._btnCrouch);
     btnPanel.appendChild(this._btnReload);
+    btnPanel.appendChild(this._btnGrenade);
+    btnPanel.appendChild(this._btnMedkit);
     btnPanel.appendChild(this._btnAim);
     btnPanel.appendChild(this._btnShoot);
     btnPanel.appendChild(this._btnInteract);
@@ -440,6 +452,12 @@ export class TouchControls {
     this._bindBtn('reload', {
       start: () => { this.reload = true; this._pulse(this._btnReload); },
     });
+    this._bindBtn('grenade', {
+      start: () => { this.grenade = true; this._pulse(this._btnGrenade); },
+    });
+    this._bindBtn('medkit', {
+      start: () => { this.medkit = true; this._pulse(this._btnMedkit); },
+    });
     this._bindBtn('interact', {
       start: () => { this.interact = true; this._pulse(this._btnInteract); },
     });
@@ -569,6 +587,8 @@ export class TouchControls {
   #touchControls [data-action="jump"] { width: clamp(34px, 8vmin, 48px) !important; height: clamp(34px, 8vmin, 48px) !important; }
   #touchControls [data-action="crouch"] { width: clamp(30px, 7vmin, 44px) !important; height: clamp(30px, 7vmin, 44px) !important; }
   #touchControls [data-action="reload"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+  #touchControls [data-action="grenade"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+  #touchControls [data-action="medkit"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
   #touchControls [data-action="interact"] { width: clamp(36px, 9vmin, 50px) !important; height: clamp(36px, 9vmin, 50px) !important; }
   #touchControls [data-action="pause"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
 }
