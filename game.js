@@ -2108,6 +2108,27 @@ window.addEventListener('popstate', () => {
 // Empilha estado inicial para o botão voltar funcionar no menu
 history.pushState({ screen: 'menu' }, '');
 
+/* ---- Fullscreen: se sair, reentra na próxima interação (mobile) ---- */
+let __fullscreenLost = false;
+if (isMobileDevice() || isSmallScreen()) {
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && state.started) {
+      __fullscreenLost = true;
+    }
+  });
+  // Na próxima interação com a tela, reentra no fullscreen
+  const reenterFullscreen = () => {
+    if (__fullscreenLost && state.started && !state.paused) {
+      __fullscreenLost = false;
+      if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    }
+  };
+  document.addEventListener('touchstart', reenterFullscreen, { passive: true });
+  document.addEventListener('click', reenterFullscreen, { passive: true });
+}
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
