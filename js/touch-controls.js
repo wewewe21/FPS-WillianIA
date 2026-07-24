@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 /**
  * TouchControls — Sistema de controles touch para Android
  * 
