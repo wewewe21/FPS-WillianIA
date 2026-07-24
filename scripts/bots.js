@@ -146,6 +146,23 @@ async function createBotTerrain(worldSeed) {
   }
 }
 
+/* cores distintas por bot (golden-angle no matiz) — determinístico por índice,
+   NÃO usa o rand seedado do worldgen (invariante #1). O servidor valida o hex. */
+function hsl2hex(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => {
+    const k = (n + h * 12) % 12;
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * c).toString(16).padStart(2, '0');
+  };
+  return '#' + f(0) + f(8) + f(4);
+}
+function botColors(i) {
+  const hue = (i * 137.508) % 360;
+  return [hsl2hex(hue, 62, 55), hsl2hex((hue + 22) % 360, 34, 27), hsl2hex((hue + 200) % 360, 55, 46), '#ffe08a'];
+}
+
 function createBotChestSpots(worldSeed, terrain, worldSize = 1100) {
   if (!terrain || typeof terrain.heightAt !== 'function' || typeof terrain.slopeAt !== 'function') return [];
   const rng = mulberry32((Number(worldSeed) ^ 0xC0FFEE) >>> 0);
@@ -250,7 +267,7 @@ function startBots(N, URL) {
       for (const drop of d.drops || []) {
         if (drop && drop.id && Array.isArray(drop.pos)) drops.set(drop.id, { id: drop.id, pos: drop.pos.slice(0, 3) });
       }
-      s.emit('hello', { nick: NICKS[i % NICKS.length] + (i >= NICKS.length ? i : ''), bot: true });
+      s.emit('hello', { nick: NICKS[i % NICKS.length] + (i >= NICKS.length ? i : ''), bot: true, colors: botColors(i) });
     });
     s.on('matchStart', d => {
       plan = d.plan; t0 = d.t0;

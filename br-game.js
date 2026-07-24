@@ -129,7 +129,7 @@
     }
 
     function buildVoxelBody(colors) {
-      const [cBody, cCloth, cDetail, cVisor] = (colors || ['#4da6ff', '#2b3a4d', '#8a5a2b', '#ffd76a'])
+      const [cBody, cCloth, cDetail, cVisor] = window.BRColors.sanitizeColors(colors) // hex válido → nunca branco
         .map(c => new THREE.Color(c));
       const mBody = new THREE.MeshStandardMaterial({ color: cBody, roughness: 0.65 });
       const mCloth = new THREE.MeshStandardMaterial({ color: cCloth, roughness: 0.8 });
@@ -287,7 +287,7 @@
           if (len > 0.01 && MP.rayBlockedAt(_bv, _bp.multiplyScalar(1 / len), len) < len - 0.15) continue;
           const dmg = Math.round(maxDmg * (1 - d / radius) + 20);
           MP.DmgNums.spawn(rp.group.position, dmg, false);
-          rp.damage(dmg, rp.group.position, { kind, impact: p });
+          rp.damage(dmg, null, { kind, impact: p }); // splash é área: hitPos=null (o teste de perna tirava -20% falso)
         }
       }
     };
@@ -413,14 +413,16 @@
         }
       }
       if (bestMeta) {
+        const head = bestPart === 'head' || bestPart === 'core';
+        const outRemote = dmg * (head ? 1.75 : 1); // remote damage() não tem lógica de cabeça — aplica aqui (como as balas)
         _bv.copy(origin).addScaledVector(dir, bestD);
         MP.FX.burst(_bv, dir.clone().negate(), bestMeta.boss ? 'spark' : 'blood');
-        MP.DmgNums.spawn(_bv, Math.round(dmg), false);
+        MP.DmgNums.spawn(_bv, Math.round(bestMeta.remote ? outRemote : dmg), head);
         MP.showHitmarker(false);
-        MP.SFX.hit();
-        if (bestMeta.remote) bestMeta.target.damage(dmg, _bv);
+        if (head) MP.SFX.headshot(); else MP.SFX.hit();
+        if (bestMeta.remote) bestMeta.target.damage(outRemote, _bv);
         else if (bestMeta.boss) bestMeta.target.damage(dmg, _bv, dir, bestPart);
-        else bestMeta.target.damage(dmg, _bv, dir, bestPart === 'head' || bestPart === 'core');
+        else bestMeta.target.damage(dmg, _bv, dir, head);
       }
     };
 
@@ -1353,7 +1355,10 @@
           `<div class="${p.id === INIT.id ? 'me' : ''}">${esc(p.nick)} <b style="float:right">☠${p.kills}</b></div>`).join('');
       for (const p of d.players) { // marca avatares de mortos
         const rp = remotes.get(p.id);
-        if (rp) rp.alive = p.alive;
+        if (rp) {
+          if (p.alive && !rp.alive) { rp.deadT = 0; rp.group.rotation.x = 0; } // revive: desfaz o tombo (nada de ressurreição deitada)
+          rp.alive = p.alive;
+        }
       }
       updateSpectBar();
     });

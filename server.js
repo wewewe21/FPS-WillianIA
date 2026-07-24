@@ -14,6 +14,7 @@ const fs = require('fs');
 const { Server } = require('socket.io');
 const CityProto = require('./city-destruction-protocol.js');
 const ShipProto = require('./ship-protocol.js');
+const BRColors = require('./brcolors.js');
 
 const app = express();
 // O harness usa um token por processo para não confundir uma porta ocupada
@@ -51,7 +52,7 @@ app.use((req, res, next) => {
 });
 // whitelist explícita: nada de server.js/node_modules baixável por qualquer um
 const PUBLIC = ['index.html', 'style.css', 'game.js', 'multiplayer-client.js', 'br-game.js',
-  'city-destruction-client.js', 'city-destruction-protocol.js', 'ship-protocol.js', 'favicon.svg'];
+  'city-destruction-client.js', 'city-destruction-protocol.js', 'ship-protocol.js', 'brcolors.js', 'favicon.svg'];
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 // probe automático dos navegadores por /favicon.ico → serve o SVG (evita o 404)
@@ -593,7 +594,7 @@ io.on('connection', socket => {
     const p = players.get(socket.id); if (!p) return;
     p.nick = cleanNick(d && d.nick);
     p.bot = !!(d && d.bot);
-    if (d && Array.isArray(d.colors)) p.colors = d.colors.slice(0, 4).map(c => clean(c).slice(0, 9));
+    if (d && Array.isArray(d.colors)) p.colors = BRColors.sanitizeColors(d.colors); // hex validado: nunca vira avatar branco
     broadcastRoster();
     // o lobby emite hello a cada tecla digitada no nick — só anuncia UMA vez
     if (!p.greeted) {

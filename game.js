@@ -1021,7 +1021,14 @@ const GRAVITY = 22, JUMP_VEL = 8.4;
 const WeaponModels = createWeaponModels({ arsenal });
 // com os GLBs resolvidos (ready OU fallback), o rig constrói miras/mecanismos
 // calibrados por cima — também pro fallback procedural (perfil fb)
-WeaponModels.ready.then(() => { for (const g of arsenal) WeaponRig.attachComplements(g); });
+// try/catch POR ARMA + .catch: uma arma que falhe ao montar mecanismos (ex.: GLB
+// em fallback) não pode derrubar o attach das outras (bug da escopeta sumindo).
+WeaponModels.ready.then(() => {
+  for (const g of arsenal) {
+    try { WeaponRig.attachComplements(g); }
+    catch (e) { console.warn('[rig] attachComplements falhou em', g.name, e); }
+  }
+}).catch(e => console.warn('[rig] WeaponModels.ready rejeitou', e));
 const FpBody = createFpBody({ camera, player, state, getGun: () => gun, weaponRoot, arsenal });
 
 let fovCur = 75;
@@ -1437,13 +1444,18 @@ function updateAmmoHUD() {
   ui.ammoReserve.textContent = gun.melee ? '' : '| ' + gun.reserve;
   ui.weaponName.textContent = gun.name;
 }
+function reloadBlocked() { // mesma condição do gate de tiro: morto/dirigindo/pausado/nave/cinemática
+  return player.dead || state.driving || state.paused || window.__BR_freeze || state.cinematic;
+}
 function startReload(t) {
+  if (reloadBlocked()) return; // R dirigindo/morto não toca SFX nem recarrega
   if (gun.reloading || gun.mag === gun.magSize || gun.reserve <= 0) return;
   gun.reloading = true;
   gun.reloadEnd = t + gun.reloadTime;
   SFX.reload();
 }
 function finishReload() {
+  if (reloadBlocked()) return; // recarga pendente só completa fora do estado bloqueado (sem soft-lock)
   const take = Math.min(gun.magSize - gun.mag, gun.reserve);
   gun.mag += take; gun.reserve -= take;
   gun.reloading = false;

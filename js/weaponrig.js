@@ -279,7 +279,11 @@ export function createWeaponRig(deps) {
     if (M.trigger) {
       let obj;
       if (M.trigger.node && gun.modelRoot) obj = findNode(gun.modelRoot, M.trigger.node);
-      if (!obj) {
+      // fallback procedural SÓ quando o perfil dá uma posição: perfil node-only
+      // (ex.: sniper idx6, node trigger_2 sem pos) num GLB em fallback não achava
+      // o nó e fazia fromArray(undefined) → TypeError que derrubava o attach das
+      // armas seguintes. Sem pos e sem nó = simplesmente sem gatilho animado.
+      if (!obj && Array.isArray(M.trigger.pos)) {
         obj = new THREE.Group();
         const blade = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.03, 0.011), MECH_MAT.dark);
         blade.position.y = -0.014; // pivô no topo: gatilho gira pra trás
@@ -287,7 +291,7 @@ export function createWeaponRig(deps) {
         obj.position.fromArray(M.trigger.pos);
         gun.group.add(obj);
       }
-      reg.trigger = { obj, baseQ: obj.quaternion.clone() };
+      if (obj) reg.trigger = { obj, baseQ: obj.quaternion.clone() }; // update()/mechState já guardam m.trigger?
     }
     if (M.boltHandle && gun.parts.bolt && gun.parts.bolt.userData.authority !== 'clip') {
       const obj = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.015, 0.042), MECH_MAT.dark);

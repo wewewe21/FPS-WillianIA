@@ -44,8 +44,7 @@
       || 'Recruta' + (100 + Math.floor(Math.random() * 900));
     let myColors;
     try { myColors = JSON.parse(localStorage.getItem('br_colors')); } catch (e) { myColors = null; }
-    if (!Array.isArray(myColors) || myColors.length !== 4)
-      myColors = ['#4da6ff', '#2b3a4d', '#8a5a2b', '#ffd76a'];
+    myColors = window.BRColors.sanitizeColors(myColors); // sempre 4 hex válidos (fonte única)
 
     const S = {
       phase: 'LOBBY',           // LOBBY | COUNTDOWN | SHIP | FALL | PLAY | SPECT | ENDED
