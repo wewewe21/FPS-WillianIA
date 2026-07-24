@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 export function createInteract(deps) {
-  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar } = deps;
+  const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon } = deps;
   const chestWood = csmMat(new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.7 }));
   const chestGold = csmMat(new THREE.MeshStandardMaterial({ color: 0xc9a04e, metalness: 0.8, roughness: 0.35 }));
   for (const s of Structures.chestSpots) {
@@ -42,6 +42,9 @@ export function createInteract(deps) {
   function current() {
     if (state.flying) return { txt: 'SAIR DO HELICÓPTERO', fn: () => Heli.exit() };
     if (state.driving) return { txt: 'SAIR DO VEÍCULO', fn: tryToggleCar };
+    // Canhão de Circo: vale no solo E no BR (a pé, longe de veículo/baú)
+    const cannon = getCannon && getCannon();
+    if (cannon) { const cp = cannon.prompt(player.pos); if (cp) return cp; }
     if (!window.__BR_active) { // BR: sem baú de guardar, sem bazuca grátis (loot vem dos baús BR)
       const bz = Structures.bazookaSpot;
       if (arsenal[3].locked && Math.hypot(player.pos.x - bz.x, player.pos.z - bz.z) < 2.8 && Math.abs(player.pos.y - bz.y) < 3.5)

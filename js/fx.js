@@ -65,6 +65,15 @@ export function createFX(deps) {
     }
   }
 
+  /* confete alegre do Canhão de Circo — reaproveita o pool de partículas */
+  const CONFETTI = [0xff5d5d, 0xffd24a, 0x53c7ff, 0x8ce65a, 0xff8ad4, 0xffffff];
+  function confetti(pos, n = 16) {
+    for (let i = 0; i < n; i++) {
+      _v1.set(rand(-1, 1), rand(0.4, 1.4), rand(-1, 1)).normalize().multiplyScalar(rand(3, 7.5));
+      spawnParticle(pos, _v1, CONFETTI[(rand(0, CONFETTI.length)) | 0], rand(0.07, 0.16), rand(0.8, 1.4), 8);
+    }
+  }
+
   function update(dt) {
     for (const t of tracers) {
       if (!t.mesh.visible) continue;
@@ -84,5 +93,5 @@ export function createFX(deps) {
       p.mesh.quaternion.copy(camera.quaternion); // billboard
     }
   }
-  return { spawnTracer, spawnParticle, burst, update };
+  return { spawnTracer, spawnParticle, burst, confetti, update };
 }

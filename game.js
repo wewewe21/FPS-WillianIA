@@ -43,6 +43,7 @@ import { createNight } from './js/night.js';
 import { createSkeletons } from './js/skeletons.js';
 import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
+import { createCannon } from './js/cannon.js';
 
 /* ================================================================
    MULTIPLAYER — bootstrap aditivo. Conecta ANTES da geração do mundo
@@ -906,6 +907,7 @@ const player = {
   pos: new THREE.Vector3(0, heightAt(0, 4) , 4), // pés
   vel: new THREE.Vector3(),
   onGround: true,
+  launchT: 0, // >0 = voo balístico do Canhão de Circo (sem controle de solo)
   eyeH: 1.62, crouchT: 0,
   radius: 0.42,
   health: 100, maxHealth: 100,
@@ -974,8 +976,14 @@ function playerUpdate(dt, t) {
   speed = lerp(speed, CROUCH_SPEED, player.crouchT);
   if (player.pos.y < WATER_LEVEL + 0.6) speed *= 0.45; // vadear água pesa
 
-  // aceleração suave, independente de framerate (deslizar tem prioridade)
-  if (player.slideT > 0) {
+  // aceleração suave, independente de framerate (canhão > deslizar > controle)
+  if (player.launchT > 0) {
+    // voo balístico do Canhão de Circo: mantém o momento horizontal (só um
+    // arrasto de ar mínimo), sem controle de solo — é uma bala de canhão.
+    player.launchT -= dt;
+    const drag = Math.max(0, 1 - 0.12 * dt);
+    player.vel.x *= drag; player.vel.z *= drag;
+  } else if (player.slideT > 0) {
     const k = clamp(player.slideT / 0.78, 0, 1);
     const sp = 10.6 * (0.3 + 0.7 * k);
     player.vel.x = damp(player.vel.x, player.slideDir.x * sp, 8, dt);
@@ -1862,7 +1870,8 @@ const Missions = (() => {
 /* ================================================================
    INTERAÇÃO — baús, bazuca, veículos (tecla E)
    ================================================================ */
-const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar });
+let Cannon = null; // Canhão de Circo — criado no FIM do init (pós-worldgen); Interact lê via getter
+const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon });
 
 /* ================== minimapa / radar (canvas 2D) ================== */
 const MiniMap = (() => {
@@ -2028,6 +2037,7 @@ function tick(forceDt) {
   // Visitante volta ao BR quando a sala permite (playtest: "o alien sumiu")
   if (!window.__BR_active || window.__BR_alien) Alien.update(dt, t);
   Interact.update(dt, t);
+  if (Cannon) Cannon.update(dt, t);
   FX.update(dt);
   Amb.update(dt, t);
   Water.update(t);
@@ -2138,12 +2148,17 @@ window.addEventListener('resize', () => {
    consome o rand seedado e antes daqui deslocaria o layout do mundo */
 Grass.refreshAll();
 
+/* Canhão de Circo: criado DEPOIS de todo o worldgen — a geometria é feita em
+   noSeed dentro do módulo, então nunca desloca o rand seedado do mundo. */
+Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, Structures, heightAt, slopeAt, WATER_LEVEL, CITY, centerMsg });
+
 /* hooks de depuração (inofensivos em produção) */
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
 window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
+  get Cannon() { return Cannon; },
   WeaponModels, FpBody, WeaponRig, Climate, Cover,
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
