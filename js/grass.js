@@ -81,9 +81,9 @@ export function createGrass(deps) {
         float h = uv.y;          // peso pela altura: raiz fixa, ponta solta
         float hh = h * h;
 
-        // some suavemente perto da borda do patch (esconde o recorte)
+        // some suavemente perto da borda do patch (esconde o recorte) — mais agressivo no mobile
         float dCam = distance((modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz, cameraPosition);
-        float edgeFade = 1.0 - smoothstep(uPatchRadius * 0.72, uPatchRadius * 0.97, dCam);
+        float edgeFade = 1.0 - smoothstep(uPatchRadius * 0.5, uPatchRadius * 0.85, dCam);
         transformed.y *= edgeFade;
         transformed.x *= edgeFade;
 
