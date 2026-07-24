@@ -293,7 +293,7 @@
     #healthBar { height: 7px; }
     #armorBar { height: 5px; margin-bottom: 2px; }
 
-    #minimapWrap { left: 50%; top: auto; bottom: 50px; transform: translateX(-50%); width: 100px; height: 100px; }
+    #minimapWrap { left: 50%; top: auto; bottom: 50px; transform: translateX(-50%); width: 50px; height: 50px; }
 
     #ammoWrap { right: 12px; bottom: 8px; }
     #ammoMag { font-size: 28px; }
