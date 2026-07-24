@@ -75,7 +75,7 @@ export function createAlien(deps) {
   /* pele nova: alien rigado (alien.optimized.glb) com a animação embutida
      "Take 001" em loop — FSM/hitbox/dano continuam os mesmos */
   let mixer = null, modelRoot = null, hasModel = false;
-  if (Chars) Chars.character('/assets/models/Personagens/alien.optimized.glb', { height: 3.7 })
+  if (Chars) Chars.character('./assets/models/Personagens/alien.optimized.glb', { height: 3.7 })
     .then(mold => {
       const inst = mold.build();
       group.traverse(o => { if (o.isMesh) o.visible = false; }); // corpo procedural some

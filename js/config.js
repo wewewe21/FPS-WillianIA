@@ -1,34 +1,47 @@
 /* ================================================================
    CONSTANTES AJUSTÁVEIS — mexa aqui para calibrar qualidade/perf
    ================================================================ */
+
+// Detecta mobile para reduzir qualidade automaticamente
+const _isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024);
+
 export const CFG = {
   // Grama
-  GRASS_TOTAL:      170000,  // total aproximado de lâminas no patch
-  GRASS_CHUNKS:     13,      // grade NxN de chunks ao redor do player
-  GRASS_CHUNK_SIZE: 10,      // metros por chunk (raio do patch = N/2 * tamanho)
-  GRASS_HEIGHT:     0.95,    // altura média da lâmina
+  GRASS_TOTAL:      _isMobile ? 10000 : 40000,
+  GRASS_CHUNKS:     _isMobile ? 5 : 7,
+  GRASS_CHUNK_SIZE: _isMobile ? 14 : 14,
+  GRASS_HEIGHT:     0.95,
   WIND_STRENGTH:    0.55,
   // Mundo
-  WORLD_SIZE:       1100,    // lado do terreno (m)
-  TERRAIN_SEGS:     220,     // segmentos do PlaneGeometry
-  VIEW_DIST:        420,     // far do fog / culling
-  TREE_COUNT:       380,
-  ROCK_COUNT:       240,
-  FLOWER_COUNT:     2600,
+  WORLD_SIZE:       1100,
+  TERRAIN_SEGS:     _isMobile ? 80 : 120,
+  VIEW_DIST:        _isMobile ? 300 : 380,
+  TREE_COUNT:       _isMobile ? 120 : 200,
+  ROCK_COUNT:       _isMobile ? 60 : 120,
+  FLOWER_COUNT:     _isMobile ? 300 : 800,
   // Sombra
-  SHADOW_MAP_SIZE:  1024,    // por cascata (4 cascatas CSM)
-  CSM_MAX_FAR:      160,
+  SHADOW_MAP_SIZE:  _isMobile ? 256 : 512,
+  CSM_MAX_FAR:      _isMobile ? 80 : 110,
   // Inimigos
   ENEMY_COUNT:      12,
   // Render
-  MAX_PIXEL_RATIO:  2,
-  BLOOM_STRENGTH:   0.28,
-  BLOOM_RADIUS:     0.35,
+  MAX_PIXEL_RATIO:  _isMobile ? 1.0 : 2,
+  BLOOM_STRENGTH:   _isMobile ? 0.12 : 0.22,
+  BLOOM_RADIUS:     0.3,
   BLOOM_THRESHOLD:  1.0,
   EXPOSURE:         0.58,
 };
 
 /* ===== configurações (localStorage) ===== */
-export const SETTINGS = Object.assign({ vol: 0.5, res: 1.5, shadow: 1, bloom: 1, ping: 1 },
+export const SETTINGS = Object.assign({ vol: 0.5, res: 1, grass: 1, shadow: 1, bloom: 1, ping: 1 },
   (() => { try { return JSON.parse(localStorage.getItem('callofai_cfg') || '{}'); } catch (e) { return {}; } })());
 export function persistSettings() { localStorage.setItem('callofai_cfg', JSON.stringify(SETTINGS)); }
+
+/* ===== Mobile detection ===== */
+export function isMobileDevice() {
+  return /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+export function isSmallScreen() {
+  return window.innerWidth < 768 || window.innerHeight < 600;
+}

@@ -83,7 +83,7 @@ export function createGrass(deps) {
 
         // some suavemente perto da borda do patch (esconde o recorte)
         float dCam = distance((modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz, cameraPosition);
-        float edgeFade = 1.0 - smoothstep(uPatchRadius * 0.72, uPatchRadius * 0.97, dCam);
+        float edgeFade = 1.0 - smoothstep(uPatchRadius * 0.8, uPatchRadius * 0.98, dCam);
         transformed.y *= edgeFade;
         transformed.x *= edgeFade;
 
@@ -233,5 +233,23 @@ export function createGrass(deps) {
     }
   }
 
-  return { update, material, PATCH_RADIUS };
+  function setVisible(v) {
+    for (const ch of chunks) {
+      ch.mesh.visible = v;
+    }
+  }
+
+  function setDensity(d) {
+    // d = 1 (normal), 0.5 (reduzida - mostra metade dos chunks), 0 (removida)
+    if (d === 0) { setVisible(false); return; }
+    setVisible(true);
+    if (d >= 1) return;
+    // Mostra apenas uma fração dos chunks
+    const showCount = Math.ceil(chunks.length * d);
+    for (let i = 0; i < chunks.length; i++) {
+      chunks[i].mesh.visible = i < showCount;
+    }
+  }
+
+  return { update, material, PATCH_RADIUS, setVisible, setDensity };
 }

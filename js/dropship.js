@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-const SHIP_URL = '/assets/models/Nave.glb';
+const SHIP_URL = './assets/models/Nave.glb';
 
 export function createDropship({ scene }) {
   const loader = new GLTFLoader();

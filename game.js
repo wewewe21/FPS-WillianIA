@@ -9,7 +9,7 @@ import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { CSM } from 'three/addons/csm/CSM.js';
-import { CFG, SETTINGS, persistSettings } from './js/config.js';
+import { CFG, SETTINGS, persistSettings, isMobileDevice, isSmallScreen } from './js/config.js';
 import { clamp, lerp, damp, rand, TAU, _v1, _v2, _v3, _q1, _m1, chaseCamPos, chaseLook } from './js/utils.js';
 import { createTerrain } from './js/terrain.js';
 import { createSFX } from './js/sfx.js';
@@ -41,6 +41,7 @@ import { createCityModel } from './js/citymodel.js';
 import { createClouds } from './js/clouds.js';
 import { createDropship } from './js/dropship.js';
 import { createParachute } from './js/parachute.js';
+import { TouchControls } from './js/touch-controls.js';
 
 /* ================================================================
    MULTIPLAYER — bootstrap aditivo. Conecta ANTES da geração do mundo
@@ -95,6 +96,24 @@ scene.fog = new THREE.Fog(FOG_COLOR, CFG.VIEW_DIST * 0.5, CFG.VIEW_DIST);
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.08, CFG.VIEW_DIST + 600);
 camera.position.set(0, 3, 8);
 
+// Touch Controls para Android + mobile detection
+const touchControls = new TouchControls(camera, canvas);
+if (touchControls.isTouchDevice || isMobileDevice() || isSmallScreen()) {
+  touchControls.enable();
+  // Esconde touch controls até o jogo começar (overlay do menu tem z-index 100, touch tem 10000)
+  if (touchControls._container) touchControls._container.style.display = 'none';
+  if (touchControls._editOverlay) touchControls._editOverlay.style.display = 'none';
+  // Mostra botão "EDITAR HUD" nas configurações (apenas mobile/touch)
+  const editHudBtn = document.getElementById('btnEditHud');
+  if (editHudBtn) {
+    editHudBtn.style.display = '';
+    editHudBtn.addEventListener('click', () => {
+      touchControls.toggleEditMode();
+    });
+  }
+}
+window.__touch = touchControls;
+
 // ambiente PMREM para os MeshStandardMaterial não ficarem chapados
 {
   const pmrem = new THREE.PMREMGenerator(renderer);
@@ -134,10 +153,10 @@ scene.add(hemiLight);
 const ambLight = new THREE.AmbientLight(0xffffff, 0.16);
 scene.add(ambLight);
 
-// Cascaded Shadow Maps — 4 cascatas para sombra nítida perto e barata longe
+// Cascaded Shadow Maps — 3 cascatas para sombra nítida perto e barata longe
 const csm = new CSM({
   maxFar: CFG.CSM_MAX_FAR,
-  cascades: 4,
+  cascades: 3,
   mode: 'practical',
   parent: scene,
   shadowMapSize: CFG.SHADOW_MAP_SIZE,
@@ -163,8 +182,12 @@ const bloomPass = new UnrealBloomPass(
   CFG.BLOOM_STRENGTH, CFG.BLOOM_RADIUS, CFG.BLOOM_THRESHOLD
 );
 composer.addPass(bloomPass);
-const smaaPass = new SMAAPass(window.innerWidth * renderer.getPixelRatio(), window.innerHeight * renderer.getPixelRatio());
-composer.addPass(smaaPass);
+// SMAA é pesado no mobile — desabilita para ganhar FPS
+const isMobile = isMobileDevice() || isSmallScreen();
+if (!isMobile) {
+  const smaaPass = new SMAAPass(window.innerWidth * renderer.getPixelRatio(), window.innerHeight * renderer.getPixelRatio());
+  composer.addPass(smaaPass);
+}
 composer.addPass(new OutputPass());
 bloomPass.enabled = +SETTINGS.bloom !== 0;
 if (+SETTINGS.shadow === 0) renderer.shadowMap.enabled = false;
@@ -394,10 +417,10 @@ const Scenery = createScenery();
   try {
     // três famílias de árvore (a "assets" é um bosquete inteiro por instância)
     const geos = await Promise.all([
-      Scenery.bakedGeometry('/assets/models/Cenários/giant_low_poly_tree.glb', { height: 12 }),
-      Scenery.bakedGeometry('/assets/models/Cenários/low_poly_tree_with_twisting_branches.glb', { height: 8.5 }),
-      Scenery.bakedGeometry('/assets/models/Cenários/low_poly__tree_assets.glb', { height: 7 }),
-      Scenery.bakedGeometry('/assets/models/Cenários/low_poly_tree_log_and_stump.glb', { height: 1.3 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/giant_low_poly_tree.glb', { height: 12 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/low_poly_tree_with_twisting_branches.glb', { height: 8.5 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/low_poly__tree_assets.glb', { height: 7 }),
+      Scenery.bakedGeometry('./assets/models/Cenários/low_poly_tree_log_and_stump.glb', { height: 1.3 }),
     ]);
     treeVariantMeshes = geos.map(g => {
       const m = new THREE.InstancedMesh(g, treeMat, CFG.TREE_COUNT);
@@ -456,7 +479,7 @@ const Scenery = createScenery();
   try {
     const cidade = Structures.sites.find(s => s.type === 'cidade');
     const mx = cidade ? cidade.x + cidade.r + 16 : 60, mz = cidade ? cidade.z - 18 : 60;
-    const mercado = await Scenery.prop('/assets/models/Cenários/mercado.glb', { height: 7 });
+    const mercado = await Scenery.prop('./assets/models/Cenários/mercado.glb', { height: 7 });
     placeProp(mercado, mx, mz, 0.4);
     Structures.sites.push({ x: mx, z: mz, r: Math.max(mercado.size.x, mercado.size.z) / 2 + 3, type: 'mercado' });
 
@@ -469,13 +492,13 @@ const Scenery = createScenery();
           !Structures.sites.some(s => Math.hypot(x - s.x, z - s.z) < s.r + 20)) { tx = x; tz = z; break; }
     }
     if (tx || tz) {
-      const casa = await Scenery.prop('/assets/models/Cenários/low_poly_tree_house.glb', { height: 13 });
+      const casa = await Scenery.prop('./assets/models/Cenários/low_poly_tree_house.glb', { height: 13 });
       placeProp(casa, tx, tz, poiRand(TAU));
       Structures.sites.push({ x: tx, z: tz, r: Math.max(casa.size.x, casa.size.z) / 2 + 3, type: 'refúgio' });
     }
 
     // barris de madeira: cobertura leve perto dos POIs novos
-    const barril = await Scenery.prop('/assets/models/Cenários/wooden_barrel.glb', { height: 1.05 });
+    const barril = await Scenery.prop('./assets/models/Cenários/wooden_barrel.glb', { height: 1.05 });
     const spots = [[mx + 5, mz + 4], [mx - 6, mz + 2], [mx + 3, mz - 6],
       [tx + 4, tz + 2], [tx - 3, tz - 4], [tx + 2, tz - 5]];
     for (const [bx, bz] of spots) {
@@ -789,7 +812,16 @@ function setPaused(p) {
   // geração da partida e o menu ficava na tela por cima do jogo
   ui.overlay.style.display = p ? 'flex' : 'none';
   ui.hud.classList.toggle('on', !p);
+  // Esconde touch controls quando o menu está visível (z-index 10000 bloqueava cliques)
+  if (window.__touch && window.__touch._container) {
+    window.__touch._container.style.display = p ? 'none' : '';
+    // Edit overlay só aparece quando edit mode está ativo
+    if (window.__touch._editOverlay && !window.__touch._editMode) {
+      window.__touch._editOverlay.style.display = 'none';
+    }
+  }
 }
+window.__setPaused = setPaused;
 
 /* ================================================================
    PLAYER — controlador FPS (movimento, pulo, agachar, game feel)
@@ -834,10 +866,11 @@ const recoil = {
 };
 
 function playerUpdate(dt, t) {
-  const sprintHeld = keys['ShiftLeft'] || keys['ShiftRight'];
-  const crouchHeld = keys['ControlLeft'] || keys['ControlRight'];
-  const fwd = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
-  const str = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
+  const usingTouch = window.__touch && window.__touch.enabled;
+  const sprintHeld = usingTouch ? (window.__touch.moveY > 0.5 && Math.abs(window.__touch.moveX) < 0.3) : (keys['ShiftLeft'] || keys['ShiftRight']);
+  const crouchHeld = usingTouch ? window.__touch.crouch : (keys['ControlLeft'] || keys['ControlRight']);
+  const fwd = usingTouch ? window.__touch.moveY : ((keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0));
+  const str = usingTouch ? window.__touch.moveX : ((keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0));
 
   const sliding = player.slideT > 0;
   player.crouchT = damp(player.crouchT, (crouchHeld || sliding) ? 1 : 0, 12, dt);
@@ -1866,6 +1899,25 @@ function tick(forceDt) {
   Env.update(dt, t);
   Clouds.update(dt, t);
   Parachute.update(dt, t);
+  // ========== TOUCH CONTROLS UPDATE ==========
+  if (window.__touch && window.__touch.enabled) {
+    window.__touch.update(dt);
+    const tc = window.__touch;
+    if (tc.jump) { justPressed.add('Space'); tc.jump = false; }
+    if (tc.reload) { justPressed.add('KeyR'); tc.reload = false; }
+    if (tc.interact) { justPressed.add('KeyE'); tc.interact = false; }
+    if (tc.grenade) { justPressed.add('KeyG'); tc.grenade = false; }
+    if (tc.medkit) { justPressed.add('KeyQ'); tc.medkit = false; }
+    if (tc.switchWeapon >= 0) {
+      justPressed.add('Digit' + (tc.switchWeapon + 1));
+      tc.switchWeapon = -1;
+    }
+    if (tc.inventory) { justPressed.add('Tab'); tc.inventory = false; }
+    if (tc.toggleSight) { justPressed.add('KeyT'); tc.toggleSight = false; }
+    mouse.aiming = tc.aim;
+    if (tc.shoot) { mouse.shooting = true; mouse.clicked = true; }
+    else { mouse.shooting = false; mouse.clicked = false; }
+  }
   if (!state.driving && !state.flying && !window.__BR_freeze && !state.cinematic) playerUpdate(dt, t);
   shootUpdate(dt, t);
   world.step(1 / 60, dt, 3);
@@ -1940,11 +1992,18 @@ function startGame(trusted) {
   // banner de boas-vindas é do modo solo; no BR o lobby já anuncia a partida
   setTimeout(() => { if (!window.__BR_active) showBanner('CALL OF AI<small>siga as missões · cuidado com a noite</small>', 5200); }, 700);
   setPaused(false);
-  if (trusted) {
+  // Fullscreen automático no mobile
+  if ((isMobileDevice() || isSmallScreen()) && document.documentElement.requestFullscreen) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
+  // Pointer lock NÃO funciona no mobile — pula direto para evitar loop lock/unlock
+  const isTouch = window.__touch && window.__touch.enabled;
+  if (trusted && !isTouch && !isMobileDevice()) {
     try { controls.lock(); } catch (err) { state.lockFailed = true; }
   } else {
     state.lockFailed = true;
   }
+  history.pushState({ screen: 'game' }, '');
 }
 function startTraining(trusted) {
   if (Training.active) return;
@@ -1952,11 +2011,18 @@ function startTraining(trusted) {
   state.started = true;
   Training.enter();
   setPaused(false);
-  if (trusted) {
+  // Fullscreen automático no mobile
+  if ((isMobileDevice() || isSmallScreen()) && document.documentElement.requestFullscreen) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  }
+  // Pointer lock NÃO funciona no mobile
+  const isTouch = window.__touch && window.__touch.enabled;
+  if (trusted && !isTouch && !isMobileDevice()) {
     try { controls.lock(); } catch (err) { state.lockFailed = true; }
   } else {
     state.lockFailed = true;
   }
+  history.pushState({ screen: 'game' }, '');
 }
 /* ---- menu: botões + configurações ---- */
 $('btnNew').addEventListener('click', e => {
@@ -1980,24 +2046,95 @@ $('btnSettings').addEventListener('click', e => { e.stopPropagation(); $('settin
 $('btnBack').addEventListener('click', e => { e.stopPropagation(); $('settings').classList.remove('open'); });
 $('settings').addEventListener('click', e => e.stopPropagation());
 { // bindings das configurações (aplicam ao vivo + persistem)
-  const sv = $('setVol'), sr = $('setRes'), ss = $('setShadow'), sb = $('setBloom'), sp = $('setPing');
+  const sv = $('setVol'), sr = $('setRes'), sg = $('setGrass'), ss = $('setShadow'), sb = $('setBloom'), sp = $('setPing');
   sv.value = SETTINGS.vol * 100;
-  sr.value = String(SETTINGS.res); ss.value = String(SETTINGS.shadow); sb.value = String(SETTINGS.bloom);
+  sr.value = String(SETTINGS.res); sg.value = String(SETTINGS.grass); ss.value = String(SETTINGS.shadow); sb.value = String(SETTINGS.bloom);
   sp.value = String(SETTINGS.ping === 0 ? 0 : 1);
   sv.oninput = () => { SETTINGS.vol = sv.value / 100; SFX.setVolumes(); persistSettings(); };
   sr.onchange = () => { SETTINGS.res = +sr.value; renderer.setPixelRatio(Math.min(devicePixelRatio, SETTINGS.res)); composer.setSize(window.innerWidth, window.innerHeight); persistSettings(); };
+  sg.onchange = () => {
+    SETTINGS.grass = +sg.value;
+    Grass.setDensity(SETTINGS.grass);
+    persistSettings();
+  };
   ss.onchange = () => { SETTINGS.shadow = +ss.value; renderer.shadowMap.enabled = SETTINGS.shadow === 1; csmMaterials.forEach(m => m.needsUpdate = true); persistSettings(); };
   sb.onchange = () => { SETTINGS.bloom = +sb.value; bloomPass.enabled = SETTINGS.bloom === 1; persistSettings(); };
   sp.onchange = () => { SETTINGS.ping = +sp.value; persistSettings(); };
+  // Aplica grama ao iniciar
+  Grass.setDensity(SETTINGS.grass);
 }
 ui.overlay.addEventListener('click', (e) => {
   if (e.target.closest('#menuBtns') || e.target.closest('#settings')) return;
   if (state.started && state.paused) { // clique retoma quando pausado
     SFX.resume();
     setPaused(false);
-    if (e.isTrusted) { try { controls.lock(); } catch (err) { state.lockFailed = true; } }
+    // No mobile, não tenta pointer lock
+    const isTouch = window.__touch && window.__touch.enabled;
+    if (e.isTrusted && !isTouch && !isMobileDevice()) { try { controls.lock(); } catch (err) { state.lockFailed = true; } }
+    else { state.lockFailed = true; }
   }
 });
+
+/* ---- Pré-init de áudio no primeiro toque/clique no overlay (reduz travada ao iniciar) ---- */
+{
+  let audioPreInited = false;
+  const preInitAudio = () => {
+    if (audioPreInited) return;
+    audioPreInited = true;
+    try { SFX.init(); } catch (e) {}
+  };
+  ui.overlay.addEventListener('touchstart', preInitAudio, { once: true, passive: true });
+  ui.overlay.addEventListener('mousedown', preInitAudio, { once: true });
+}
+
+/* ---- Botão voltar do mobile: navega menus e pausa o jogo ---- */
+window.addEventListener('popstate', () => {
+  const settingsEl = $('settings');
+  // Configurações abertas: fecha
+  if (settingsEl && settingsEl.classList.contains('open')) {
+    settingsEl.classList.remove('open');
+    history.pushState({ screen: 'menu' }, '');
+    return;
+  }
+  // Jogo em andamento: pausa e volta ao menu
+  if (state.started && !state.paused) {
+    setPaused(true);
+    if (document.pointerLockElement) document.exitPointerLock();
+    // Sai do fullscreen se estiver
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    history.pushState({ screen: 'paused' }, '');
+    return;
+  }
+  // Jogo pausado: volta ao menu principal
+  if (state.started && state.paused) {
+    // Volta ao menu (reset do jogo seria complexo, apenas mantém pausado)
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    return;
+  }
+});
+// Empilha estado inicial para o botão voltar funcionar no menu
+history.pushState({ screen: 'menu' }, '');
+
+/* ---- Fullscreen: se sair, reentra na próxima interação (mobile) ---- */
+let __fullscreenLost = false;
+if (isMobileDevice() || isSmallScreen()) {
+  document.addEventListener('fullscreenchange', () => {
+    if (!document.fullscreenElement && state.started) {
+      __fullscreenLost = true;
+    }
+  });
+  // Na próxima interação com a tela, reentra no fullscreen
+  const reenterFullscreen = () => {
+    if (__fullscreenLost && state.started && !state.paused) {
+      __fullscreenLost = false;
+      if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      }
+    }
+  };
+  document.addEventListener('touchstart', reenterFullscreen, { passive: true });
+  document.addEventListener('click', reenterFullscreen, { passive: true });
+}
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;

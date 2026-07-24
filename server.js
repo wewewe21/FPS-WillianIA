@@ -34,6 +34,8 @@ for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__
 // a pasta agora tem subdiretórios (Armas/, Cenários/, Personagens/, Veículos/)
 app.use('/assets/models', express.static(path.join(__dirname, 'assets', 'models')));
 app.use('/assets/animations', express.static(path.join(__dirname, 'assets', 'Animações')));
+app.use('/assets/Anima%C3%A7%C3%B5es', express.static(path.join(__dirname, 'assets', 'Animações')));
+app.use('/assets/Animações', express.static(path.join(__dirname, 'assets', 'Animações')));
 app.use('/js', express.static(path.join(__dirname, 'js'))); // módulos ES do jogo
 // Export visual produzido pelo editor local. Apenas este JSON final é público;
 // o projeto do editor e suas rotas nunca fazem parte deste servidor.
@@ -124,14 +126,14 @@ const HOST_CODE = String(process.env.HOST_CODE || 'QUEDALIVRE').toUpperCase();
 let hostId = null;
 
 /* knobs de teste (QA) — em produção ficam nos padrões */
-const COUNTDOWN_S = Math.max(1, +process.env.COUNTDOWN_S || 10);
-const NEXT_IN_S = Math.max(1, +process.env.NEXT_IN_S || 14);
-const FLY_TIME = Math.max(1, +process.env.FLY_TIME || 55);
+const COUNTDOWN_S = Math.max(1, +process.env.COUNTDOWN_S || 15);
+const NEXT_IN_S = Math.max(1, +process.env.NEXT_IN_S || 18);
+const FLY_TIME = Math.max(1, +process.env.FLY_TIME || 75);
 const BR_FAST = !!process.env.BR_FAST; // acelera o backstop da zona nos testes
-const ZONE_HP = BR_FAST ? 20 : 175;
-const ZONE_GRACE_S = BR_FAST ? 2 : 25;   // pós-voo: janela de queda sem punição
-const FLOAT_AFTER_S = BR_FAST ? 3 : 60;  // "nunca pousou" vale a partir daqui
-const AFK_MS = BR_FAST ? 4000 : 45000;
+const ZONE_HP = BR_FAST ? 20 : 250;
+const ZONE_GRACE_S = BR_FAST ? 2 : 35;   // pós-voo: janela de queda sem punição
+const FLOAT_AFTER_S = BR_FAST ? 3 : 80;  // "nunca pousou" vale a partir daqui
+const AFK_MS = BR_FAST ? 4000 : 60000;
 const ZONE_DRAIN_X = BR_FAST ? 10 : 1;
 const CLAIM_COOLDOWN_MS = Math.max(500, +process.env.CLAIM_COOLDOWN_MS || 30000);
 const CITY_DELAY_MS = Math.max(500, +process.env.CITY_DESTRUCTION_DELAY_MS || CityProto.DELAY_DEFAULT);
@@ -182,8 +184,8 @@ function buildPlan(seed) {
   };
   // zona: 5 fases encolhendo; cada centro cabe dentro do círculo anterior
   const radii = [560, 340, 200, 110, 55, 24];
-  const waits = [50, 45, 40, 35, 30];   // s parado antes de encolher
-  const shrinks = [30, 28, 24, 20, 16]; // s encolhendo
+  const waits = [80, 70, 60, 50, 45];   // s parado antes de encolher
+  const shrinks = [40, 35, 30, 25, 20]; // s encolhendo
   const dps = [1, 2, 4, 7, 12];
   let cx = (rng() - 0.5) * 300, cz = (rng() - 0.5) * 300;
   const phases = [];

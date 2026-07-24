@@ -27,7 +27,7 @@ export function createWeaponModels(deps) {
      centros das palmas no modelo importado e continuam usando as ancoras
      procedurais para preservar bomba, pente e coreografia de recarga. */
   const DEFS = [
-    { idx: 0, url: '/assets/models/Armas/low_poly_m4_rifle.glb',
+    { idx: 0, url: './assets/models/Armas/low_poly_m4_rifle.glb',
       len: 0.98, pos: [0, -0.012, 0.02], muzzle: [0, 0.033, -0.47],
       // centro vazado da ocular (o centro da malha inteira fica mais baixo)
       sight: { point: [0, 0.126, 0.11], eye: -0.31 },
@@ -35,7 +35,7 @@ export function createWeaponModels(deps) {
         r: { pos: [0.018, -0.115, 0.17], fingers: [-0.82, -0.25, -0.45], roll: 1.36 },
         l: { pos: [-0.006, -0.055, -0.25], fingers: [0.78, 0.28, -0.42], roll: -1.5 },
       } },
-    { idx: 1, url: '/assets/models/Armas/shotgun_Shotgun_lenta_forte.glb',
+    { idx: 1, url: './assets/models/Armas/shotgun_Shotgun_lenta_forte.glb',
       len: 1.06, pos: [0, 0.01, 0.04], muzzle: [0, 0.045, -0.5],
       // A malha inteira e uma peca alta. A linha de mira precisa ficar na
       // crista e junto da extremidade traseira; usar o centro da arma punha a
@@ -46,7 +46,7 @@ export function createWeaponModels(deps) {
         l: { pos: [0, -0.052, -0.27], fingers: [0.82, 0.2, -0.45], roll: -1.48 },
       },
       strip: /^(Light|Camera)$/ },
-    { idx: 2, url: '/assets/models/Armas/low-poly_Sniper_lenta_forte.glb',
+    { idx: 2, url: './assets/models/Armas/low-poly_Sniper_lenta_forte.glb',
       len: 1.28, pos: [0, -0.005, 0.06], muzzle: [0, 0.03, -0.6],
       sight: { point: [0, 0.105, 0.2], eye: -0.27 },
       grips: {
@@ -55,14 +55,14 @@ export function createWeaponModels(deps) {
       },
       flip: false, gold: true,
       visibleBolt: { pos: [0.066, 0.045, 0.14], travel: 0.075 } },
-    { idx: 3, url: '/assets/models/Armas/bazooka.optimized.glb',
+    { idx: 3, url: './assets/models/Armas/bazooka.optimized.glb',
       len: 1.3, pos: [0, 0.02, 0.05], muzzle: [0, 0.02, -0.62],
       sight: { point: [-0.058, 0.155, 0.2], eye: -0.34 },
       grips: {
         r: { pos: [-0.045, -0.075, 0.16], fingers: [-0.4, -0.72, -0.25], roll: 1.08 },
         l: { pos: [-0.04, -0.075, -0.16], fingers: [0.45, -0.65, -0.3], roll: -1.15 },
       } },
-    { idx: 4, url: '/assets/models/Armas/low-poly_Arma_do_Alien.glb',
+    { idx: 4, url: './assets/models/Armas/low-poly_Arma_do_Alien.glb',
       len: 0.78, pos: [0, -0.01, 0.02], muzzle: [0, 0, -0.36],
       // Mira virtual acima da crista: a esfera ciano e o acumulador traseiro,
       // nao uma ocular. Centraliza-la punha a esfera inteira sobre o alvo.
@@ -72,7 +72,7 @@ export function createWeaponModels(deps) {
         l: { pos: [0.04, -0.08, -0.1], fingers: [0.7, -0.35, -0.45], roll: -1.28 },
       },
       glow: 0x2ee6c8 },
-    { idx: 5, url: '/assets/models/Armas/low_poly_axe.glb',
+    { idx: 5, url: './assets/models/Armas/low_poly_axe.glb',
       // O machado nasce em +Y. -90 graus em X poe a cabeca para -Z e o cabo
       // junto da mao, em vez de escalar o eixo estreito do arquivo.
       pre: 0, pitch: -Math.PI / 2, len: 0.78, pos: [0.09, -0.035, 0.03],
@@ -83,7 +83,7 @@ export function createWeaponModels(deps) {
       } },
     // armas NOVAS (índices 6/7 do arsenal): sniper leve com animações embutidas
     // e escopeta de rajada — os modelos "rápida fraca" da pasta de assets
-    { idx: 6, url: '/assets/models/Armas/low-poly_sniper_Rápida_Fraca.glb',
+    { idx: 6, url: './assets/models/Armas/low-poly_sniper_Rápida_Fraca.glb',
       len: 1.16, pos: [0, -0.005, 0.04], muzzle: [0, 0.028, -0.55],
       sight: { point: [-0.015, 0.078, 0.2], eye: -0.27 },
       grips: {
@@ -91,7 +91,7 @@ export function createWeaponModels(deps) {
         l: { pos: [-0.012, -0.042, -0.28], fingers: [0.82, 0.24, -0.43], roll: -1.5 },
       },
       bind: { mag: /^(mag_4|magazine)/i, bolt: /^bolt/i }, anims: true },
-    { idx: 7, url: '/assets/models/Armas/low-poly_Shotgun_rápida_fraca.glb',
+    { idx: 7, url: './assets/models/Armas/low-poly_Shotgun_rápida_fraca.glb',
       len: 0.96, pos: [0, 0.005, 0.03], muzzle: [0, 0.03, -0.45],
       sight: { point: [0, 0.111, -0.054], eye: -0.32 },
       grips: {

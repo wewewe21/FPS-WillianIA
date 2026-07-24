@@ -1,3 +1,15 @@
+/* Touch Controls — visível quando criado pelo TouchControls */
+#touchControls {
+  display: block;
+}
+#touchControls div {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e14; }
   body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; user-select: none; -webkit-user-select: none; }
@@ -248,3 +260,74 @@
   #banner.show { opacity: 1; transform: translate(-50%,-50%) scale(1); }
   #banner small { display: block; font-size: 14px; letter-spacing: 4px; color: rgba(255,255,255,0.8);
     -webkit-text-fill-color: rgba(255,255,255,0.8); margin-top: 8px; }
+
+  /* ===== Touch Controls Responsivo (proporcional em telas pequenas) ===== */
+  @media (max-width: 600px) {
+    /* Menu mobile: cards menores, scrollável */
+    #panel { max-height: 85vh; overflow-y: auto; padding: 12px 16px; }
+    #title { font-size: 28px; letter-spacing: 5px; }
+    #subtitle { font-size: 9px; letter-spacing: 1.5px; margin-top: 6px; }
+    #menuBtns { gap: 4px; margin-top: 12px; }
+    .mbtn { min-width: 160px; padding: 6px 12px; font-size: 11px; letter-spacing: 1.5px; }
+    .mbtn.sec { min-width: 140px; font-size: 9px; padding: 5px 10px; }
+    #settings { padding: 10px 12px; margin-top: 10px; }
+    .srow { font-size: 10px; margin: 4px 0; gap: 8px; }
+    .srow input[type=range] { width: 100px; }
+    .srow select { font-size: 10px; padding: 2px 4px; }
+    #btnEditHud, #btnBack { margin-top: 6px !important; font-size: 9px !important; padding: 4px 10px !important; min-width: 120px !important; }
+
+    #touchControls [data-action="shoot"] { width: clamp(48px, 12vmin, 72px) !important; height: clamp(48px, 12vmin, 72px) !important; }
+    #touchControls [data-action="aim"] { width: clamp(34px, 8vmin, 46px) !important; height: clamp(34px, 8vmin, 46px) !important; }
+    #touchControls [data-action="jump"] { width: clamp(34px, 8vmin, 48px) !important; height: clamp(34px, 8vmin, 48px) !important; }
+    #touchControls [data-action="crouch"] { width: clamp(30px, 7vmin, 44px) !important; height: clamp(30px, 7vmin, 44px) !important; }
+    #touchControls [data-action="reload"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+    #touchControls [data-action="grenade"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+    #touchControls [data-action="medkit"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+    #touchControls [data-action="interact"] { width: clamp(36px, 9vmin, 50px) !important; height: clamp(36px, 9vmin, 50px) !important; }
+    #touchControls [data-action="pause"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+    #touchControls [data-action="fullscreen"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+
+    /* HUD mobile: vida + minimapa centralizados embaixo, menores */
+    #healthWrap { left: 50%; bottom: 8px; transform: translateX(-50%); width: 180px; }
+    #healthLabel { font-size: 9px; letter-spacing: 2px; margin-bottom: 3px; }
+    #healthBar { height: 7px; }
+    #armorBar { height: 5px; margin-bottom: 2px; }
+
+    #minimapWrap { left: 50%; top: auto; bottom: 50px; transform: translateX(-50%); width: 50px !important; height: 50px !important; }
+    #minimap { width: 50px !important; height: 50px !important; }
+
+    #ammoWrap { right: 12px; bottom: 8px; }
+    #ammoMag { font-size: 28px; }
+    #ammoReserve { font-size: 12px; }
+    #weaponName { font-size: 9px; }
+
+    #speedo { right: 12px; bottom: 8px; }
+    #speedVal { font-size: 28px; }
+
+    #fps { font-size: 9px; right: 6px; top: 4px; }
+    #killfeed { right: 8px; top: 80px; font-size: 11px; }
+    .kf { padding: 3px 8px; }
+  }
+
+  /* Landscape: tela baixa em altura, menu compacto e touch controls ajustados */
+  @media (max-height: 500px) and (orientation: landscape) {
+    #panel { max-height: 95vh; padding: 8px 14px; }
+    #title { font-size: 22px; letter-spacing: 4px; }
+    #subtitle { font-size: 8px; margin-top: 4px; }
+    #menuBtns { gap: 3px; margin-top: 8px; flex-direction: row; flex-wrap: wrap; justify-content: center; }
+    .mbtn { min-width: 130px; padding: 4px 10px; font-size: 10px; letter-spacing: 1px; }
+    .mbtn.sec { min-width: 110px; font-size: 9px; padding: 3px 8px; }
+    #settings { padding: 6px 10px; margin-top: 6px; max-height: 70vh; overflow-y: auto; }
+    .srow { font-size: 9px; margin: 2px 0; gap: 6px; }
+    #btnEditHud, #btnBack { margin-top: 4px !important; font-size: 8px !important; padding: 3px 8px !important; min-width: 100px !important; }
+    /* Touch controls em landscape: botões menores para caber */
+    #touchControls [data-action="shoot"] { width: clamp(40px, 8vmin, 56px) !important; height: clamp(40px, 8vmin, 56px) !important; }
+    #touchControls [data-action="aim"] { width: clamp(28px, 6vmin, 38px) !important; height: clamp(28px, 6vmin, 38px) !important; }
+    #touchControls [data-action="jump"] { width: clamp(28px, 6vmin, 40px) !important; height: clamp(28px, 6vmin, 40px) !important; }
+    #touchControls [data-action="crouch"] { width: clamp(24px, 5vmin, 36px) !important; height: clamp(24px, 5vmin, 36px) !important; }
+    #touchControls [data-action="reload"] { width: clamp(22px, 5vmin, 32px) !important; height: clamp(22px, 5vmin, 32px) !important; }
+    #touchControls [data-action="grenade"] { width: clamp(22px, 5vmin, 32px) !important; height: clamp(22px, 5vmin, 32px) !important; }
+    #touchControls [data-action="medkit"] { width: clamp(22px, 5vmin, 32px) !important; height: clamp(22px, 5vmin, 32px) !important; }
+    #touchControls [data-action="pause"] { width: clamp(22px, 5vmin, 32px) !important; height: clamp(22px, 5vmin, 32px) !important; }
+    #touchControls [data-action="fullscreen"] { width: clamp(22px, 5vmin, 32px) !important; height: clamp(22px, 5vmin, 32px) !important; }
+  }

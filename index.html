@@ -67,7 +67,7 @@
   <div id="panel">
     <div id="title">CALL OF AI</div>
     <div id="subtitle">FPS DE MUNDO ABERTO &nbsp;·&nbsp; DIA & NOITE &nbsp;·&nbsp; CLIMA DINÂMICO</div>
-    <div id="controls">
+    <div id="controls" style="display:none">
       <div class="ctl"><span class="key">W A S D</span> Mover</div>
       <div class="ctl"><span class="key">SHIFT</span> Correr</div>
       <div class="ctl"><span class="key">ESPAÇO</span> Pular</div>
@@ -90,9 +90,11 @@
     <div id="settings">
       <div class="srow"><span>Volume geral</span><input type="range" id="setVol" min="0" max="100" value="50"></div>
       <div class="srow"><span>Resolução</span><select id="setRes"><option value="1">Desempenho</option><option value="1.5" selected>Equilibrado</option><option value="2">Qualidade</option></select></div>
+      <div class="srow"><span>Grama</span><select id="setGrass"><option value="1" selected>Normal</option><option value="0.5">Reduzida</option><option value="0">Removida</option></select></div>
       <div class="srow"><span>Sombras</span><select id="setShadow"><option value="1" selected>Ligadas</option><option value="0">Desligadas</option></select></div>
       <div class="srow"><span>Bloom</span><select id="setBloom"><option value="1" selected>Ligado</option><option value="0">Desligado</option></select></div>
       <div class="srow"><span>Mostrar ping</span><select id="setPing"><option value="1" selected>Sim</option><option value="0">Não</option></select></div>
+      <div class="mbtn sec" id="btnEditHud" style="margin-top:14px;display:none">✎ EDITAR HUD</div>
       <div class="mbtn sec" id="btnBack" style="margin-top:14px">VOLTAR</div>
     </div>
     <div id="loadingMsg">ESC pausa o jogo</div>
@@ -101,7 +103,7 @@
 </div>
 <div id="deathScreen"><div id="deathTitle">VOCÊ MORREU</div><div id="deathSub">reiniciando...</div></div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script>try { var __s = document.createElement('script'); __s.src = '/socket.io/socket.io.js'; __s.onerror = function() { console.log('[MP] socket.io indisponível — modo solo'); }; document.body.appendChild(__s); } catch(e) {}</script>
 <script type="importmap">
 {
   "imports": {
