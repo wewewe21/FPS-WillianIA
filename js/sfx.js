@@ -80,6 +80,15 @@ export function createSFX(deps) {
     switchW()   { blip(480, 0.04, 'square', 0.07); setTimeout(() => blip(760, 0.05, 'square', 0.09), 90); },
     throwNade() { noise(0.13, 0.12, 1600, 380, 0.5); },
     bounce()    { blip(290, 0.035, 'square', 0.05); },
+    /* ---- Canhão de Circo ---- */
+    cannonWind()  { blip(300, 0.5, 'square', 0.06, 520); }, // assobio que sobe carregando (== CHARGE_T)
+    cannonFire()  { // FIUUU ascendente + BUM redondo e alegre (nada grave/terror)
+      blip(340, 0.34, 'sine', 0.13, 900);
+      noise(0.5, 0.55, 520, 130, 0.5);
+      blip(150, 0.4, 'triangle', 0.18, -58);
+      setTimeout(() => { blip(680, 0.12, 'triangle', 0.12); blip(1010, 0.14, 'sine', 0.08); }, 120);
+    },
+    cannonLand()  { noise(0.16, 0.16, 500, 90, 0.6); [784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.16, 'triangle', 0.13), i * 90)); },
     explosion() { noise(0.95, 0.75, 320, 38, 0.4); blip(58, 0.55, 'sine', 0.35, -32); blip(120, 0.3, 'sawtooth', 0.15, -70); },
     pickup()    { blip(880, 0.06, 'triangle', 0.11); setTimeout(() => blip(1320, 0.08, 'triangle', 0.12), 80); },
     medkit()    { blip(620, 0.08, 'sine', 0.12); setTimeout(() => blip(930, 0.12, 'sine', 0.12), 140); },
