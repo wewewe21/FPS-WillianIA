@@ -60,6 +60,10 @@ export function createInteract(deps) {
     const c = current();
     if (c) ui.prompt.innerHTML = `<b>E</b> &nbsp;${c.txt}`;
     ui.prompt.style.opacity = c ? '1' : '0';
+    // Mobile: mostra/esconde botão de interagir contextual
+    if (window.__touch) {
+      window.__touch.showInteract(!!c, c ? c.txt : '✋');
+    }
     if (c && justPressed.has('KeyE') && !player.dead) c.fn();
   }
   function renderInv() {
