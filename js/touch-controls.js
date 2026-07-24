@@ -651,20 +651,25 @@ export class TouchControls {
 
   _enterEditMode() {
     this._editMode = true;
+    // Mostra o container dos botões para edição (mesmo com jogo pausado)
+    if (this._container) this._container.style.display = '';
     if (this._editOverlay) this._editOverlay.style.display = 'block';
-    // destaca painéis
-    for (const pid of ['joystick', 'rightPanel', 'weaponBar', 'pause']) {
-      const el = document.querySelector(`[data-panel-id="${pid}"]`);
-      if (el) el.classList.add('tc-edit-panel');
+    // destaca todos os elementos editáveis
+    const editableEls = this._container.querySelectorAll('[data-editable="true"]');
+    for (const el of editableEls) {
+      el.classList.add('tc-edit-panel');
     }
   }
 
   _exitEditMode() {
     this._editMode = false;
     if (this._editOverlay) this._editOverlay.style.display = 'none';
-    for (const pid of ['joystick', 'rightPanel', 'weaponBar', 'pause']) {
-      const el = document.querySelector(`[data-panel-id="${pid}"]`);
-      if (el) el.classList.remove('tc-edit-panel', 'tc-edit-panel-dragging');
+    // esconde o container novamente (jogo está pausado)
+    if (this._container) this._container.style.display = 'none';
+    // remove destaque de todos os elementos editáveis
+    const editableEls = this._container.querySelectorAll('[data-editable="true"]');
+    for (const el of editableEls) {
+      el.classList.remove('tc-edit-panel', 'tc-edit-panel-dragging');
     }
   }
 
