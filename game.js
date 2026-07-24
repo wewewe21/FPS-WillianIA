@@ -173,6 +173,24 @@ for (const l of csm.lights) {
 // registrar materiais que recebem as cascatas
 const csmMaterials = [];
 function csmMat(mat) { csm.setupMaterial(mat); csmMaterials.push(mat); return mat; }
+csmMat.unregister = mat => {
+  for (let i = csmMaterials.length - 1; i >= 0; i--)
+    if (csmMaterials[i] === mat) csmMaterials.splice(i, 1);
+  const shader = csm.shaders.get(mat);
+  csm.shaders.delete(mat);
+  if (shader) {
+    delete shader.uniforms.CSM_cascades;
+    delete shader.uniforms.cameraNear;
+    delete shader.uniforms.shadowFar;
+  }
+  if (Object.prototype.hasOwnProperty.call(mat, 'onBeforeCompile'))
+    delete mat.onBeforeCompile;
+  if (mat.defines) {
+    delete mat.defines.USE_CSM;
+    delete mat.defines.CSM_CASCADES;
+    delete mat.defines.CSM_FADE;
+  }
+};
 
 /* ---- composer: Render -> Bloom -> SMAA -> Output (Output SEMPRE por último) ---- */
 const composer = new EffectComposer(renderer);
@@ -349,6 +367,7 @@ const Structures = createStructures({ clamp, rand, TAU, heightAt, slopeAt, platf
 // O refill (Grass.refreshAll) roda no FIM do init: fillChunk consome o rand
 // seedado e aqui ainda deslocaria o stream das árvores/vegetação.
 grassClearings.push({ x: 7.5, z: -6, r: 4.5 },
+  Structures.castle.clearing,
   ...Structures.carSpots.map(s => ({ x: s.x, z: s.z, r: s.type === 'truck' ? 5.5 : 4.5 })));
 
 /* paredes das construções também são sólidas pra física dos veículos —
@@ -359,12 +378,80 @@ for (const b of Structures.walls) {
   if (hx < 0.04 || hy < 0.04 || hz < 0.04) continue;
   const wb = new CANNON.Body({ mass: 0, shape: new CANNON.Box(new CANNON.Vec3(hx, hy, hz)) });
   wb.position.set((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, (b.z0 + b.z1) / 2);
-  wb.userData = { category: 'rigid', sourceId: b.city ? 'city-wall' : 'wall', hardForVehicle: true };
+  wb.userData = {
+    category: 'rigid',
+    sourceId: b.city ? 'city-wall' : b.castle ? 'castle-wall' : 'wall',
+    hardForVehicle: true,
+  };
   wb.updateAABB(); // CANNON calcula o AABB na criação (origem) e nunca mais — sem isto o broadphase não enxerga o corpo
   world.addBody(wb);
+  if (b.castle) Structures.castle.registerPhysicsBody(world, wb);
   if (b.city) Structures.city.registerBody(wb); // destruição da cidade remove estes
 }
 Structures.city.bindPhysics(world);
+
+/* apoio físico do castelo para RaycastVehicle. O player/IA consulta
+   groundAt(), mas as rodas só enxergam corpos CANNON: sem estas superfícies
+   o terreno ondulado reaparecia por baixo do pátio e da rampa visual. */
+for (const surface of Structures.castle.vehicleSurfaces) {
+  const hx = (surface.x1 - surface.x0) / 2;
+  const hy = surface.thickness / 2;
+  let hz = (surface.z1 - surface.z0) / 2;
+  const body = new CANNON.Body({ mass: 0 });
+
+  if (surface.kind === 'ramp') {
+    const centerZ = (surface.z0 + surface.z1) / 2;
+    body.position.set((surface.x0 + surface.x1) / 2, 0, centerZ);
+    const vertices = [];
+    const indices = [];
+    const nodes = [
+      { z: surface.segments[0].z0, y: surface.segments[0].y0 },
+      ...surface.segments.map(segment => ({ z: segment.z1, y: segment.y1 })),
+    ];
+    // Quatro vértices por nó: topo E/D e fundo E/D. A malha fechada não
+    // deixa faces verticais internas que prendam o chassi entre segmentos.
+    for (const node of nodes) {
+      vertices.push(
+        -hx, node.y, node.z - centerZ,
+        hx, node.y, node.z - centerZ,
+        -hx, node.y - surface.thickness, node.z - centerZ,
+        hx, node.y - surface.thickness, node.z - centerZ,
+      );
+    }
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const a = i * 4, b = (i + 1) * 4;
+      indices.push(
+        a, b, b + 1, a, b + 1, a + 1,             // topo
+        a + 3, b + 3, b + 2, a + 3, b + 2, a + 2, // fundo
+        a, a + 2, b + 2, a, b + 2, b,             // lateral esquerda
+        a + 1, b + 1, b + 3, a + 1, b + 3, a + 3, // lateral direita
+      );
+    }
+    const last = (nodes.length - 1) * 4;
+    indices.push(
+      0, 1, 3, 0, 3, 2,                         // tampa interna
+      last, last + 2, last + 3, last, last + 3, last + 1, // tampa externa
+    );
+    body.addShape(new CANNON.Trimesh(vertices, indices));
+  } else {
+    body.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+    body.position.set(
+      (surface.x0 + surface.x1) / 2,
+      surface.topY - hy,
+      (surface.z0 + surface.z1) / 2,
+    );
+  }
+
+  body.userData = {
+    category: 'structural',
+    sourceId: 'castle-surface',
+    castlePart: surface.castlePart,
+    hardForVehicle: false,
+  };
+  body.updateAABB();
+  world.addBody(body);
+  Structures.castle.registerPhysicsBody(world, body);
+}
 
 /* lajes FÍSICAS do pavimento urbano: o asfalto/calçada visual fica ~0,1 m
    acima do terreno; sem corpo os veículos afundavam as rodas no visual.
@@ -411,7 +498,8 @@ const treeSpots = []; // posições das árvores (LOD + minimapa)
     if (nearBuild) continue;
     const sRand = rand(0.75, 1.5);
     const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
-                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r) ||
+                       Structures.castle.excludesGuardRoute(x, z);
     const s = isExcluded ? 0.0001 : sRand;
     // variação de cor: verdes, outono dourado e tons profundos por região
     const cv = simplex.noise(x * 0.004 - 90, z * 0.004 + 60);
@@ -608,7 +696,8 @@ const Scenery = createScenery();
     if (Math.hypot(x, z) < 18) continue;
     const sRand = Math.pow(Math.random(), 2.2) * 2.6 + 0.35;
     const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
-                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r) ||
+                       Structures.castle.excludesGuardRoute(x, z);
     const s = isExcluded ? 0.0001 : sRand;
     const y = heightAt(x, z) - s * 0.3;
     const rX = rand(-0.3, 0.3), rY = rand(TAU), rZ = rand(-0.3, 0.3);
@@ -650,7 +739,8 @@ const Scenery = createScenery();
     if (biomeAt(x, z) < -0.12) continue; // sem flores no deserto
     if (simplex.noise(x * 0.01 - 200, z * 0.01 + 140) < 0.18) continue; // em manchas
     const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
-                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r) ||
+                       Structures.castle.excludesDecoration(x, z);
     const rot = rand(TAU);
     const scaleRand = rand(0.7, 1.5);
     const scale = isExcluded ? 0.0001 : scaleRand;
@@ -696,7 +786,8 @@ const Scenery = createScenery();
     if (biomeAt(x, z) > -0.25 || slopeAt(x, z) > 0.4) continue;
     if (heightAt(x, z) < WATER_LEVEL + 0.5) continue; // cacto não nasce no lago
     const isExcluded = (CITY && Math.hypot(x - CITY.x, z - CITY.z) < 92) ||
-                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r);
+                       (VOLCANO && Math.hypot(x - VOLCANO.x, z - VOLCANO.z) < VOLCANO.r) ||
+                       Structures.castle.excludesGuardRoute(x, z);
     const rY = rand(TAU), rZ = rand(-0.06, 0.06);
     const scaleRand = rand(0.7, 1.5);
     const scale = isExcluded ? 0.0001 : scaleRand;
@@ -1748,7 +1839,7 @@ const Grenades = createGrenades({ clamp, rand, _v1, heightAt, groundAt, terrainN
    BOSS — COLOSSO, guardião do forte (o núcleo brilhante é o ponto fraco)
    ================================================================ */
 let timeScale = 1; // câmera lenta cinematográfica na morte do boss
-const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale });
+const Boss = createBoss({ clamp, damp, rand, TAU, _v1, _v2, heightAt, groundAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale });
 /* Rockets criado APOS o Boss (dependencia declarada) — só é usado em runtime */
 const Rockets = createRockets({ rand, _v1, _v2, heightAt, FX, scene, Structures, player, Enemies, Grenades, Boss, Bosses, extraTargets });
 
@@ -1768,13 +1859,17 @@ buildCityCover();
 // estruturas do CAMPO (torres/cabanas): telhado climático próprio — o evento
 // da cidade remove só o source 'city'; 'campo' fica de pé
 for (const r of Structures.fieldRoofs)
-  Cover.addRoofRect({ x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1, roofY: r.roofY, sourceId: 'campo' });
+  Cover.addRoofRect({
+    x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1, roofY: r.roofY,
+    sourceId: r.castle ? 'castle' : 'campo',
+  });
 for (const p of platforms) {
   if (p.ramp) continue;
   if ((p.x1 - p.x0) * (p.z1 - p.z0) < 6) continue; // só lajes com área de teto
   Cover.addRoofRect({ x0: p.x0, x1: p.x1, z0: p.z0, z1: p.z1, y: 0, roofY: p.y,
-    sourceId: p.city ? 'city' : 'slab' });
+    sourceId: p.city ? 'city' : p.castle ? 'castle' : 'slab' });
 }
+Structures.castle.registerCleanup(() => Cover.removeBySource('castle'));
 // cidade destruída = telhado climático some junto (e volta no restore)
 Structures.city.onStateChange = st => {
   Cover.removeBySource('city');
@@ -2145,6 +2240,12 @@ window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   WeaponModels, FpBody, WeaponRig, Climate, Cover,
+  csmDebug: {
+    hasMaterial: material => csmMaterials.includes(material),
+    hasShader: material => csm.shaders.has(material),
+    get materialCount() { return csmMaterials.length; },
+    get shaderCount() { return csm.shaders.size; },
+  },
   switchWeapon, unlockWeapon, startGame, tryToggleCar,
   get gun() { return gun; },
   get fps() { return fpsVal; },
@@ -2216,10 +2317,22 @@ if (/[?&]debugTerrain=1/.test(location.search)) {
 /* Hooks pequenos para playtest automatizado e acessibilidade por estado textual. */
 window.advanceTime = ms => {
   const steps = Math.max(1, Math.round(Math.max(0, Number(ms) || 0) / (1000 / 60)));
-  for (let i = 0; i < steps; i++) tick(1 / 60);
+  const golemDebug = window.__BR_debug && window.__BR_debug.golemDebug;
+  const wasGolemManual = !!(golemDebug && golemDebug.manual);
+  try {
+    for (let i = 0; i < steps; i++) {
+      tick(1 / 60);
+      if (golemDebug) golemDebug.step(1 / 60);
+    }
+  } finally {
+    if (golemDebug && !wasGolemManual) golemDebug.resume();
+  }
 };
 window.render_game_to_text = () => {
   const br = window.__BR_debug;
+  const castle = Structures.castle;
+  const brGolem = br && br.boss;
+  const golemPos = brGolem ? brGolem.group.position : br ? null : Boss.pos();
   const visibleCrates = br ? br.crates.filter(c => !c.opened)
     .sort((a, b) => Math.hypot(player.pos.x - a.x, player.pos.z - a.z) - Math.hypot(player.pos.x - b.x, player.pos.z - b.z))
     .slice(0, 8).map(c => ({ key: c.key, x: +c.x.toFixed(1), z: +c.z.toFixed(1) })) : [];
@@ -2235,6 +2348,24 @@ window.render_game_to_text = () => {
       id: i, type: v.cfg.name, model: v.modelStatus,
       x: +v.group.position.x.toFixed(1), y: +v.group.position.y.toFixed(1), z: +v.group.position.z.toFixed(1),
     })),
+    castle: {
+      status: castle.status,
+      x: +castle.center.x.toFixed(2),
+      y: +castle.originY.toFixed(2),
+      z: +castle.center.z.toFixed(2),
+      guardRadius: castle.guardRadius,
+    },
+    golem: {
+      actor: br ? 'br-golem' : 'colossus',
+      status: br && !brGolem
+        ? 'not-spawned'
+        : (brGolem ? brGolem.alive : Boss.alive) ? 'active' : 'dead',
+      alive: brGolem ? !!brGolem.alive : br ? false : Boss.alive,
+      x: golemPos ? +golemPos.x.toFixed(2) : null,
+      y: golemPos ? +golemPos.y.toFixed(2) : null,
+      z: golemPos ? +golemPos.z.toFixed(2) : null,
+      shots: br ? br.golemShots : 0,
+    },
     unopenedCrates: visibleCrates,
   });
 };

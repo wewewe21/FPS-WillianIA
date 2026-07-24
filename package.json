@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node scripts/run-tests.js",
+    "build:castle": "node scripts/build-castle-model.js",
     "stress": "node scripts/stress.js",
     "test:e2e": "python3 tests/city-destruction-e2e.py",
     "lint": "eslint server.js game.js js/ multiplayer-client.js br-game.js city-destruction-protocol.js city-destruction-client.js scripts/ test/ eslint.config.js",
@@ -21,11 +22,15 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@gltf-transform/cli": "^4.4.1",
+    "@gltf-transform/core": "^4.4.1",
+    "@gltf-transform/extensions": "^4.4.1",
+    "@gltf-transform/functions": "^4.4.1",
     "cannon-es": "^0.20.0",
     "cloc": "^2.6.0-cloc",
     "eslint": "^10.7.0",
@@ -34,7 +39,6 @@
     "knip": "^6.26.0",
     "madge": "^8.0.0",
     "puppeteer-core": "^24.43.1",
-    "socket.io-client": "^4.7.5",
     "three": "^0.185.1"
   }
 }

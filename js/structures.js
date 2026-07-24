@@ -6,6 +6,11 @@
 import * as THREE from 'three';
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 import * as CityLayout from './citylayout.js';
+import {
+  createCastle,
+  MAX_CASTLE_RAMP_SLOPE_DEGREES,
+  measureCastleSite,
+} from './castle.js';
 
 export function createStructures(deps) {
   const { clamp, rand, TAU, heightAt, slopeAt, platforms, WATER_LEVEL, CITY, scene, csmMat, paintGeometry } = deps;
@@ -13,6 +18,8 @@ export function createStructures(deps) {
   const fieldRoofs = []; // telhados do CAMPO p/ o clima (js/cover.js) — metadado puro
   const walls = [];      // AABBs sólidas {x0,x1,y0,y1,z0,z1}
   const geos = [];
+  const fortGeos = [];   // fallback legado isolado: não entra na malha mundial
+  let buildingFort = false;
   const smokeSpots = []; // topos de chaminé (fumaça ambiente)
   const flags = [];      // bandeiras que tremulam
   const flagGeo = new THREE.PlaneGeometry(1.15, 0.55);
@@ -24,8 +31,8 @@ export function createStructures(deps) {
     const g = new THREE.BoxGeometry(w, h, d);
     g.translate(x, y, z);
     paintGeometry(g, _sc.setHex(color));
-    geos.push(g);
-    if (solid) {
+    (buildingFort ? fortGeos : geos).push(g);
+    if (solid && !buildingFort) {
       // corpo físico NÃO é criado aqui: o game.js cria um por parede a partir
       // de walls[] (com updateAABB) — criar aqui duplicava ~400 corpos mortos
       walls.push({ x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, z0: z - d / 2, z1: z + d / 2 });
@@ -36,7 +43,7 @@ export function createStructures(deps) {
     g.rotateY(Math.PI / 4);
     g.translate(x, y, z);
     paintGeometry(g, _sc.setHex(color));
-    geos.push(g);
+    (buildingFort ? fortGeos : geos).push(g);
   }
 
   function tower(cx, cz) {
@@ -154,27 +161,41 @@ export function createStructures(deps) {
   }
 
   /* ---- posicionamento: acha pontos planos e sem sobreposição ---- */
-  function flatSpot(rMin, rMax, tries = 70) {
+  function flatSpot(rMin, rMax, tries = 70, options = {}) {
+    const { need = 16, cityNeed = 100, accept = null } = options;
     let best = null, bestS = 1e9;
     for (let i = 0; i < tries; i++) {
       const a = rand(TAU), r = rand(rMin, rMax);
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (!clearOf(x, z)) continue;
+      if (!clearOf(x, z, need, cityNeed)) continue;
       const s = slopeAt(x, z) + slopeAt(x + 6, z) + slopeAt(x, z + 6) + slopeAt(x - 6, z) + slopeAt(x, z - 6);
-      if (s < bestS) { bestS = s; best = { x, z }; }
+      if (s >= bestS) continue;
+      const candidate = { x, z };
+      if (accept && !accept(candidate)) continue;
+      bestS = s;
+      best = candidate;
     }
     return best;
   }
-  function clearOf(x, z, need = 16) {
+  function clearOf(x, z, need = 16, cityNeed = 100) {
     if (Math.hypot(x, z) < 42) return false;
-    if (Math.hypot(x - CITY.x, z - CITY.z) < 100) return false; // zona urbana reservada
+    if (Math.hypot(x - CITY.x, z - CITY.z) < cityNeed) return false;
     if (heightAt(x, z) < WATER_LEVEL + 1.5) return false; // nada construído dentro de lago
     for (const s of sites) if (Math.hypot(x - s.x, z - s.z) < s.r + need) return false;
     return true;
   }
 
-  const FORT_POS = flatSpot(290, 410) || { x: 330, z: -280 };
-  fort(FORT_POS.x, FORT_POS.z);
+  // O disco de ruínas urbanas (88 m), a órbita (30 m) e o corpo do Golem
+  // (1,5 m) exigem 119,5 m. Também rejeitamos rampas acima de 30° usando
+  // exatamente a mesma medição pura que createCastle — sem consumir RNG.
+  const FORT_POS = flatSpot(290, 410, 70, {
+    cityNeed: 120,
+    accept: candidate =>
+      measureCastleSite({ center: candidate, heightAt }).rampMaxSlopeDegrees <=
+        MAX_CASTLE_RAMP_SLOPE_DEGREES,
+  }) || { x: 330, z: -280 };
+  buildingFort = true;
+  try { fort(FORT_POS.x, FORT_POS.z); } finally { buildingFort = false; }
   for (let i = 0; i < 6; i++) { const p = flatSpot(90, 470); if (p) tower(p.x, p.z); }
   for (let i = 0; i < 6; i++) { const p = flatSpot(70, 440); if (p) cabin(p.x, p.z, i % 2 === 0); }
   for (let i = 0; i < 5; i++) { const p = flatSpot(80, 460); if (p) ruin(p.x, p.z); }
@@ -599,13 +620,52 @@ export function createStructures(deps) {
     carSpots.push({ x: cx, z: cz - 4, ry: rand(TAU), type: 'truck' });
     chestSpots.push({ x: cx - 5, z: cz - 8 });
   }
-  for (let i = 0; i < 2; i++) { const p = flatSpot(130, 380); if (p) mbase(p.x, p.z); }
+  // fort.r (28) + need (30) = 58 m: cobre a órbita e o envelope máximo
+  // ±21 × ±15 m das paredes da base sem mudar as chamadas do RNG.
+  for (let i = 0; i < 2; i++) {
+    const p = flatSpot(130, 380, 70, { need: 30 });
+    if (p) mbase(p.x, p.z);
+  }
   chestSpots.push({ x: 5, z: 0.5 });
 
   const merged = BufferGeometryUtils.mergeGeometries(geos);
   const mesh = new THREE.Mesh(merged, csmMat(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.02 })));
   mesh.castShadow = mesh.receiveShadow = true;
   scene.add(mesh);
+  // O forte antigo continua sendo construído acima (mesmas geometrias, UUIDs
+  // e rand(TAU)), porém numa fonte separada e sempre oculta. O fallback ativo
+  // é gerado dos colliders novos em castle.js; esta fonte existe apenas para
+  // preservar o contrato histórico do worldgen.
+  const fortFallbackMesh = noSeed(() => {
+    const fallback = new THREE.Mesh(
+      BufferGeometryUtils.mergeGeometries(fortGeos),
+      csmMat(new THREE.MeshStandardMaterial({
+        vertexColors: true, roughness: 0.85, metalness: 0.02,
+      })),
+    );
+    fallback.name = 'bossCastleLegacySource';
+    fallback.castShadow = fallback.receiveShadow = true;
+    return fallback;
+  });
+  scene.add(fortFallbackMesh);
+  const legacyFortY = heightAt(FORT_POS.x, FORT_POS.z);
+  const castle = createCastle({
+    center: FORT_POS,
+    heightAt,
+    scene,
+    csmMat,
+    noSeed,
+    legacyRoot: fortFallbackMesh,
+    legacyFlags: flags,
+    legacyFlames: flames,
+    walls,
+    platforms,
+    fieldRoofs,
+  });
+  const fortLift = castle.originY - legacyFortY;
+  fortFallbackMesh.position.y = fortLift;
+  for (const obj of flags) obj.position.y += fortLift;
+  for (const obj of flames) obj.position.y += fortLift;
   const cityMesh = new THREE.Mesh(BufferGeometryUtils.mergeGeometries(cityGeos), cityMat);
   cityMesh.castShadow = cityMesh.receiveShadow = true;
   scene.add(cityMesh);
@@ -820,7 +880,7 @@ export function createStructures(deps) {
     },
   };
 
-  return { sites, walls, rayHit, segBlocked, collide, FORT_POS, flames, smokeSpots, flags, city,
+  return { sites, walls, rayHit, segBlocked, collide, FORT_POS, castle, flames, smokeSpots, flags, city,
     cityMat, carSpots, enemyCamps, chestSpots, baseSites, heliSpot, bazookaSpot, towerTopY, NEXUS_INTERIOR,
     fieldRoofs };
 }

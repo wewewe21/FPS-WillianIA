@@ -7,11 +7,23 @@ node_modules
 docs
 test
 tests
-scripts
+scripts/*
+!scripts/bots.js
 *.md
 br-rank.json
 Dockerfile
 docker-compose*.yml
 .dockerignore
 skills-lock.json
-*.glb
+/deploy.env
+/.env*
+/output
+/.agents
+/.playwright-mcp
+
+# GLBs de runtime em assets/models/ precisam entrar no COPY. Fontes locais
+# pesados ficam fora do contexto sem bloquear os derivados otimizados.
+/*.glb
+/assets/models/boss-castle.v1.glb
+/assets/models/Personagens/low_poly_alien_character_rigged.glb
+/assets/models/Armas/bazooka_rocket_launcher_low_poly.glb

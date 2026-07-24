@@ -215,3 +215,126 @@ monstros, armas e cenário; conferir as melhorias pendentes; publicar no GitHub.
   atualizado pro arsenal de 8 armas, teste de engajamento da IA determinístico,
   e RNG próprio pros POIs/árvores (o rand() global em bloco assíncrono quebrava
   o mundo compartilhado entre clientes).
+
+## Novo pedido: castelo GLB (2026-07-23)
+
+Prompt adicional: "eu tenho um castelo, que fiz em .glb, quero adicionar ele no
+lugar do castelo do jogo, mas ele precisa se encaixar perfeitamente, o robô que
+atira precisa continuar ao redor protegendo o castelo, isso precisa ser muito bem
+implantado e testado, para não quebrar ou corromper, encontre bugs".
+
+- Plano TDD salvo em
+  `docs/superpowers/plans/2026-07-23-castle-glb-integration.md`.
+
+### Asset e implantação
+
+- As fontes locais/ignoradas `castelo_reconstruido_escala_real.glb` e
+  `assets/models/boss-castle.v1.glb` são cópias byte a byte: 1.716.420 bytes,
+  SHA-256 `fd05cc2fa6aebcd73d16440280b90074624a67bd67e9fc385017ced525e18449`.
+  O servidor bloqueia a v1; ela nunca é servida nem versionada.
+- `npm run build:castle` gera deterministicamente
+  `assets/models/boss-castle.v2.optimized.glb`: 930.236 bytes, SHA-256
+  `6020def3614d8c32a91d8ccb1d2867c8fe62f07b4c34b89cc1a8ae2339c0b966`,
+  10 meshes/primitivas, 24.488 triângulos, 10 materiais, bbox aproximada
+  `38,360 × 20,100 × 38,181 m` e somente `KHR_mesh_quantization`.
+- `js/castle.js` virou a fonte única de verdade: publica layout, fundação,
+  portão, colliders, pisos, coberturas, rampa, clareiras e lifecycle antes do
+  carregamento assíncrono. O GLB só substitui o proxy visual depois de validação
+  semântica completa; download, parse ou modelo inválido mantêm fallback
+  jogável.
+- O forte antigo continua sendo construído oculto como
+  `bossCastleLegacySource`, apenas para preservar geometrias, UUIDs e a ordem
+  exata do RNG. Ele não publica colisores nem aparece como fallback.
+- A rampa de entrada usa perfil C1 com 12 segmentos, a mesma função `heightAt`
+  no terreno lógico/IA, uma malha visual e um único `CANNON.Trimesh`. A clareira
+  visual/grama tem 28 m; obstáculos rígidos são removidos em 49 m para proteger
+  o Golem na órbita de 30 m.
+- O Colosso nasce/respawna no pátio, usa a superfície do castelo para andar,
+  morrer e disparar, e retorna pelo portão em arco
+  `rear/front-side → side-front → gate-side → gate → home`. O Golem BR continua
+  completando voltas orientadas ao redor do castelo e mantendo ataques/pisão.
+
+### Bugs encontrados e corrigidos
+
+- Nove dos dez materiais autorais renderizavam brancos; o builder aplica paleta
+  explícita antes da otimização.
+- Fundação de 1,1 m deixava o terreno atravessar o pátio; o encaixe agora mede
+  extremos do terreno e cria fundação/piso contínuos.
+- Portas autorais deixavam 1,18 m e prendiam o Colosso de raio 1,5 m; as folhas
+  foram removidas e o vão/colliders foram alinhados.
+- Colliders antigos não correspondiam às torres/keep e criavam paredes
+  atravessáveis e obstáculos invisíveis.
+- A primeira rampa linear excedia 41,97° na seed 138 e lançava o carro; depois,
+  caixas Cannon segmentadas criaram faces internas e o prenderam. O perfil C1,
+  a rejeição de sites acima de 30° e o Trimesh único corrigiram ambos.
+- `groundAt` ainda interpolava a rampa linearmente e divergia até 24,76 cm da
+  malha/física curva; agora consulta `ramp.heightAt`.
+- A seed 138 permitia base na órbita e a 150 permitia a cidade destruída sobre
+  a rota. Reservas de 30 m para bases e 120 m para cidade corrigiram sem novas
+  chamadas RNG; a assinatura completa da seed 424242 continua idêntica.
+- Vegetação rígida, grama e chunks interiores podiam invadir fundação/rampa; a
+  exclusão pós-amostragem preserva o consumo aleatório.
+- O retorno lateral/traseiro usava cantos a 42,4 m e depois tolerância de 2 m no
+  portão, penetrando a ombreira em até ~44 cm. A rota agora fica dentro do raio
+  reservado, usa tolerância de 20 cm e deslocamento limitado sem depender do
+  solver de colisão.
+- O lifecycle retinha efeitos, materiais CSM e corpos lógicos; o descarte agora
+  remove cada recurso uma vez, inclusive se ocorrer durante o loading.
+- O teste HTTP de GLB aceitava 404 com `Cache-Control`; agora exige status, MIME
+  e magic `glTF`, e a fonte v1 é negada.
+- Readiness podia aceitar servidor antigo na mesma porta; um token por processo
+  identifica o filho correto. Outro race iniciava a partida antes de
+  `br-game.js` registrar `matchStart`; o harness agora espera prontidão e
+  identidade do socket. Em QA, o ping timeout maior preserva a identidade
+  durante ticks manuais longos; promessas de falha também são limpas.
+- O capturador visual ainda esperava 900 ms fixos e abria o Chrome fora do
+  lifecycle protegido: boot lento/porta ocupada podia validar um servidor velho
+  e falha no `launch` deixava processo/rank temporário órfãos. Agora ele exige o
+  token do filho atual, verifica HTML/status, encerra com TERM/KILL e limpa o
+  rank mesmo quando o navegador não chega a abrir.
+- Os testes continham falsos verdes em bases vazias, chunks de grama,
+  publicação atômica, descarte agregado, registries CSM, visual da rampa,
+  descarte assíncrono, volta do Golem e impacto do orbe. Todos foram endurecidos.
+
+### Evidência recente
+
+- Builder executado duas vezes com o mesmo tamanho e SHA-256.
+- `castle-layout`: 8/8 em seis seeds; `castle-boss`: 6/6; lifecycle 3/3;
+  fallback 3/3; veículos 2/2; Golem 6/6.
+- Após corrigir os races do harness, `br-death-cause` passou 3× 4/4 e
+  `br-drops` passou 3× 5/5. O teste determinístico que atrasa `br-game.js` por
+  60 s também passou.
+- O teste do capturador reproduziu RED e depois passou 3/3: rejeita processo
+  antigo, aceita apenas o token correto e prova limpeza após falha do Chrome.
+- `npm run lint` e `git diff --check`: limpos.
+- `npm run quality` final terminou com código 0: **478 testes descobertos**,
+  477 passaram na rodada principal e `castle-layout.test.js` perdeu o contexto
+  do Chrome durante uma navegação. Não houve falha de contrato; o runner
+  repetiu o arquivo isoladamente e só classificou como flake depois de
+  **duas passagens consecutivas**.
+- Capturas inspecionadas:
+  `output/world/castelo-frente.png`, `castelo-patio.png`,
+  `castelo-rampa-fundacao.png`, `castelo-keep-lateral.png`,
+  `castelo-noite.png`, `castelo-fallback.png` e
+  `output/castle/golem-patrulha-castelo-atual.png`; sem erros de
+  página/console/rede. O capturador endurecido foi executado novamente na porta
+  3318, confirmou GLB `ready` com 10 meshes e fallback jogável, e deixou a porta
+  e o rank temporário limpos.
+
+### Endurecimento da imagem de produção
+
+- Um teste de contrato do contexto Docker reproduziu e bloqueou três falhas:
+  `deploy.env`/`.env*` podiam entrar no `COPY . .`; diretórios de QA e agentes
+  inchavam a imagem; e a regra que excluía `scripts/` também removia
+  `scripts/bots.js`, embora o servidor o execute em produção.
+- `.dockerignore` agora exclui configuração local, saídas e fontes pesadas,
+  inclui somente o script de bots necessário e mantém o GLB v2 de runtime.
+  `socket.io-client`, exigido pelos bots, passou a ser dependência de produção.
+- Build Docker limpo, sem cache: concluído. O contrato interno confirmou o GLB
+  v2 com SHA-256
+  `6020def3614d8c32a91d8ccb1d2867c8fe62f07b4c34b89cc1a8ae2339c0b966`,
+  fonte v1/configuração/QA ausentes, bot presente e carregamento de
+  `socket.io-client` funcional.
+- Smoke test do contêiner local: healthcheck saudável, `/` e Socket.IO em 200,
+  GLB v2 em 200 com 930.236 bytes e SHA esperado, fonte v1 em 404 e nenhum
+  cabeçalho de QA exposto.

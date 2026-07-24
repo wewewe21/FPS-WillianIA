@@ -72,31 +72,42 @@ describe('Dano — causa explícita e compatível', { skip: !CHROME && 'Chrome n
     });
     await new Promise(resolve => setTimeout(resolve, 300));
 
+    let cleanupKilled = () => {};
     const killed = new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('morte não foi reportada')), 7000);
       const onKilled = d => {
         if (d.victimId !== victim.id) return;
+        cleanupKilled();
+        resolve(d);
+      };
+      const timeout = setTimeout(() => {
+        cleanupKilled();
+        reject(new Error('morte não foi reportada'));
+      }, 7000);
+      cleanupKilled = () => {
         clearTimeout(timeout);
         host.off('playerKilled', onKilled);
-        resolve(d);
       };
       host.on('playerKilled', onKilled);
     });
-    host.emit('shotHit', {
-      targetId: victim.id, dmg: 20, weapon: 'FUZIL',
-      fromPos: [victim.pos[0] + 2, victim.pos[1] + 1.5, victim.pos[2]],
-    });
-    await h.page.waitForFunction('window.__game.player.dead === true', { timeout: 3000 });
-    lateAttacker.emit('shotHit', {
-      targetId: victim.id, dmg: 5, weapon: 'DMR',
-      fromPos: [victim.pos[0] + 3, victim.pos[1] + 1.5, victim.pos[2]],
-    });
-    await new Promise(resolve => setTimeout(resolve, 150));
-    await h.play(() => window.__QA_originalRespawn());
+    try {
+      host.emit('shotHit', {
+        targetId: victim.id, dmg: 20, weapon: 'FUZIL',
+        fromPos: [victim.pos[0] + 2, victim.pos[1] + 1.5, victim.pos[2]],
+      });
+      await h.page.waitForFunction('window.__game.player.dead === true', { timeout: 3000 });
+      lateAttacker.emit('shotHit', {
+        targetId: victim.id, dmg: 5, weapon: 'DMR',
+        fromPos: [victim.pos[0] + 3, victim.pos[1] + 1.5, victim.pos[2]],
+      });
+      await new Promise(resolve => setTimeout(resolve, 150));
+      await h.play(() => window.__QA_originalRespawn());
 
-    const event = await killed;
-    assert.equal(event.killerId, host.id, 'o tiro tardio apagou o atacante letal');
-    assert.equal(event.weapon, 'FUZIL');
-    assert.equal(event.cause, 'player');
+      const event = await killed;
+      assert.equal(event.killerId, host.id, 'o tiro tardio apagou o atacante letal');
+      assert.equal(event.weapon, 'FUZIL');
+      assert.equal(event.cause, 'player');
+    } finally {
+      cleanupKilled();
+    }
   });
 });

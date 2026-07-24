@@ -5,7 +5,7 @@
    (aqui roda 20). Isto funciona em qualquer node >=18, em qualquer SO.
 
    Triagem automática de flake (gap 15): arquivo que falhou na suíte
-   re-roda ISOLADO até 2x — passou isolado = FLAKE (protocolo do
+   re-roda ISOLADO até 3x — dois passes consecutivos = FLAKE (protocolo do
    CLAUDE.md: portas fixas + boot >60s sob carga), continua falhando
    = REGRESSÃO REAL (exit 1). Só flakes = suíte VERDE (exit 0).
    O stdout do node passa por pipe (TAP sempre) pra permitir o parse
@@ -47,11 +47,13 @@ function runNode(args, tee) {
   console.log(`\n=== triagem de flake: ${failed.length} arquivo(s) falharam — re-rodando ISOLADO ===`);
   const regress = [];
   for (const f of failed) {
-    let ok = false;
-    for (let round = 1; round <= 2 && !ok; round++) {
+    let consecutivePasses = 0;
+    for (let round = 1; round <= 3 && consecutivePasses < 2; round++) {
       console.log(`  → ${path.basename(f)} (isolado, rodada ${round})`);
-      ok = (await runNode([...base, f], false)).code === 0;
+      const passed = (await runNode([...base, f], false)).code === 0;
+      consecutivePasses = passed ? consecutivePasses + 1 : 0;
     }
+    const ok = consecutivePasses >= 2;
     console.log(`  ${ok ? 'FLAKE' : 'REGRESSÃO REAL'}: ${path.basename(f)}`);
     if (!ok) regress.push(f);
   }
@@ -59,6 +61,6 @@ function runNode(args, tee) {
     console.error(`\n${regress.length} regressão(ões) real(is): ${regress.map(f => path.basename(f)).join(', ')}`);
     process.exit(1);
   }
-  console.log('\nsó flakes — suíte VERDE (protocolo "isolado 2x" do CLAUDE.md)');
+  console.log('\nsó flakes — suíte VERDE (2 passes isolados consecutivos)');
   process.exit(0);
 })();

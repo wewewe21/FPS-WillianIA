@@ -3,8 +3,11 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 export function createBoss(deps) {
-  const { clamp, damp, rand, TAU, _v1, _v2, heightAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale } = deps;
+  const { clamp, damp, rand, TAU, _v1, _v2, heightAt, groundAt, SFX, FX, scene, csmMat, Structures, ui, addScore, addKillFeed, showBanner, player, playerDamage, addTrauma, Bosses, Pickups, MFlags, setTimeScale } = deps;
   const HOME = Structures.FORT_POS;
+  const RETURN_WAYPOINT_EPSILON = 0.2;
+  const supportAt = (x, z, probeY = 999) =>
+    groundAt ? groundAt(x, z, probeY) : heightAt(x, z);
   const mArmor = csmMat(new THREE.MeshStandardMaterial({ color: 0x2e333d, roughness: 0.5, metalness: 0.45 }));
   const mDark  = csmMat(new THREE.MeshStandardMaterial({ color: 0x15181d, roughness: 0.6, metalness: 0.35 }));
   const mCore  = new THREE.MeshStandardMaterial({ color: 0x1a0500, emissive: 0xff5a1e, emissiveIntensity: 3, roughness: 0.3 });
@@ -71,7 +74,7 @@ export function createBoss(deps) {
     kw2.position.set(0.25, 4.95, 0.25); kw2.rotation.z = -0.45; group.add(kw2);
     group.scale.setScalar(1.18); // ~5.5m de altura
   }
-  group.position.set(HOME.x, heightAt(HOME.x, HOME.z), HOME.z);
+  group.position.set(HOME.x, supportAt(HOME.x, HOME.z), HOME.z);
   scene.add(group);
 
   const B = {
@@ -80,7 +83,7 @@ export function createBoss(deps) {
     yaw: 0, walkPhase: 0,
     nextVolley: 0, volleyLeft: 0, nextOrb: 0, nextStomp: 0,
     stompT: -1, stompHit: false, deadT: -1, respawnT: 0,
-    flinch: 0,
+    flinch: 0, returnStage: null, returnSide: 1,
   };
   const _attackFrom = new THREE.Vector3(), _attackTo = new THREE.Vector3();
   function clearToPlayer(from, fromLift = 0.2) {
@@ -186,10 +189,11 @@ export function createBoss(deps) {
   function respawn() {
     B.alive = true; B.active = false; B.enraged = false;
     B.hp = B.hpMax; B.stompT = -1; B.deadT = -1; B.flinch = 0;
+    B.returnStage = null;
     group.visible = true;
     group.rotation.set(0, 0, 0);
     group.scale.setScalar(1.18);
-    group.position.set(HOME.x, heightAt(HOME.x, HOME.z), HOME.z);
+    group.position.set(HOME.x, supportAt(HOME.x, HOME.z), HOME.z);
     mEye.emissiveIntensity = 3;
     updateBar();
   }
@@ -208,7 +212,7 @@ export function createBoss(deps) {
       o.mesh.position.copy(_v2);
       o.mesh.scale.setScalar(1 + Math.sin(t * 30) * 0.12);
       if (o.life <= 0) { o.live = false; o.mesh.visible = false; continue; }
-      if (o.mesh.position.y < heightAt(o.mesh.position.x, o.mesh.position.z) + 0.3 ||
+      if (o.mesh.position.y < supportAt(o.mesh.position.x, o.mesh.position.z, o.mesh.position.y + 0.5) + 0.3 ||
           o.mesh.position.distanceTo(player.pos) < 1.3) orbExplode(o);
     }
     parts.core.material.emissiveIntensity =
@@ -219,7 +223,8 @@ export function createBoss(deps) {
       if (B.deadT >= 0) { // tomba e afunda
         B.deadT += dt;
         group.rotation.x = -Math.min(1.35, B.deadT * 1.3);
-        if (B.deadT > 1.2) group.position.y = heightAt(group.position.x, group.position.z) - (B.deadT - 1.2) * 1.1;
+        if (B.deadT > 1.2) group.position.y =
+          supportAt(group.position.x, group.position.z, group.position.y + 2) - (B.deadT - 1.2) * 1.1;
         if (B.deadT > 3.6) { B.deadT = -1; group.visible = false; }
       } else {
         B.respawnT -= dt;
@@ -233,16 +238,72 @@ export function createBoss(deps) {
     if (!B.active) {
       if (dPlayer < 60 && !player.dead) activate();
       else {
-        group.position.y = heightAt(group.position.x, group.position.z) + Math.sin(t * 0.9) * 0.04; // respira
+        group.position.y = supportAt(group.position.x, group.position.z) + Math.sin(t * 0.9) * 0.04; // respira
         return;
       }
     }
 
     const dHome = Math.hypot(group.position.x - HOME.x, group.position.z - HOME.z);
-    const leashing = dHome > 70 || player.dead;
+    const castle = Structures.castle;
+    const leashing = dHome > 70 || player.dead || B.returnStage !== null;
     const speed = B.enraged ? 4.6 : 3.1;
-    const tx = leashing ? HOME.x : player.pos.x;
-    const tz = leashing ? HOME.z : player.pos.z;
+    let tx = leashing ? HOME.x : player.pos.x;
+    let tz = leashing ? HOME.z : player.pos.z;
+    if (leashing && castle) {
+      const outside = group.position.x < castle.footprint.x0 ||
+        group.position.x > castle.footprint.x1 ||
+        group.position.z < castle.footprint.z0 ||
+        group.position.z > castle.footprint.z1;
+      if (B.returnStage === null && outside) {
+        B.returnSide = group.position.x < HOME.x ? -1 : 1;
+        B.returnStage = group.position.z < castle.footprint.z0
+          ? 'rear-side'
+          : Math.abs(group.position.x - HOME.x) > castle.gate.halfWidth
+            ? 'front-side'
+            : 'gate';
+      }
+      const returnRadius = Math.max(0, castle.guardRadius - RETURN_WAYPOINT_EPSILON);
+      const sideX = HOME.x + B.returnSide * returnRadius;
+      const gateZ = castle.gate.outerZ + 2;
+      const cornerOffset = returnRadius * Math.SQRT1_2;
+      const gateOffsetZ = gateZ - HOME.z;
+      const gateSideOffset = Math.sqrt(Math.max(
+        0,
+        returnRadius * returnRadius - gateOffsetZ * gateOffsetZ,
+      ));
+      if (B.returnStage === 'rear-side') {
+        tx = sideX;
+        tz = HOME.z;
+      } else if (B.returnStage === 'front-side') {
+        tx = sideX;
+        tz = HOME.z;
+      } else if (B.returnStage === 'side-front') {
+        tx = HOME.x + B.returnSide * cornerOffset;
+        tz = HOME.z + cornerOffset;
+      } else if (B.returnStage === 'gate-side') {
+        tx = HOME.x + B.returnSide * gateSideOffset;
+        tz = gateZ;
+      } else if (B.returnStage === 'gate') {
+        tx = HOME.x;
+        tz = gateZ;
+      }
+      if (B.returnStage && B.returnStage !== 'home' &&
+          Math.hypot(group.position.x - tx, group.position.z - tz) <=
+            RETURN_WAYPOINT_EPSILON) {
+        if (B.returnStage === 'rear-side' || B.returnStage === 'front-side')
+          B.returnStage = 'side-front';
+        else if (B.returnStage === 'side-front') B.returnStage = 'gate-side';
+        else if (B.returnStage === 'gate-side') B.returnStage = 'gate';
+        else B.returnStage = 'home';
+      }
+      if (B.returnStage === 'home') {
+        tx = HOME.x;
+        tz = HOME.z;
+        if (dHome < 2) B.returnStage = null;
+      }
+    } else if (!leashing) {
+      B.returnStage = null;
+    }
     if (leashing) { B.hp = Math.min(B.hpMax, B.hp + 30 * dt); updateBar(); }
 
     if (B.stompT >= 0) {
@@ -281,10 +342,14 @@ export function createBoss(deps) {
       const dx = tx - group.position.x, dz = tz - group.position.z;
       const dd = Math.hypot(dx, dz);
       let spd = 0;
-      if (dd > (leashing ? 2 : 5.5)) {
+      const moveEpsilon = leashing && B.returnStage && B.returnStage !== 'home'
+        ? RETURN_WAYPOINT_EPSILON
+        : leashing ? 2 : 5.5;
+      if (dd > moveEpsilon) {
         spd = speed;
-        group.position.x += dx / dd * speed * dt;
-        group.position.z += dz / dd * speed * dt;
+        const travel = Math.min(speed * dt, dd);
+        group.position.x += dx / dd * travel;
+        group.position.z += dz / dd * travel;
       }
       Structures.collide(group.position, 1.5, 5); // entra/sai só pelo portão
       const targetYaw = Math.atan2(dx, dz);
@@ -299,7 +364,8 @@ export function createBoss(deps) {
       parts.legR.rotation.x = -sw;
       parts.armL.rotation.x = -sw * 0.5;
       parts.armR.rotation.x = sw * 0.5 - 0.25;
-      group.position.y = heightAt(group.position.x, group.position.z) + Math.abs(Math.sin(B.walkPhase)) * 0.12 * (spd > 0 ? 1 : 0);
+      group.position.y = supportAt(group.position.x, group.position.z, group.position.y + 0.8) +
+        Math.abs(Math.sin(B.walkPhase)) * 0.12 * (spd > 0 ? 1 : 0);
       group.rotation.x = -B.flinch * 0.1 + (spd > 0 ? 0.05 : 0);
 
       if (!leashing && !player.dead) {

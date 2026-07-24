@@ -16,6 +16,29 @@ const CityProto = require('./city-destruction-protocol.js');
 const ShipProto = require('./ship-protocol.js');
 
 const app = express();
+// O harness usa um token por processo para não confundir uma porta ocupada
+// por servidor antigo com o filho recém-criado. Em produção a variável não
+// existe e nenhum header de QA é publicado.
+if (process.env.QA_BOOT_TOKEN) {
+  app.use((req, res, next) => {
+    res.set('X-QA-Boot-Token', process.env.QA_BOOT_TOKEN);
+    next();
+  });
+}
+// Fonte autoral local: o builder pode lê-la, mas nenhuma variação codificada
+// do caminho deve alcançar o express.static.
+app.use('/assets/models', (req, res, next) => {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(req.path).replaceAll('\\', '/');
+  } catch (error) {
+    return res.sendStatus(400);
+  }
+  const normalized = path.posix.normalize('/' + decoded);
+  if (path.posix.basename(normalized).toLowerCase() === 'boss-castle.v1.glb')
+    return res.sendStatus(404);
+  next();
+});
 /* cache: código do jogo REVALIDA sempre (no-cache + ETag = 304 barato) —
    sem isto o Cloudflare/navegador seguravam js antigo por 4h e o jogador
    via a versão velha mesmo com o deploy no ar. Modelos 3D são pesados e
@@ -39,7 +62,12 @@ for (const f of PUBLIC) app.get('/' + f, (req, res) => res.sendFile(path.join(__
 app.use('/assets/models', express.static(path.join(__dirname, 'assets', 'models')));
 app.use('/js', express.static(path.join(__dirname, 'js'))); // módulos ES do jogo
 const server = http.createServer(app);
-const io = new Server(server);
+// Testes com tick manual podem ocupar a thread do Chrome por minutos. O
+// cliente de produção recarrega ao reconectar, mas o harness preserva o
+// contexto para inspecioná-lo; em QA, portanto, mantenha a identidade viva.
+const io = new Server(server, process.env.QA_BOOT_TOKEN
+  ? { pingTimeout: 10 * 60 * 1000 }
+  : {});
 
 /* ---------------- utilidades ---------------- */
 const clean = s => String(s == null ? '' : s).replace(/[<>&"']/g, '').trim();

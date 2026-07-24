@@ -14,6 +14,8 @@ docker-compose.override*.yml
 /vulcao_em_erupcao_-_erupting_volcano.glb
 /castle.glb
 /skelly.glb
+/castelo_reconstruido_escala_real.glb
+/assets/models/boss-castle.v1.glb
 
 # fontes pesadas de personagem/arma — no repo vão só os .optimized.glb
 assets/models/Personagens/low_poly_alien_character_rigged.glb

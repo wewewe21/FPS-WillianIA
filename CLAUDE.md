@@ -20,19 +20,26 @@ quebrou o jogo antes.
   `hitBy`). Ao mexer em combate no servidor, não reabra vetores — há
   `test/security-regression.test.js` cobrindo isso. Detalhes sensíveis de exploit
   ficam FORA do repo.
+- **A fonte do castelo nunca é asset público.** Os GLBs autorais
+  `castelo_reconstruido_escala_real.glb` e
+  `assets/models/boss-castle.v1.glb` são locais/ignorados e o servidor bloqueia
+  a v1. O runtime é `boss-castle.v2.optimized.glb`, reconstruído por
+  `npm run build:castle`. Como recebe cache imutável, qualquer mudança de bytes
+  exige uma v3 e a atualização conjunta do loader e dos testes.
 
 ## Testes
 
 - **Suíte completa:** `npm test` (`scripts/run-tests.js` já roda sequencial com
-  `--test-concurrency=1`; ~10 min).
+  `--test-concurrency=1`; ~15–30 min conforme a carga gráfica).
 - **Um arquivo:** `node --test test/<arquivo>.test.js`.
 - **Vários arquivos à mão:** SEMPRE `--test-concurrency=1` — testes de browser usam
-  portas FIXAS (3164–3196) que colidem em paralelo. (Testes de socket usam portas
+  portas fixas por arquivo que colidem em paralelo. (Testes de socket usam portas
   dinâmicas altas 21000+/26000+/31000+, sem colisão.)
 - **Flake ≠ bug.** Testes de browser (puppeteer-core + Chrome/swiftshader) têm
   portas fixas e o boot da página pode passar de 60 s sob carga. Antes de chamar
-  uma falha de regressão: re-rode SÓ aquele arquivo isolado 2–3×. Passou isolado =
-  flake (não é bug). Continua falhando isolado = regressão real.
+  uma falha de regressão: re-rode SÓ aquele arquivo isolado 2–3×. O runner exige
+  duas passagens isoladas consecutivas para classificar flake; se continuar
+  falhando, é regressão real.
 - **Não matar a porta 3000** — costuma ser o servidor ao vivo do dev.
 - **e2e:** `npm run test:e2e` (Python, precisa de ambiente/Chrome).
 - **TDD:** teste primeiro (RED), implementa (GREEN). `npm run lint` limpo (eslint,

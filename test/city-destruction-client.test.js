@@ -83,33 +83,48 @@ describe('Structures.city — troca do mundo', { skip: !CHROME && 'Chrome não e
     assert.equal(r.devolta, r.antes, 'restore não devolveu os corpos');
   });
 
-  it('dado destroy(), então o FORTE (fora da cidade) continua sólido', async t => {
+  it('dado destroy(), então o FORTE (fora da cidade) continua sólido', async () => {
     const r = await play(() => {
-      const QA = window.QA, G = QA.G, P = QA.MP.player;
+      const QA = window.QA, G = QA.G, MP = QA.MP;
       const city = G.Structures.city;
-      city.destroy();
-      // parede NÃO-city testável (mesmo critério do findWall)
-      const b = G.Structures.walls.find(w => {
-        if (w.city || w.noCollide) return false;
-        if ((w.x1 - w.x0) < 3 || (w.y1 - w.y0) < 2.2) return false;
-        const cz2 = (w.z0 + w.z1) / 2;
-        const ter = QA.MP.heightAt(w.x0 - 3, cz2);
-        return Math.abs(ter - w.y0) < 0.8 && w.y1 > ter + 1.9 &&
-          Math.abs(QA.MP.groundAt(w.x0 - 3, cz2, 999) - ter) < 0.5;
-      });
-      if (!b) return null;
-      const cz2 = (w => (w.z0 + w.z1) / 2)(b);
-      QA.reset(b.x0 - 3, cz2);
-      QA.aimAt((b.x0 + b.x1) / 2, P.pos.y + 1.5, cz2);
-      G.keys.KeyW = true;
-      QA.tick(100);
-      G.keys.KeyW = false;
-      const barrado = P.pos.x <= b.x0 - P.radius + 0.2;
       city.restore();
-      return { barrado };
+      const castleBodiesBefore = MP.world.bodies.filter(body =>
+        body.userData && body.userData.sourceId === 'castle-wall').length;
+      city.destroy();
+      // Seleciona explicitamente a muralha nova. O teste antigo aceitava
+      // qualquer parede não urbana e podia "provar o forte" usando uma cabana.
+      const b = G.Structures.castle.walls.find(w => w.part === 'wall-left');
+      if (!b) return { wallPresent: false };
+      const x = (b.x0 + b.x1) / 2;
+      const z = (b.z0 + b.z1) / 2;
+      const y = G.Structures.castle.floorY + 1.2;
+      const THREE = MP.THREE;
+      const shot = G.Structures.rayHit(
+        new THREE.Vector3(b.x0 - 2, y, z),
+        new THREE.Vector3(1, 0, 0),
+        4,
+      );
+      const pushed = new THREE.Vector3(x, G.Structures.castle.floorY, z);
+      const beforePush = pushed.clone();
+      G.Structures.collide(pushed, 0.45, 1.8);
+      const castleBodiesAfter = MP.world.bodies.filter(body =>
+        body.userData && body.userData.sourceId === 'castle-wall').length;
+      city.restore();
+      return {
+        wallPresent: true,
+        rayBlocked: Number.isFinite(shot),
+        pushDistance: pushed.distanceTo(beforePush),
+        castleBodiesBefore,
+        castleBodiesAfter,
+      };
     });
-    if (!r) { t.skip('sem parede não-city testável'); return; }
-    assert.ok(r.barrado, 'forte/estruturas fora da cidade perderam colisão junto');
+    assert.equal(r.wallPresent, true, 'collider wall-left do castelo não existe');
+    assert.equal(r.rayBlocked, true, 'bala atravessou o castelo após destruir a cidade');
+    assert.ok(r.pushDistance > 0.4,
+      `colisão do castelo não expulsou um corpo sobreposto (${r.pushDistance}m)`);
+    assert.ok(r.castleBodiesBefore > 0, 'pré-condição vazia: castelo sem corpos CANNON');
+    assert.equal(r.castleBodiesAfter, r.castleBodiesBefore,
+      'destroy() da cidade removeu corpos CANNON do castelo');
   });
 
   it('dada a versão destruída, então ela existe desde o boot (invisível) e aparece no destroy', async t => {

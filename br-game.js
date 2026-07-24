@@ -1073,7 +1073,8 @@
       boss.aimT = hold;
       faceBoss(boss.aimFw.x, boss.aimFw.z);
     }
-    function bossStep(dt) {
+    let golemManual = false, golemManualT = 0;
+    function bossStep(dt, forcedT) {
       if (!boss) return;
       stepGolemOrbs(dt);
       const F = G.Structures.FORT_POS;
@@ -1087,10 +1088,10 @@
         UI.bossBar.style.display = 'none';
         return;
       }
-      const t = S.matchT();
+      const t = forcedT === undefined ? S.matchT() : forcedT;
       const a = t * 0.055;
-      // 30 m mantém o corpo (r≈1,5 m) fora das quatro torres nos diagonais.
-      const bx = F.x + Math.cos(a) * 30, bz = F.z + Math.sin(a) * 30;
+      const guardRadius = (G.Structures.castle && G.Structures.castle.guardRadius) || 30;
+      const bx = F.x + Math.cos(a) * guardRadius, bz = F.z + Math.sin(a) * guardRadius;
       const by = MP.heightAt(bx, bz);
       boss.group.position.set(bx, by, bz);
       let fwx = -Math.sin(a), fwz = Math.cos(a); // tangente do círculo
@@ -1822,7 +1823,7 @@
         if (UI.gasTint.style.opacity !== '0') UI.gasTint.style.opacity = '0';
       }
 
-      bossStep(dt);
+      if (!golemManual) bossStep(dt);
 
       /* drops girando + coleta por proximidade */
       for (const [id, dr] of drops) {
@@ -1886,6 +1887,17 @@
       get boss() { return boss; }, get bossHp() { return bossHp; },
       get bullets() { return bullets.length; },
       get golemShots() { return golemShots; }, get golemOrbs() { return golemOrbs.length; },
+      golemDebug: {
+        get manual() { return golemManual; },
+        step(dt = 1 / 60) {
+          if (!golemManual) golemManualT = S.matchT();
+          golemManual = true;
+          const safeDt = Math.max(0, Math.min(Number(dt) || 0, 0.1));
+          golemManualT += safeDt;
+          bossStep(safeDt, golemManualT);
+        },
+        resume() { golemManual = false; },
+      },
     };
 
     if (INIT.phase === 'PLAYING') {

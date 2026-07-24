@@ -455,6 +455,10 @@
 
     /* ---------- ping (mostrado ao lado do FPS quando habilitado) ---------- */
     setInterval(() => {
+      // Uma aba suspensa pode retomar enquanto o transporte antigo ainda
+      // fecha. Emitir nesse intervalo faz o WebSocket tentar escrever em
+      // CLOSING/CLOSED; a reconexão cuidará do próximo ping válido.
+      if (!socket.connected) return;
       const t0 = performance.now();
       socket.timeout(4000).emit('pingx', err => {
         if (!err) {

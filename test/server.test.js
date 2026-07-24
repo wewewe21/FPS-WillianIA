@@ -187,7 +187,11 @@ describe('Estado e movimento', () => {
     const [a, b] = clients;
     a.s.emit('hello', { nick: 'BotQA', bot: true });
     const upds = collect(b.s, 'playerUpdate');
-    a.s.emit('state', { pos: [2, 2, 2], rotY: 0, heldWeapon: 'FUZIL' });
+    // playerUpdate é volatile por projeto; bots reais enviam estado contínuo.
+    // Um pacote único no mesmo tick do hello pode ser legitimamente descartado.
+    const iv = setInterval(() =>
+      a.s.emit('state', { pos: [2, 2, 2], rotY: 0, heldWeapon: 'FUZIL' }), 60);
+    t.after(() => clearInterval(iv));
     await sleep(350);
     const mine = upds.filter(u => u.id === a.init.id).at(-1);
     assert.ok(mine, 'estado do bot não chegou');
@@ -466,17 +470,58 @@ describe('Combate', () => {
 
 /* =============== LOOT =============== */
 describe('Cache HTTP (atualizações chegam nos jogadores)', () => {
+  it('identifica inequivocamente o processo recém-criado para o harness', async t => {
+    const token = `qa-${process.pid}-${Date.now()}`;
+    const srv = await spawnServer({ QA_BOOT_TOKEN: token });
+    t.after(() => srv.stop());
+    const response = await fetch(`http://localhost:${srv.port}/`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-qa-boot-token'), token,
+      'readiness não distingue este processo de um servidor velho na porta');
+  });
+
   it('dado o código do jogo, então revalida sempre; modelos pesados podem cachear', async t => {
     // bug de playtest: sem cache-control da origem, o Cloudflare/navegador
     // seguravam js antigo por 4h — deploy no ar e jogador vendo carro velho
     const srv = await spawnServer(); t.after(() => srv.stop());
-    const h = async p => (await fetch(`http://localhost:${srv.port}${p}`)).headers;
-    for (const p of ['/', '/game.js', '/js/car.js', '/br-game.js']) {
-      const cc = (await h(p)).get('cache-control') || '';
+    for (const [p, mime] of [
+      ['/', /text\/html/],
+      ['/game.js', /javascript|ecmascript/],
+      ['/js/car.js', /javascript|ecmascript/],
+      ['/js/castle.js', /javascript|ecmascript/],
+      ['/br-game.js', /javascript|ecmascript/],
+    ]) {
+      const response = await fetch(`http://localhost:${srv.port}${p}`);
+      assert.equal(response.status, 200, `asset de runtime inexistente: ${p}`);
+      assert.match(response.headers.get('content-type') || '', mime, `${p} com MIME incorreto`);
+      const cc = response.headers.get('cache-control') || '';
       assert.match(cc, /no-cache/, `${p} sem no-cache (ficaria 4h preso no edge/navegador): "${cc}"`);
     }
-    const glb = (await h('/assets/models/mazda-rx7.optimized.glb')).get('cache-control') || '';
-    assert.match(glb, /max-age=[1-9]/, `modelo sem cache longo: "${glb}"`);
+    for (const modelPath of [
+      '/assets/models/Ve%C3%ADculos/mazda-rx7.v2.glb',
+      '/assets/models/boss-castle.v2.optimized.glb',
+    ]) {
+      const modelRes = await fetch(`http://localhost:${srv.port}${modelPath}`);
+      assert.equal(modelRes.status, 200, `modelo inexistente: ${modelPath}`);
+      assert.match(modelRes.headers.get('content-type') || '', /model\/gltf-binary|application\/octet-stream/,
+        `${modelPath} sem MIME binário`);
+      assert.equal(Buffer.from(await modelRes.arrayBuffer()).subarray(0, 4).toString('ascii'), 'glTF',
+        `${modelPath} não respondeu um GLB`);
+      const glb = modelRes.headers.get('cache-control') || '';
+      assert.match(glb, /max-age=[1-9]/, `${modelPath} sem cache longo: "${glb}"`);
+    }
+    for (const sourcePath of [
+      '/assets/models/boss-castle.v1.glb',
+      '/assets/models//boss-castle.v1.glb',
+      '/assets/models/%62oss-castle.v1.glb',
+      '/assets/models/boss-castle.v1%2Eglb',
+      '/assets/models/%2Fboss-castle.v1.glb',
+      '/assets/models/boss-castle%2Ev1%2Eglb',
+    ]) {
+      const sourceRes = await fetch(`http://localhost:${srv.port}${sourcePath}`);
+      assert.equal(sourceRes.status, 404,
+        `fonte autoral local do castelo ficou baixável por ${sourcePath}`);
+    }
   });
 });
 

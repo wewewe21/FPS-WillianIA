@@ -147,15 +147,21 @@ function surfaceAt(x, z) {
   return out;
 }
 /* plataformas pisáveis (andares e rampas de prédios) além do terreno */
-const platforms = []; // {x0,x1,z0,z1, y} | rampa: {ramp:true, axis:'x'|'z', y0, y1}
+const platforms = []; // {x0,x1,z0,z1,y} | rampa linear ou com heightAt(coordenada)
 function groundAt(x, z, curY) {
   let g = heightAt(x, z);
   for (const p of platforms) {
     if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;
     let top = p.y;
     if (p.ramp) {
-      const k = p.axis === 'x' ? (x - p.x0) / (p.x1 - p.x0) : (z - p.z0) / (p.z1 - p.z0);
-      top = lerp(p.y0, p.y1, clamp(k, 0, 1));
+      if (typeof p.heightAt === 'function') {
+        top = p.heightAt(p.axis === 'x' ? x : z);
+      } else {
+        const k = p.axis === 'x'
+          ? (x - p.x0) / (p.x1 - p.x0)
+          : (z - p.z0) / (p.z1 - p.z0);
+        top = lerp(p.y0, p.y1, clamp(k, 0, 1));
+      }
     }
     if (top > g && top <= curY + 0.65) g = top;
   }
