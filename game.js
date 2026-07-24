@@ -45,6 +45,7 @@ import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
 import { createCannon } from './js/cannon.js';
 import { createMapToys } from './js/maptoys.js';
+import { buildChest } from './js/chestmodel.js';
 
 /* ================================================================
    MULTIPLAYER — bootstrap aditivo. Conecta ANTES da geração do mundo
@@ -2267,6 +2268,7 @@ window.__game = {
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   get Cannon() { return Cannon; },
   get MapToys() { return MapToys; },
+  buildChest, // baú compartilhado (br-game.js usa via G.buildChest)
   WeaponModels, FpBody, WeaponRig, Climate, Cover,
   csmDebug: {
     hasMaterial: material => csmMaterials.includes(material),

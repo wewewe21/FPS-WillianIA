@@ -832,26 +832,43 @@
     const crates = [];
     function buildCrates() {
       const rng = seededRng(INIT.worldSeed ^ 0xC0FFEE);
-      const mkMat = (base, band) => [
-        new THREE.MeshStandardMaterial({ color: base, roughness: 0.7 }),
-        new THREE.MeshStandardMaterial({ color: 0x0e2a26, emissive: band, emissiveIntensity: 1.8, roughness: 0.4 }),
-      ];
+      // ponto ABERTO perto de um POI (não dentro de parede). SÓ cliente e SEM
+      // rng: os bots não reconstroem os baús de POI (bots.js só espelha os 34
+      // espalhados c*), então mexer aqui não desincroniza nada.
+      function openSpot(sx, sz, r) {
+        for (let rad = Math.max(3, r * 0.4); rad <= r + 10; rad += 3) {
+          for (let k = 0; k < 8; k++) {
+            const a = (k / 8) * Math.PI * 2 + rad * 0.7;
+            const x = sx + Math.cos(a) * rad, z = sz + Math.sin(a) * rad;
+            if (Math.abs(x) > LIM - 20 || Math.abs(z) > LIM - 20) continue;
+            const y = MP.heightAt(x, z);
+            if (y < MP.WATER_LEVEL + 1.2 || MP.slopeAt(x, z) > 0.5) continue;
+            const p = { x, y: y + 0.3, z };
+            G.Structures.collide(p, 0.5, 0.6);
+            if (Math.hypot(p.x - x, p.z - z) < 0.06) return { x, z }; // collide não mexeu = aberto
+          }
+        }
+        return null;
+      }
       function addCrate(key, x, z, yFixo) {
-        // yFixo: baú em laje/telhado (ex.: heliponto) — não usa o terreno
-        const y = yFixo != null ? yFixo : MP.heightAt(x, z);
+        // yFixo: baú em laje/telhado (ex.: heliponto) — não usa o terreno.
+        // DECISÃO de colocar (e o rng) usam a posição CRUA — igual aos bots
+        // (scripts/bots.js), que reconstroem os 34 espalhados. Só o VISUAL é
+        // empurrado pra fora de parede: o baú não NASCE mais dentro de estrutura,
+        // sem desincronizar a ordem do rng.
+        let y = yFixo != null ? yFixo : MP.heightAt(x, z);
         if (yFixo == null && y < MP.WATER_LEVEL + 1.2) return false;
-        const [mBox, mBand] = mkMat(0x5b4630, 0x2dd6c4);
-        const g = new THREE.Group();
-        const base = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.55, 0.65), mBox);
-        base.position.y = 0.28; g.add(base);
-        const lid = new THREE.Mesh(new THREE.BoxGeometry(1, 0.22, 0.7), mBox);
-        lid.position.set(0, 0.62, 0); g.add(lid);
-        const band = new THREE.Mesh(new THREE.BoxGeometry(1.02, 0.1, 0.72), mBand);
-        band.position.y = 0.5; g.add(band);
-        g.position.set(x, y, z);
-        g.rotation.y = rng() * Math.PI * 2;
+        let vx = x, vz = z, vy = y;
+        if (yFixo == null) {
+          const p = { x, y: y + 0.3, z };
+          for (let i = 0; i < 4; i++) G.Structures.collide(p, 0.5, 0.6);
+          if (Math.hypot(p.x - x, p.z - z) > 0.05) { vx = p.x; vz = p.z; vy = MP.heightAt(vx, vz); }
+        }
+        const { group: g, lid, glow } = G.buildChest();
+        g.position.set(vx, vy, vz);
+        g.rotation.y = rng() * Math.PI * 2;   // rng SEMPRE consumido — bots espelham (scripts/bots.js:162)
         MP.scene.add(g);
-        crates.push({ key, g, lid, band, opened: false, x, z });
+        crates.push({ key, g, lid, glow, opened: false, x: vx, z: vz });
         return true;
       }
       // espalhados pelo mapa
@@ -865,8 +882,9 @@
       // garantidos nos pontos de interesse (cidade, base, cabanas…)
       let si = 0;
       for (const s of (G.Structures.sites || [])) {
-        addCrate('s' + si++, s.x + 2.2, s.z + 1.4);
-        if (rng() < 0.4) addCrate('s' + si++, s.x - 2.4, s.z - 1.8);
+        const o1 = openSpot(s.x, s.z, s.r || 4);       // baú garantido em cada POI, fora de parede
+        if (o1) addCrate('s' + si++, o1.x, o1.z);
+        if (rng() < 0.4) { const o2 = openSpot(s.x, s.z, (s.r || 4) + 7); if (o2) addCrate('s' + si++, o2.x, o2.z); }
       }
       // heliponto: a caixa da bazuca do modo solo vira baú DE VERDADE no BR
       // (recompensa fixa do servidor por escalar a torre — key 'torre')
@@ -878,9 +896,8 @@
       const c = crates.find(c => c.key === key);
       if (c && !c.opened) {
         c.opened = true;
-        c.lid.rotation.x = -1.15;
-        c.lid.position.z = -0.28;
-        c.band.material.emissiveIntensity = 0.15;
+        c.lid.rotation.x = -1.15;   // abre girando na dobradiça (pivô traseiro)
+        c.glow.emissiveIntensity = 0.12;
       }
     }
     function nearestCrate() {
@@ -1453,15 +1470,12 @@
         // baú lendário no lugar
         setTimeout(() => {
           const y = MP.heightAt(p.x, p.z);
-          const mBox = new THREE.MeshStandardMaterial({ color: 0x5b4630, roughness: 0.7 });
-          const mBand = new THREE.MeshStandardMaterial({ color: 0x2a1500, emissive: 0xffb03c, emissiveIntensity: 2.5 });
-          const grp = new THREE.Group();
-          const base = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.7, 0.8), mBox); base.position.y = 0.35; grp.add(base);
-          const lid = new THREE.Mesh(new THREE.BoxGeometry(1.26, 0.26, 0.86), mBox); lid.position.y = 0.78; grp.add(lid);
-          const band = new THREE.Mesh(new THREE.BoxGeometry(1.28, 0.12, 0.88), mBand); band.position.y = 0.62; grp.add(band);
+          const { group: grp, lid, glow } = G.buildChest();
+          grp.scale.setScalar(1.3);            // baú lendário: maior
+          glow.emissiveIntensity = 1.4;        // brilha mais (recompensa do GOLEM)
           grp.position.set(p.x, y, p.z);
           MP.scene.add(grp);
-          crates.push({ key: 'boss', g: grp, lid, band, opened: false, x: p.x, z: p.z });
+          crates.push({ key: 'boss', g: grp, lid, glow, opened: false, x: p.x, z: p.z });
         }, 2200);
       }
       MP.addKillFeed(`⛰ <b>${esc(d.by)}</b> derrotou o GOLEM`);

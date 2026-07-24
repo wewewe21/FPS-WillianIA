@@ -1,22 +1,18 @@
 /* interação (tecla E): baús, bazuca, veículos — extraído de game.js; deps explícitas */
-import * as THREE from 'three';
-import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { buildChest } from './chestmodel.js';
 
 export function createInteract(deps) {
   const { heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon, getMapToys } = deps;
-  const chestWood = csmMat(new THREE.MeshStandardMaterial({ color: 0x6b4a2e, roughness: 0.7 }));
-  const chestGold = csmMat(new THREE.MeshStandardMaterial({ color: 0xc9a04e, metalness: 0.8, roughness: 0.35 }));
   for (const s of Structures.chestSpots) {
-    const y = heightAt(s.x, s.z);
-    const b = new THREE.Mesh(new RoundedBoxGeometry(0.9, 0.5, 0.55, 2, 0.06), chestWood);
-    b.position.set(s.x, y + 0.25, s.z); b.castShadow = true;
-    scene.add(b);
-    const lid = new THREE.Mesh(new RoundedBoxGeometry(0.94, 0.2, 0.6, 2, 0.06), chestWood);
-    lid.position.set(s.x, y + 0.58, s.z);
-    scene.add(lid);
-    const trim = new THREE.Mesh(new THREE.BoxGeometry(0.96, 0.08, 0.12), chestGold);
-    trim.position.set(s.x, y + 0.46, s.z + 0.24);
-    scene.add(trim);
+    // não nasce dentro de parede: empurra o spot pra fora de qualquer estrutura
+    // (collide não consome rand — seguro na fase seedada). Mantém proximidade e
+    // mesh coerentes mutando o próprio spot.
+    const p = { x: s.x, y: heightAt(s.x, s.z) + 0.3, z: s.z };
+    for (let i = 0; i < 4; i++) Structures.collide(p, 0.5, 0.6);
+    s.x = p.x; s.z = p.z;
+    const { group } = buildChest(csmMat);
+    group.position.set(s.x, heightAt(s.x, s.z), s.z);
+    scene.add(group);
   }
   const chest = { medkits: 0, nades: 0, meat: 0 };
 
