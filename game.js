@@ -44,6 +44,7 @@ import { createSkeletons } from './js/skeletons.js';
 import { createAlien } from './js/alien.js';
 import { createInteract } from './js/interact.js';
 import { createCannon } from './js/cannon.js';
+import { createMapToys } from './js/maptoys.js';
 
 /* ================================================================
    MULTIPLAYER — bootstrap aditivo. Conecta ANTES da geração do mundo
@@ -1101,14 +1102,18 @@ function playerUpdate(dt, t) {
   const groundY = groundAt(player.pos.x, player.pos.z, player.pos.y);
   const wasGrounded = player.onGround;
   if (player.pos.y <= groundY) {
-    if (!wasGrounded && player.vel.y < -7) {
-      player.landDipVel = player.vel.y * 0.016;
-      addTrauma(Math.min(0.35, -player.vel.y * 0.018));
-      SFX.land();
+    if (MapToys && !wasGrounded && MapToys.tryBounce(player, groundY)) {
+      // quicou na cama elástica: mantém no ar (não assenta nem toca o chão)
+    } else {
+      if (!wasGrounded && player.vel.y < -7) {
+        player.landDipVel = player.vel.y * 0.016;
+        addTrauma(Math.min(0.35, -player.vel.y * 0.018));
+        SFX.land();
+      }
+      player.pos.y = groundY;
+      player.vel.y = Math.max(0, player.vel.y);
+      player.onGround = true;
     }
-    player.pos.y = groundY;
-    player.vel.y = Math.max(0, player.vel.y);
-    player.onGround = true;
   } else if (wasGrounded && player.vel.y <= 0 && player.pos.y - groundY < 0.55) {
     // gruda no chão em descidas (evita "voinhos" que cortam o sprint)
     player.pos.y = groundY;
@@ -1966,7 +1971,8 @@ const Missions = (() => {
    INTERAÇÃO — baús, bazuca, veículos (tecla E)
    ================================================================ */
 let Cannon = null; // Canhão de Circo — criado no FIM do init (pós-worldgen); Interact lê via getter
-const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon });
+let MapToys = null; // 5 atrações do mapa — idem; Interact e playerUpdate leem via referência
+const Interact = createInteract({ heightAt, SFX, scene, csmMat, Structures, ui, centerMsg, arsenal, unlockWeapon, updateInvHUD, state, justPressed, player, inventory, Car, Heli, tryToggleCar, getCannon: () => Cannon, getMapToys: () => MapToys });
 
 /* ================== minimapa / radar (canvas 2D) ================== */
 const MiniMap = (() => {
@@ -2133,6 +2139,7 @@ function tick(forceDt) {
   if (!window.__BR_active || window.__BR_alien) Alien.update(dt, t);
   Interact.update(dt, t);
   if (Cannon) Cannon.update(dt, t);
+  if (MapToys) MapToys.update(dt, t);
   FX.update(dt);
   Amb.update(dt, t);
   Water.update(t);
@@ -2247,6 +2254,11 @@ Grass.refreshAll();
    noSeed dentro do módulo, então nunca desloca o rand seedado do mundo. */
 Cannon = createCannon({ scene, camera, player, SFX, FX, csmMat, Structures, heightAt, slopeAt, WATER_LEVEL, CITY, centerMsg });
 
+/* 5 atrações do mapa (cama elástica, campo de tiro, fogos, aros, xilofone):
+   mesmo padrão do canhão — geometria em noSeed, pontos espalhados via pickSpot
+   evitando estruturas e o canhão. */
+MapToys = createMapToys({ scene, player, SFX, FX, csmMat, Structures, heightAt, slopeAt, WATER_LEVEL, CITY, centerMsg, showBanner, extraTargets, Car, Heli, state, cannonSpot: Cannon.spot });
+
 /* hooks de depuração (inofensivos em produção) */
 const __errors = [];
 window.addEventListener('error', e => __errors.push(String(e.message)));
@@ -2254,6 +2266,7 @@ window.__game = {
   state, player, Car, Heli, Enemies, arsenal, Boss, Alien, Bosses, Grenades, Rockets, Pickups, Structures, Grass, Volcano, Skeletons,
   inventory, keys, mouse, camera, Env, Missions, Interact, Animals, Night, MFlags, extraTargets,
   get Cannon() { return Cannon; },
+  get MapToys() { return MapToys; },
   WeaponModels, FpBody, WeaponRig, Climate, Cover,
   csmDebug: {
     hasMaterial: material => csmMaterials.includes(material),

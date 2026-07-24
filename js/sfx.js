@@ -89,6 +89,10 @@ export function createSFX(deps) {
       setTimeout(() => { blip(680, 0.12, 'triangle', 0.12); blip(1010, 0.14, 'sine', 0.08); }, 120);
     },
     cannonLand()  { noise(0.16, 0.16, 500, 90, 0.6); [784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.16, 'triangle', 0.13), i * 90)); },
+    /* ---- Atrações do mapa ---- */
+    boing()       { blip(180, 0.2, 'sine', 0.15, 620); blip(320, 0.14, 'triangle', 0.06, 240); }, // cama elástica
+    ding()        { blip(1320, 0.12, 'sine', 0.13); setTimeout(() => blip(1760, 0.14, 'sine', 0.07), 20); }, // aro
+    xyloNote(freq){ blip(freq || 660, 0.24, 'triangle', 0.13); blip((freq || 660) * 2, 0.09, 'sine', 0.04); }, // xilofone
     explosion() { noise(0.95, 0.75, 320, 38, 0.4); blip(58, 0.55, 'sine', 0.35, -32); blip(120, 0.3, 'sawtooth', 0.15, -70); },
     pickup()    { blip(880, 0.06, 'triangle', 0.11); setTimeout(() => blip(1320, 0.08, 'triangle', 0.12), 80); },
     medkit()    { blip(620, 0.08, 'sine', 0.12); setTimeout(() => blip(930, 0.12, 'sine', 0.12), 140); },

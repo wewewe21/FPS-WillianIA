@@ -54,11 +54,14 @@ export function withinAntiCheat(prof = LAUNCH, caps = ANTICHEAT) {
      sampler : (x,z) => { h, slope }  leitura do terreno
    Retorna { x, z, clearance } ou null (o chamador tem fallback). */
 export function pickSpot({
-  sites = [], cx = 0, cz = 0, sampler, waterLevel = 0,
+  sites = [], avoid = [], cx = 0, cz = 0, sampler, waterLevel = 0,
   ringMin = 150, ringMax = 360, step = 12, arcSteps = 48,
   maxSlope = 0.28, worldHalf = 520,
 }) {
   if (typeof sampler !== 'function') return null;
+  // `avoid` = pontos já ocupados por OUTRAS atrações (mesma unidade de sites);
+  // entram como estruturas a evitar pra as atrações não se empilharem.
+  const all = avoid.length ? sites.concat(avoid) : sites;
   // SCORING (não filtro rígido): sempre devolve o MELHOR ponto seco do anel —
   // prioriza clareira grande e penaliza encosta. Assim terreno acidentado nunca
   // devolve null (o que jogava o canhão pro fallback). null só quando NADA é
@@ -74,7 +77,7 @@ export function pickSpot({
       const s = sampler(x, z);
       if (!s || !Number.isFinite(s.h) || s.h <= waterLevel + 1.2) continue; // seco
       let clr = Infinity;
-      for (const st of sites) {
+      for (const st of all) {
         const d = Math.hypot(x - st.x, z - st.z) - (st.r || 0);
         if (d < clr) clr = d;
       }

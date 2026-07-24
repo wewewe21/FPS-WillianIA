@@ -110,7 +110,48 @@ qualquer lugar é engraçado, nunca punição. Ao pousar: `🎪 VOOU 63 m · rec
 
 ### Integração com `refatoracao`
 
-Feito num worktree isolado (a bateria do castelo roda na árvore principal).
-Consolidado como commit em `feat/canhao-circo`. Para levar pra `refatoracao`
-depois que o castelo assentar: `git merge feat/canhao-circo` — a única sobreposição
-é a cauda do init em `game.js` (imports + criação pós-worldgen), conflito trivial.
+Feito num worktree isolado (a bateria do castelo rodava na árvore principal).
+Consolidado em `feat/canhao-circo` e depois mesclado em `refatoracao` (merge
+limpo, sem conflito).
+
+---
+
+## Segunda rodada — 🎪 mais 5 atrações no mapa
+
+Mesma filosofia do canhão (client-side, geometria em `noSeed` pós-worldgen,
+pontos espalhados por `pickSpot` evitando estruturas E as outras atrações, tom
+leve, solo E grupo). Reúnem-se em `js/maptoys.js` (+ núcleo puro
+`js/maptoys-core.js`), com uma única fiação em `game.js` (criação, `update` no
+loop, `tryBounce` no pouso) e um ramo no `js/interact.js`.
+
+1. **🤸 Cama Elástica** — 4 placas coloridas; cair numa quica você pra cima
+   (15 m/s, encadeável). Gancho: `MapToys.tryBounce()` no bloco de pouso do
+   `playerUpdate`. Sem dano de queda, errar é festa.
+2. **🎯 Campo de Tiro (Pipoca de Alvos)** — puxe a alavanca (E) e 6 alvos
+   pipocam por 30 s; acerte o máximo (recorde salvo). Reusa o contrato de
+   `extraTargets` do hitscan — acerto/dano/hitmarker de graça.
+3. **🎆 Totem de Fogos** — aperte E e solte uma salva de fogos coloridos no
+   céu. Puro deleite cosmético, com recarga. Todos por perto veem.
+4. **💫 Aros de Acrobacia** — curso de 6 aros que sobem e descem num arco rumo
+   à cidade; atravesse na ordem (a pé, de carro, de heli OU cuspido pelo
+   canhão!) contra o relógio. Recorde de tempo. Detecção geométrica pura
+   (`passedRing`), com guarda de teleporte pra respawn/pouso não contar.
+5. **🎹 Xilofone Gigante** — 8 placas coloridas; pise em cada uma e ela toca
+   uma nota da escala (sempre alegre). Faça música sozinho ou em grupo.
+
+### Segurança (idêntica ao canhão)
+
+- **Worldgen:** toda a geometria em `noSeed`, criada depois de todo o worldgen;
+  pontos por matemática determinística sobre `Structures.sites` (sem `rand`).
+- **Anti-cheat:** o único que mexe em velocidade é a cama elástica (15 m/s,
+  travado em 28) — folga enorme dos tetos do servidor.
+- **Servidor/castelo:** nada tocado.
+
+### Testes
+
+- `test/maptoys-core.test.js` — 12 testes puros (quica, `passedRing`,
+  `plateAt`, recordes, `pickSpot` com `avoid`).
+- `test/maptoys.test.js` — 7 testes de browser em BR ativo (porta 3261): as 5
+  nascem espalhadas/secas, a cama quica, a alavanca abre sessão e o alvo
+  pontua, os fogos recarregam, o aro avança o curso, o xilofone registra a
+  placa pisada, sem erros de página.
